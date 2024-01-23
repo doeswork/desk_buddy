@@ -1,0 +1,6 @@
+{
+    "configuration": "PartitionScheme=default,PinNumbers=default,USBMode=default",
+    "board": "arduino:esp32:nano_nora",
+    "port": "/dev/ttyUSB0",
+    "sketch": "flasher.ino"
+}
