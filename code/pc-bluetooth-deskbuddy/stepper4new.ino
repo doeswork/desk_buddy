@@ -19,6 +19,7 @@ int currentPos4 = 0;
 int Steps = 0;
 boolean Direction = true;
 int stepsPerCommand = 256;
+int bigstepsPerCommand = 2048;
 
 void setup() {
   Serial.begin(9600);
@@ -38,7 +39,7 @@ void loop() {
     String data = Serial.readStringUntil(';');
     char commandType = data.charAt(0);  // Get the first character of the command
 
-    if (commandType == 'L' || commandType == 'R') {
+    if (commandType == 'L' || commandType == 'R' || commandType == 'T' || commandType == 'K') {
 
     if (commandType == 'R') {
       Direction = true;  // Set direction to clockwise
@@ -53,6 +54,20 @@ void loop() {
         delayMicroseconds(800);
       }
     }
+    if (commandType == 'T') {
+      Direction = true;  // Set direction to clockwise
+      for(int i=0; i<bigstepsPerCommand; i++){
+        stepper(1);
+        delayMicroseconds(1200);
+      }
+    } else if (commandType == 'K') {
+      Direction = false; // Set direction to counter-clockwise
+      for(int i=0; i<bigstepsPerCommand; i++){
+        stepper(1);
+        delayMicroseconds(1200);
+      }
+    } 
+    
     } else {
       // Handle servo commands
       int commaIndex = data.indexOf(',');

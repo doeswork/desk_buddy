@@ -184,6 +184,8 @@ stepper_control_frame.pack(side=tk.BOTTOM, pady=10)  # Add some padding for visu
 # Place the buttons inside the frame, which will be at the bottom of the root window
 Button(stepper_control_frame, text="Left", command=lambda: update_stepper('L')).pack(side=tk.LEFT, padx=5)
 Button(stepper_control_frame, text="Right", command=lambda: update_stepper('R')).pack(side=tk.RIGHT, padx=5)
+Button(stepper_control_frame, text="Large Left", command=lambda: update_stepper('K')).pack(side=tk.LEFT, padx=5)
+Button(stepper_control_frame, text="Large Right", command=lambda: update_stepper('T')).pack(side=tk.RIGHT, padx=5)
 
 # Run the GUI loop and draw initial servo positions
 draw_servo_positions()
