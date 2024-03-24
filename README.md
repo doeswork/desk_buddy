@@ -15,8 +15,8 @@ To get started with Desk Buddy, you'll need some basic components and tools. For
 ## How to Build
 
 We've prepared a series of video tutorials to help you through the building process:
-[![Build Tutorial]()](https://www.youtube.com/watch?v=KOnslMjLCzg&ab_channel=HackerTwins)
-[![BlueTooth Tutorial]()](https://www.youtube.com/watch?v=Q91i7-LMvH8&list=PLEucaNZ-kUSoCu26UAixnopTIWHhtfvJg&index=8&ab_channel=HackerTwins)
+[![Desktop_BlueTooth Tutorial]()](https://www.youtube.com/watch?v=KOnslMjLCzg&ab_channel=HackerTwins)
+[![Build Tutorial]()](https://www.youtube.com/watch?v=Q91i7-LMvH8&list=PLEucaNZ-kUSoCu26UAixnopTIWHhtfvJg&index=8&ab_channel=HackerTwins)
 
 ## License
 
