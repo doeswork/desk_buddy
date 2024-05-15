@@ -65,6 +65,15 @@ def draw_servo_positions():
     canvas.create_line(x5a, y5a, x6a, y6a, fill="red", width=3, tags="line")
     canvas.create_line(x5b, y5b, x6b, y6b, fill="red", width=3, tags="line")
 
+def increment_servo(servo, increment):
+    new_value = servo.get() + increment
+    servo.set(new_value)
+    update_servo(servo.id, new_value)
+
+def decrement_servo(servo, decrement):
+    new_value = servo.get() - decrement
+    servo.set(new_value)
+    update_servo(servo.id, new_value)
 
 root = tk.Tk()
 root.title("Robot Arm Control")
@@ -75,8 +84,16 @@ canvas = Canvas(root, width=canvas_width, height=canvas_height, bg='white')
 canvas.pack()
 
 # Sliders for the servos
-servo1 = Scale(root, from_=0, to=180, orient=HORIZONTAL, label="Bicep Rotation", command=lambda value, s=1: update_servo(s, value))
+servo1 = Scale(root, from_=0, to=180, orient=HORIZONTAL, label="Bicep Rotation", command=lambda value: update_servo(1, value))
+servo1.id = 1
 servo1.pack()
+servo1_frame = tk.Frame(root)
+Button(servo1_frame, text="-10", command=lambda: decrement_servo(servo1, 10)).pack(side=tk.LEFT)
+Button(servo1_frame, text="-1", command=lambda: decrement_servo(servo1, 1)).pack(side=tk.LEFT)
+servo1.pack(side=tk.LEFT)
+Button(servo1_frame, text="+1", command=lambda: increment_servo(servo1, 1)).pack(side=tk.LEFT)
+Button(servo1_frame, text="+10", command=lambda: increment_servo(servo1, 10)).pack(side=tk.LEFT)
+servo1_frame.pack()
 
 servo2 = Scale(root, from_=0, to=30, orient=HORIZONTAL, label="Bicep Extension (mm)", command=lambda value, s=2: update_servo(s, value))
 servo2.pack()
