@@ -28,15 +28,15 @@ def send_A():
 # thread.start()
 
 # Setup the serial connection (this should be the same as your Arduino's port and baud rate)
-arduino = serial.Serial('COM9', 9600, timeout=1)
+arduino = serial.Serial('COM10', 9600, timeout=1)
 time.sleep(5)
 
 def send_command(command):
     if arduino.is_open:
         arduino.write(command.encode())
+        print(f"Sent command: {command}")  # Debugging print
     else:
         print("Serial port is not open")
-
 
 def update_servo(servo, value):
     # Store the value instead of sending it immediately
@@ -59,8 +59,6 @@ def send_all_servo_commands():
 
         send_command(f'{servo},{mapped_value};')
     print("All commands sent!")
-
-
 
 def update_stepper(direction):
     # Send single character command to Arduino, e.g., 'L' or 'R'
@@ -122,6 +120,19 @@ def decrement_servo(servo, decrement):
     servo.set(new_value)
     update_servo(servo.id, new_value)
 
+def send_continuous_servo_command():
+    direction = direction_var.get()
+    speed = speed_var.get()
+    duration = duration_entry.get()
+
+    if not duration.isdigit():
+        print("Please enter a valid duration in milliseconds")
+        return
+
+    command = f'{direction}{speed}{duration};'
+    send_command(command)
+    print(f"Sent command: {command}")
+
 root = tk.Tk()
 root.title("Robot Arm Control")
 
@@ -176,6 +187,31 @@ servo4.pack(side=tk.LEFT)
 Button(servo4_frame, text="+1", command=lambda: increment_servo(servo4, 1)).pack(side=tk.LEFT)
 Button(servo4_frame, text="+10", command=lambda: increment_servo(servo4, 10)).pack(side=tk.LEFT)
 servo4_frame.pack()
+
+# Continuous rotation servo (servo 5)
+continuous_servo_frame = tk.Frame(root)
+continuous_servo_frame.pack(pady=10)
+
+# Direction control (left or right)
+direction_var = tk.StringVar(value="R")
+Label(continuous_servo_frame, text="Direction:").pack(side=tk.LEFT)
+Button(continuous_servo_frame, text="Left", command=lambda: direction_var.set("L")).pack(side=tk.LEFT)
+Button(continuous_servo_frame, text="Right", command=lambda: direction_var.set("R")).pack(side=tk.LEFT)
+
+# Speed control (slow or fast)
+speed_var = tk.StringVar(value="S")
+Label(continuous_servo_frame, text="Speed:").pack(side=tk.LEFT)
+Button(continuous_servo_frame, text="Slow", command=lambda: speed_var.set("S")).pack(side=tk.LEFT)
+Button(continuous_servo_frame, text="Fast", command=lambda: speed_var.set("F")).pack(side=tk.LEFT)
+
+# Duration input (in milliseconds)
+Label(continuous_servo_frame, text="Duration (ms):").pack(side=tk.LEFT)
+duration_entry = tk.Entry(continuous_servo_frame, width=10)
+duration_entry.pack(side=tk.LEFT)
+
+# Send command button
+send_continuous_servo_button = Button(continuous_servo_frame, text="Send Continuous Servo Command", command=send_continuous_servo_command)
+send_continuous_servo_button.pack(side=tk.LEFT)
 
 # Create a frame for the stepper control buttons
 stepper_control_frame = tk.Frame(root)
