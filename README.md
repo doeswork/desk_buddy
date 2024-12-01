@@ -22,5 +22,3 @@ We've prepared a series of video tutorials to help you through the building proc
 
 Desk Buddy is open source and available under the [MIT License].
 
-
-Happy Building!
