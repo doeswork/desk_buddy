@@ -1,9 +1,9 @@
-name: Generate and Comment Preview
+name: Check for STL Files
 
 on:
-  push:
-    paths:
-      - "desk_buddy.FCStd"
+  pull_request:
+    branches:
+      - master 
 
 jobs:
   generate-preview:
