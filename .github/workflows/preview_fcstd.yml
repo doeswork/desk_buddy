@@ -1,0 +1,62 @@
+name: Generate and Comment Preview
+
+on:
+  push:
+    paths:
+      - "desk_buddy.FCStd"
+
+jobs:
+  generate-preview:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install FreeCAD
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y freecad
+
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        pip install numpy matplotlib numpy-stl
+
+    - name: Convert FreeCAD file to STL
+      run: |
+        python3 scripts/convert_fcstd_to_stl.py
+      env:
+        INPUT_FILE: desk_buddy.FCStd
+        OUTPUT_FILE: desk_buddy.stl
+
+    - name: Convert STL to JPG
+      run: |
+        python3 scripts/convert_stl_to_jpg.py
+      env:
+        INPUT_FILE: desk_buddy.stl
+        OUTPUT_FILE: desk_buddy.jpg
+
+    - name: Upload rendered image
+      uses: actions/upload-artifact@v3
+      with:
+        name: desk_buddy_preview
+        path: desk_buddy.jpg
+
+    - name: Post GitHub comment with image
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const path = 'desk_buddy.jpg';
+          const fileContent = fs.readFileSync(path).toString('base64');
+
+          const comment = `
+          ![Preview](data:image/jpeg;base64,${fileContent})
+          `;
+          
+          github.rest.issues.createComment({
+            ...context.repo,
+            issue_number: context.payload.pull_request ? context.payload.pull_request.number : context.sha,
+            body: comment
+          });
