@@ -3,6 +3,8 @@
 #include <WebServer.h>
 #include <Preferences.h>
 
+#define LED_PIN 41  // LED connected to pin 41
+
 // Create a global Preferences object and variables to hold saved WiFi credentials.
 static Preferences preferences;
 static String networkName;
@@ -11,7 +13,7 @@ static String networkPassword;
 // Create a web server instance on port 80.
 WebServer server(80);
 
-// HTML for the index page served at "/"
+// HTML for the index page served at "/".
 // This page lets you enter your local WiFi network credentials.
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -33,13 +35,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 // Handler for the root ("/") endpoint.  
-// Simply serves the HTML form for WiFi configuration.
+// Serves the HTML form for WiFi configuration.
 void handleRoot() {
   server.send(200, "text/html", INDEX_HTML);
 }
 
 // Handler for the "/save" endpoint.
-// Reads the submitted credentials, saves them in Preferences, and then attempts to connect.
+// Reads submitted credentials, saves them in Preferences, then attempts to connect.
 void handleSave() {
   if (server.method() == HTTP_POST) {
     // Get the new WiFi credentials from the POST request.
@@ -60,6 +62,7 @@ void handleSave() {
       delay(500);
     }
     if (WiFi.status() == WL_CONNECTED) {
+      digitalWrite(LED_PIN, HIGH); // Turn LED on when connected.
       String ipStr = WiFi.localIP().toString();
       String response = "<html><body>";
       response += "<script>alert('Connected to WiFi. IP: " + ipStr + "');</script>";
@@ -67,6 +70,7 @@ void handleSave() {
       response += "</body></html>";
       server.send(200, "text/html", response);
     } else {
+      digitalWrite(LED_PIN, LOW); // Ensure LED is off if connection fails.
       String response = "<html><body><h1>Connection Failed</h1><p>Please check your credentials and try again.</p></body></html>";
       server.send(200, "text/html", response);
     }
@@ -74,12 +78,16 @@ void handleSave() {
 }
 
 void WebServerWrapper::begin(const char* apSSID, const char* apPassword) {
-  // Initialize the Preferences library (using the "buddy" namespace).
+  // Initialize the Preferences library.
   preferences.begin("buddy", false);
   
   // Attempt to load saved WiFi credentials.
   networkName = preferences.getString("networkName", "");
   networkPassword = preferences.getString("networkPassword", "");
+
+  // Setup LED pin.
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);  // Start with LED off.
 
   if (networkName.length() > 0) {
     // If saved credentials exist, try connecting in STA mode.
@@ -92,11 +100,12 @@ void WebServerWrapper::begin(const char* apSSID, const char* apPassword) {
       delay(500);
     }
     if (WiFi.status() == WL_CONNECTED) {
+      digitalWrite(LED_PIN, HIGH); // Connected: turn LED on.
       Serial.print("Connected to saved WiFi. IP: ");
       Serial.println(WiFi.localIP());
     } else {
+      digitalWrite(LED_PIN, LOW);
       Serial.println("Failed to connect to saved WiFi. Starting AP mode for configuration.");
-      // If connection fails, start AP mode so the user can update credentials.
       WiFi.mode(WIFI_AP_STA);
       WiFi.softAP(apSSID, apPassword);
     }
@@ -106,7 +115,7 @@ void WebServerWrapper::begin(const char* apSSID, const char* apPassword) {
     WiFi.softAP(apSSID, apPassword);
   }
 
-  // Print the AP IP address so you can connect to it.
+  // Print the AP IP address.
   Serial.print("AP IP address: ");
   Serial.println(WiFi.softAPIP());
 
