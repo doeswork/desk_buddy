@@ -5,10 +5,10 @@
 #include <WebServer.h>
 
 namespace InverseKinematics {
-  // Initializes the inverse kinematics module (attaches the elbow and wrist servos).
+  // Initializes the servos and loads calibration data from Preferences.
   void begin();
   
-  // Registers the /controlIK endpoint on your global WebServer instance.
+  // Registers the /controlIK, /calibrateIK, and /calibrateServo endpoints on the given server.
   void registerEndpoints(WebServer &server);
   
   // (Optional) Per-loop processing, if needed.
