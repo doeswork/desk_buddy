@@ -1,17 +1,16 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>ESP32 Robot Arm Controller</title>
-  <!-- jQuery from CDN -->
   <script src="https://code.jquery.com/jquery-3.6.0.min.js" crossorigin="anonymous"></script>
   <style>
-    body { font-family: Arial, sans-serif; margin:20px; }
-    .section { border:1px solid #ccc; padding:15px; margin-bottom:20px; border-radius:5px; }
-    label { display:block; margin:5px 0 2px; }
-    input, button { width:100%; padding:5px; margin-bottom:10px; }
-    .response { background:#f2f2f2; padding:10px; border:1px solid #ccc; white-space:pre-wrap; }
-    #ikCanvas { border:1px solid #ccc; display:block; margin-top:10px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .section { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+    label { display: block; margin: 5px 0 2px; }
+    input, button { width: 100%; padding: 5px; margin-bottom: 10px; }
+    .response { background: #f2f2f2; padding: 10px; border: 1px solid #ccc; white-space: pre-wrap; }
+    #ikCanvas { border: 1px solid #ccc; display: block; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -20,13 +19,13 @@
   <!-- Connection Section -->
   <div class="section" id="connectionSection">
     <h2>Connect to ESP32</h2>
-    <input type="text" id="ipAddress" placeholder="ESP32 IP (e.g. 10.0.0.187)">
+    <input type="text" id="ipAddress" placeholder="ESP32 IP (e.g., 10.0.0.187)">
     <button id="connectBtn">Connect</button>
     <div id="connectionStatus"></div>
   </div>
 
   <!-- Control Panels (hidden until connected) -->
-  <div id="controlSections" style="display:none;">
+  <div id="controlSections" style="display: none;">
 
     <!-- Gripper Control -->
     <div class="section" id="gripperSection">
@@ -63,12 +62,10 @@
     <!-- Inverse Kinematics Control -->
     <div class="section" id="ikSection">
       <h2>Inverse Kinematics Control</h2>
-      <label>X (inches): <span id="ikXVal">0</span></label>
-      <input type="range" id="ikXSlider" min="-10" max="10" step="0.1" value="0">
-      <label>Y (inches): <span id="ikYVal">3</span></label>
-      <input type="range" id="ikYSlider" min="3" max="15" step="0.1" value="3">
+      <label>Distance (mm): <span id="ikDVal">0</span></label>
+      <input type="range" id="ikDSlider" min="0" max="200" step="1" value="0">
       <button id="applyIK">Apply IK</button>
-      <canvas id="ikCanvas" width="300" height="300"></canvas>
+      <canvas id="ikCanvas" width="300" height="100"></canvas>
       <div class="response" id="ikResponse"></div>
     </div>
 
@@ -79,106 +76,104 @@
       <input type="range" id="calElbowSlider" min="0" max="180" value="90">
       <label>Wrist Servo (0–180): <span id="calWristVal">90</span></label>
       <input type="range" id="calWristSlider" min="0" max="180" value="90">
-      <label>Real‑world X (inches):</label>
-      <input type="number" id="calX" step="0.1">
-      <label>Real‑world Y (inches):</label>
-      <input type="number" id="calY" step="0.1">
-      <button id="savePointA">Save Point A</button>
-      <button id="savePointB">Save Point B</button>
-      <button id="savePointC">Save Point C</button>
+      <label>Distance (mm):</label>
+      <input type="number" id="calD" step="1">
+      <button id="savePointA">Save Point A (Start)</button>
+      <button id="savePointB">Save Point B (Middle)</button>
+      <button id="savePointC">Save Point C (End)</button>
       <button id="finishCal">Finish Calibration</button>
       <div class="response" id="calResponse"></div>
     </div>
 
   </div>
 
-<script>
-$(function(){
-  let esp32IP = "";
+  <script>
+  $(function(){
+    let esp32IP = "";
 
-  // Connect to ESP32
-  $('#connectBtn').click(()=>{
-    esp32IP = $('#ipAddress').val().trim();
-    $.get(`http://${esp32IP}:81/status`)
-      .done(r => { $('#connectionStatus').text(r); $('#controlSections').show(); })
-      .fail((_,s)=> $('#connectionStatus').text("Connection failed: " + s));
-  });
+    // Connect to ESP32
+    $('#connectBtn').click(() => {
+      esp32IP = $('#ipAddress').val().trim();
+      $.get(`http://${esp32IP}:81/status`)
+        .done(r => { $('#connectionStatus').text(r); $('#controlSections').show(); })
+        .fail((_, s) => $('#connectionStatus').text("Connection failed: " + s));
+    });
 
-  // Utility function to perform GET requests.
-  function doGET(path, target) {
-    $.get(`http://${esp32IP}:81/${path}`)
-      .done(r => $(target).text(r))
-      .fail((_,s) => $(target).text("Error: " + s));
-  }
+    // Utility function to perform GET requests
+    function doGET(path, target) {
+      $.get(`http://${esp32IP}:81/${path}`)
+        .done(r => $(target).text(r))
+        .fail((_, s) => $(target).text("Error: " + s));
+    }
 
-  // Gripper Control
-  $('.sendGripper').click(e => {
-    const cmd = $(e.currentTarget).data('command');
-    doGET(`controlGripper?command=${cmd}`, '#responseGripper');
-  });
+    // Gripper Control
+    $('.sendGripper').click(e => {
+      const cmd = $(e.currentTarget).data('command');
+      doGET(`controlGripper?command=${cmd}`, '#responseGripper');
+    });
 
-  // Rotation Base Control
-  $('#sendRotation').click(()=>{
-    const mode = $('input[name="rotationMode"]:checked').val();
-    const dir  = $('input[name="rotationDirection"]:checked').val();
-    const count = $('#rotationCount').val();
-    doGET(`controlRotationBase?mode=${mode}&direction=${dir}&count=${count}`, '#responseRotation');
-  });
+    // Rotation Base Control
+    $('#sendRotation').click(() => {
+      const mode = $('input[name="rotationMode"]:checked').val();
+      const dir = $('input[name="rotationDirection"]:checked').val();
+      const count = $('#rotationCount').val();
+      doGET(`controlRotationBase?mode=${mode}&direction=${dir}&count=${count}`, '#responseRotation');
+    });
 
-  // Wrist Twist Control
-  $('#wristTwistAngle').on('input', () => {
-    $('#wristTwistVal').text($('#wristTwistAngle').val());
-  });
-  $('#sendWristTwist').click(()=>{
-    doGET(`controlWristTwist?angle=${$('#wristTwistAngle').val()}`, '#responseWristTwist');
-  });
+    // Wrist Twist Control
+    $('#wristTwistAngle').on('input', () => {
+      $('#wristTwistVal').text($('#wristTwistAngle').val());
+    });
+    $('#sendWristTwist').click(() => {
+      doGET(`controlWristTwist?angle=${$('#wristTwistAngle').val()}`, '#responseWristTwist');
+    });
 
-  // Inverse Kinematics Control
-  function drawIK(){
-    const x = parseFloat($('#ikXSlider').val());
-    const y = parseFloat($('#ikYSlider').val());
-    $('#ikXVal').text(x);
-    $('#ikYVal').text(y);
-    const c = document.getElementById('ikCanvas'),
-          ctx = c.getContext('2d');
-    ctx.clearRect(0, 0, c.width, c.height);
-    const px = c.width/2, py = c.height - 30, scale = 20;
-    const tx = px + x * scale, ty = py - ((y - 3) * scale);
-    ctx.beginPath(); ctx.arc(px, py, 5, 0, 2*Math.PI); ctx.fill();
-    ctx.beginPath(); ctx.arc(tx, ty, 5, 0, 2*Math.PI); ctx.fillStyle='red'; ctx.fill();
-    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(tx,ty); ctx.stroke();
-  }
-  $('#ikXSlider, #ikYSlider').on('input', drawIK);
-  $('#applyIK').click(()=>{
-    const x = $('#ikXSlider').val(), y = $('#ikYSlider').val();
-    doGET(`controlIK?x=${x}&y=${y}`, '#ikResponse');
-  });
-  drawIK();
+    // Inverse Kinematics Control
+    function drawIK() {
+      const d = parseFloat($('#ikDSlider').val());
+      $('#ikDVal').text(d);
+      const c = document.getElementById('ikCanvas'),
+            ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+      const px = 30, py = c.height / 2, scale = 1.35; // Scale for mm visualization
+      const tx = px + d * scale;
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, 2 * Math.PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(tx, py, 5, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, py); ctx.stroke();
+    }
+    $('#ikDSlider').on('input', drawIK);
+    $('#applyIK').click(() => {
+      const d = $('#ikDSlider').val();
+      doGET(`controlIK?d=${d}`, '#ikResponse');
+    });
+    drawIK();
 
-  // IK Calibration - Live Servo Control
-  $('#calElbowSlider').on('input', function(){
-    const angle = $(this).val();
-    $('#calElbowVal').text(angle);
-    $.get(`http://${esp32IP}:81/calibrateServo?servo=elbow&angle=${angle}`);
+    // IK Calibration - Live Servo Control
+    $('#calElbowSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calElbowVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=elbow&angle=${angle}`);
+    });
+    $('#calWristSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calWristVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=wrist&angle=${angle}`);
+    });
+
+    // Save calibration points
+    function savePt(pt) {
+      const d = $('#calD').val();
+      if (!d) {
+        alert("Please enter a distance.");
+        return;
+      }
+      doGET(`calibrateIK?action=SAVE&point=${pt}&d=${d}`, '#calResponse');
+    }
+    $('#savePointA').click(() => savePt('A'));
+    $('#savePointB').click(() => savePt('B'));
+    $('#savePointC').click(() => savePt('C'));
+    $('#finishCal').click(() => doGET('calibrateIK?action=FINISH', '#calResponse'));
   });
-  $('#calWristSlider').on('input', function(){
-    const angle = $(this).val();
-    $('#calWristVal').text(angle);
-    $.get(`http://${esp32IP}:81/calibrateServo?servo=wrist&angle=${angle}`);
-  });
-  // Save calibration points
-  function savePt(pt){
-    const e = $('#calElbowSlider').val(),
-          w = $('#calWristSlider').val(),
-          X = $('#calX').val(),
-          Y = $('#calY').val();
-    doGET(`calibrateIK?action=SAVE&point=${pt}&elbow=${e}&wrist=${w}&X=${X}&Y=${Y}`, '#calResponse');
-  }
-  $('#savePointA').click(()=>savePt('A'));
-  $('#savePointB').click(()=>savePt('B'));
-  $('#savePointC').click(()=>savePt('C'));
-  $('#finishCal').click(()=> doGET('calibrateIK?action=FINISH', '#calResponse'));
-});
-</script>
+  </script>
 </body>
 </html>
