@@ -4,7 +4,6 @@
 #include "InverseKinematics.h"
 #include "GripperControl.h"
 #include "RotationBase.h"
-#include "WristTwist.h"
 #include <WebServer.h>
 
 // Global control server for all robot endpoints on port 81.
@@ -27,13 +26,11 @@ void setup() {
   InverseKinematics::begin();
   GripperControl::begin();
   RotationBase::begin();
-  WristTwist::begin();
 
   // Register endpoints for each module on the global control server.
   InverseKinematics::registerEndpoints(controlServer);
   GripperControl::registerEndpoints(controlServer);
   RotationBase::registerEndpoints(controlServer);
-  WristTwist::registerEndpoints(controlServer);
 
   // Start the control server.
   controlServer.begin();

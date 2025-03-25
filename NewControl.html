@@ -50,15 +50,6 @@
       <div class="response" id="responseRotation"></div>
     </div>
 
-    <!-- Wrist Twist Control -->
-    <div class="section" id="wristTwistSection">
-      <h2>Wrist Twist Control</h2>
-      <label>Angle: <span id="wristTwistVal">90</span></label>
-      <input type="range" id="wristTwistAngle" min="0" max="180" value="90">
-      <button id="sendWristTwist">Set Wrist Twist</button>
-      <div class="response" id="responseWristTwist"></div>
-    </div>
-
     <!-- Inverse Kinematics Control -->
     <div class="section" id="ikSection">
       <h2>Inverse Kinematics Control</h2>
@@ -76,6 +67,8 @@
       <input type="range" id="calElbowSlider" min="0" max="180" value="90">
       <label>Wrist Servo (0–180): <span id="calWristVal">90</span></label>
       <input type="range" id="calWristSlider" min="0" max="180" value="90">
+      <label>Twist Servo (0–180): <span id="calTwistVal">90</span></label>
+      <input type="range" id="calTwistSlider" min="0" max="180" value="90">
       <label>Distance (mm):</label>
       <input type="number" id="calD" step="1">
       <button id="savePointA">Save Point A (Start)</button>
@@ -120,14 +113,6 @@
       doGET(`controlRotationBase?mode=${mode}&direction=${dir}&count=${count}`, '#responseRotation');
     });
 
-    // Wrist Twist Control
-    $('#wristTwistAngle').on('input', () => {
-      $('#wristTwistVal').text($('#wristTwistAngle').val());
-    });
-    $('#sendWristTwist').click(() => {
-      doGET(`controlWristTwist?angle=${$('#wristTwistAngle').val()}`, '#responseWristTwist');
-    });
-
     // Inverse Kinematics Control
     function drawIK() {
       const d = parseFloat($('#ikDSlider').val());
@@ -142,9 +127,29 @@
       ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, py); ctx.stroke();
     }
     $('#ikDSlider').on('input', drawIK);
+    // Inverse Kinematics Control
     $('#applyIK').click(() => {
       const d = $('#ikDSlider').val();
-      doGET(`controlIK?d=${d}`, '#ikResponse');
+      $.get(`http://${esp32IP}:81/controlIK?d=${d}`)
+        .done(r => {
+          // Display the response as usual
+          $('#ikResponse').text(r);
+          // Parse the response to extract servo angles
+          const match = r.match(/Elbow=(\d+), Wrist=(\d+), Twist=(\d+)/);
+          if (match) {
+            const elbow = match[1];
+            const wrist = match[2];
+            const twist = match[3];
+            // Update calibration sliders and their display values
+            $('#calElbowSlider').val(elbow);
+            $('#calElbowVal').text(elbow);
+            $('#calWristSlider').val(wrist);
+            $('#calWristVal').text(wrist);
+            $('#calTwistSlider').val(twist);
+            $('#calTwistVal').text(twist);
+          }
+        })
+        .fail((_, s) => $('#ikResponse').text("Error: " + s));
     });
     drawIK();
 
@@ -158,6 +163,11 @@
       const angle = $(this).val();
       $('#calWristVal').text(angle);
       $.get(`http://${esp32IP}:81/calibrateServo?servo=wrist&angle=${angle}`);
+    });
+    $('#calTwistSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calTwistVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=twist&angle=${angle}`);
     });
 
     // Save calibration points
