@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Robot Arm Controller</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js" crossorigin="anonymous"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .section { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+    label { display: block; margin: 5px 0 2px; }
+    input, button { width: 100%; padding: 5px; margin-bottom: 10px; }
+    .response { background: #f2f2f2; padding: 10px; border: 1px solid #ccc; white-space: pre-wrap; }
+    #ikCanvas { border: 1px solid #ccc; display: block; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>ESP32 Robot Arm Controller</h1>
+
+  <!-- Connection Section -->
+  <div class="section" id="connectionSection">
+    <h2>Connect to ESP32</h2>
+    <input type="text" id="ipAddress" placeholder="ESP32 IP (e.g., 10.0.0.187)">
+    <button id="connectBtn">Connect</button>
+    <div id="connectionStatus"></div>
+  </div>
+
+  <!-- Control Panels (hidden until connected) -->
+  <div id="controlSections" style="display: none;">
+
+    <!-- Gripper Control -->
+    <div class="section" id="gripperSection">
+      <h2>Gripper Control</h2>
+      <button class="sendGripper" data-command="GRAB">GRAB</button>
+      <button class="sendGripper" data-command="DROP">DROP</button>
+      <div class="response" id="responseGripper"></div>
+    </div>
+
+    <!-- Rotation Base Control -->
+    <div class="section" id="rotationBaseSection">
+      <h2>Rotation Base Control</h2>
+      <label>Mode:</label>
+      <input type="radio" name="rotationMode" value="encoder" checked> Encoder
+      <input type="radio" name="rotationMode" value="magnet"> Magnet
+      <label>Direction:</label>
+      <input type="radio" name="rotationDirection" value="LEFT" checked> Left
+      <input type="radio" name="rotationDirection" value="RIGHT"> Right
+      <label>Count:</label>
+      <input type="number" id="rotationCount" value="100">
+      <button id="sendRotation">Rotate</button>
+      <div class="response" id="responseRotation"></div>
+    </div>
+
+    <!-- Inverse Kinematics Control -->
+    <div class="section" id="ikSection">
+      <h2>Inverse Kinematics Control</h2>
+      <label>Distance (mm): <span id="ikDVal">0</span></label>
+      <input type="range" id="ikDSlider" min="0" max="200" step="1" value="0">
+      <button id="applyIK">Apply IK</button>
+      <canvas id="ikCanvas" width="300" height="100"></canvas>
+      <div class="response" id="ikResponse"></div>
+    </div>
+
+    <!-- IK Calibration Section -->
+    <div class="section" id="ikCalSection">
+      <h2>IK Calibration</h2>
+      <label>Elbow Servo (0–180): <span id="calElbowVal">90</span></label>
+      <input type="range" id="calElbowSlider" min="0" max="180" value="90">
+      <label>Wrist Servo (0–180): <span id="calWristVal">90</span></label>
+      <input type="range" id="calWristSlider" min="0" max="180" value="90">
+      <label>Twist Servo (0–180): <span id="calTwistVal">90</span></label>
+      <input type="range" id="calTwistSlider" min="0" max="180" value="90">
+      <label>Distance (mm):</label>
+      <input type="number" id="calD" step="1">
+      <button id="savePointA">Save Point A (Start)</button>
+      <button id="savePointB">Save Point B (Middle)</button>
+      <button id="savePointC">Save Point C (End)</button>
+      <button id="finishCal">Finish Calibration</button>
+      <div class="response" id="calResponse"></div>
+    </div>
+
+  </div>
+
+  <script>
+  $(function(){
+    let esp32IP = "";
+
+    // Connect to ESP32
+    $('#connectBtn').click(() => {
+      esp32IP = $('#ipAddress').val().trim();
+      $.get(`http://${esp32IP}:81/status`)
+        .done(r => { $('#connectionStatus').text(r); $('#controlSections').show(); })
+        .fail((_, s) => $('#connectionStatus').text("Connection failed: " + s));
+    });
+
+    // Utility function to perform GET requests
+    function doGET(path, target) {
+      $.get(`http://${esp32IP}:81/${path}`)
+        .done(r => $(target).text(r))
+        .fail((_, s) => $(target).text("Error: " + s));
+    }
+
+    // Gripper Control
+    $('.sendGripper').click(e => {
+      const cmd = $(e.currentTarget).data('command');
+      doGET(`controlGripper?command=${cmd}`, '#responseGripper');
+    });
+
+    // Rotation Base Control
+    $('#sendRotation').click(() => {
+      const mode = $('input[name="rotationMode"]:checked').val();
+      const dir = $('input[name="rotationDirection"]:checked').val();
+      const count = $('#rotationCount').val();
+      doGET(`controlRotationBase?mode=${mode}&direction=${dir}&count=${count}`, '#responseRotation');
+    });
+
+    // Inverse Kinematics Control
+    function drawIK() {
+      const d = parseFloat($('#ikDSlider').val());
+      $('#ikDVal').text(d);
+      const c = document.getElementById('ikCanvas'),
+            ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+      const px = 30, py = c.height / 2, scale = 1.35; // Scale for mm visualization
+      const tx = px + d * scale;
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, 2 * Math.PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(tx, py, 5, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, py); ctx.stroke();
+    }
+    $('#ikDSlider').on('input', drawIK);
+    // Inverse Kinematics Control
+    $('#applyIK').click(() => {
+      const d = $('#ikDSlider').val();
+      $.get(`http://${esp32IP}:81/controlIK?d=${d}`)
+        .done(r => {
+          // Display the response as usual
+          $('#ikResponse').text(r);
+          // Parse the response to extract servo angles
+          const match = r.match(/Elbow=(\d+), Wrist=(\d+), Twist=(\d+)/);
+          if (match) {
+            const elbow = match[1];
+            const wrist = match[2];
+            const twist = match[3];
+            // Update calibration sliders and their display values
+            $('#calElbowSlider').val(elbow);
+            $('#calElbowVal').text(elbow);
+            $('#calWristSlider').val(wrist);
+            $('#calWristVal').text(wrist);
+            $('#calTwistSlider').val(twist);
+            $('#calTwistVal').text(twist);
+          }
+        })
+        .fail((_, s) => $('#ikResponse').text("Error: " + s));
+    });
+    drawIK();
+
+    // IK Calibration - Live Servo Control
+    $('#calElbowSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calElbowVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=elbow&angle=${angle}`);
+    });
+    $('#calWristSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calWristVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=wrist&angle=${angle}`);
+    });
+    $('#calTwistSlider').on('input', function() {
+      const angle = $(this).val();
+      $('#calTwistVal').text(angle);
+      $.get(`http://${esp32IP}:81/calibrateServo?servo=twist&angle=${angle}`);
+    });
+
+    // Save calibration points
+    function savePt(pt) {
+      const d = $('#calD').val();
+      if (!d) {
+        alert("Please enter a distance.");
+        return;
+      }
+      doGET(`calibrateIK?action=SAVE&point=${pt}&d=${d}`, '#calResponse');
+    }
+    $('#savePointA').click(() => savePt('A'));
+    $('#savePointB').click(() => savePt('B'));
+    $('#savePointC').click(() => savePt('C'));
+    $('#finishCal').click(() => doGET('calibrateIK?action=FINISH', '#calResponse'));
+  });
+  </script>
+</body>
+</html>
