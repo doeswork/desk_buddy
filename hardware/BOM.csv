@@ -4,3 +4,4 @@ qty,part_name,description,specs,unit_price_usd,total_price_usd,retailer,notes
 1,MG995 Metal Gear Servo,MG995 13KG Digital High Speed Torque Servo 180°,55g | 13kg/cm @ 7.2V | 0.13sec/60° @ 6V | 3.0-7.2V | 180° | all-metal gears | JR/Futaba compatible,4.72,4.72,MakerFocus,4-pack $18.89 — buy pack and use remaining for spares
 1,360 Continuous Rotation Servo,FEETECH FS90R Micro Continuous Rotation Servo,9g | 22.5x12.1x23.4mm | 1.5kg/cm @ 6V | 110RPM @ 4.8V | 4.8-6V | continuous 360°,9.82,9.82,Pololu,True continuous rotation (not modified SG90)
 1,ESP32-S3 CAM Module,Freenove ESP32-S3 CAM Wi-Fi Bluetooth Board,ESP32-S3 dual-core LX7 240MHz | 8MB Flash | 8MB PSRAM | Wi-Fi + BT 5.0 | USB-C | OV camera included,19.99,19.99,Freenove/Amazon,16MB Flash variant available for $21.99
+2,Steel plate,A weight to make desk buddy heavier,na,1.99,1.99,Home Depot,na
