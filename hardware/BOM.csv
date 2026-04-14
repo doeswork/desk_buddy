@@ -1,7 +1,10 @@
-qty,part_name,description,specs,unit_price_usd,total_price_usd,retailer,notes
-2,SG90 9g Micro Servo (Blue),TowerPro SG90 180 Degree Blue Micro Servo,9g | 22x11.5x27mm | 1.2kg/cm @ 4.8V | 0.12sec/60° | 3.0-7.2V | 180°,3.95,7.90,Amazon/PiShop,Hosyond 10-pack ~$1.50/unit is cheaper for bulk
-1,270 Degree Servo,RCmall TS90MD 9g Metal Gear Digital Servo 270°,9g | 22.4x12.5x22.8mm | 1.4kg/cm @ 6V | 0.09sec/60° | 4.8-6V | 270° | metal gears | PWM 500-2500µs,9.25,9.25,Amazon,Available in 4-pack for ~$36.98
-1,MG995 Metal Gear Servo,MG995 13KG Digital High Speed Torque Servo 180°,55g | 13kg/cm @ 7.2V | 0.13sec/60° @ 6V | 3.0-7.2V | 180° | all-metal gears | JR/Futaba compatible,4.72,4.72,MakerFocus,4-pack $18.89 — buy pack and use remaining for spares
-1,360 Continuous Rotation Servo,FEETECH FS90R Micro Continuous Rotation Servo,9g | 22.5x12.1x23.4mm | 1.5kg/cm @ 6V | 110RPM @ 4.8V | 4.8-6V | continuous 360°,9.82,9.82,Pololu,True continuous rotation (not modified SG90)
-1,ESP32-S3 CAM Module,Freenove ESP32-S3 CAM Wi-Fi Bluetooth Board,ESP32-S3 dual-core LX7 240MHz | 8MB Flash | 8MB PSRAM | Wi-Fi + BT 5.0 | USB-C | OV camera included,19.99,19.99,Freenove/Amazon,16MB Flash variant available for $21.99
-2,Steel plate,A weight to make desk buddy heavier,na,1.99,1.99,Home Depot,na
+qty,part_name,description,specs,unit_price_usd,total_price_usd,retailer,notes,url
+3,SG90 9g Micro Servo (Blue),180 Degree Blue Micro Servo,9g | 22x11.5x27mm | 1.2kg/cm @ 4.8V | 0.12sec/60° | 3.0-7.2V | 180°,3.95,7.90,Amazon/PiShop,Hosyond 10-pack ~$1.50/unit is cheaper for bulk,
+1,MG996R Metal Gear Servo,MG996R 11KG Digital Servo 180°,55g | 13kg/cm @ 7.2V | 0.13sec/60° @ 6V | 3.0-7.2V | 180° | all-metal gears | JR/Futaba compatible,4.72,4.72,MakerFocus,4-pack $18.89 — buy pack and use remaining for spares,
+1,MG90S 360 Continuous Servo,Metal 360 degree Continuous Rotation Servo,9g | 22.5x12.1x23.4mm | 1.5kg/cm @ 6V | 110RPM @ 4.8V | 4.8-6V | continuous 360°,9.82,9.82,Pololu,True continuous rotation (not modified SG90),
+1,ESP32-S3 CAM Module,CAM Development Board ESP32-S3 N16R8 Dual TYPE-C 24 pin cam,ESP32-S3 dual-core LX7 240MHz | 8MB Flash | 8MB PSRAM | Wi-Fi + BT 5.0 | USB-C | OV camera included,19.99,19.99,Freenove/Amazon,16MB Flash variant available for $21.99,
+1,OV2640 20CM 66 degree,200 mm ribbin 24pin OV2640 camera,na,1.99,1.99,Home Depot,na,
+1,2 Wire 2 AMP Slip Ring,2 Channel Micro Rotate Slip Ring 2A Diameter 12.5mm,,,,,,
+1,DC 6V 2A Power Adaptor,AC 110-240V DC 6V 2A Universal Power Adapter Supply Charger adapter USA,,,,,,
+1,DC Power Connector 5.5mm x 2.1mm,"Female Power Jack Plug Barrel Adapter,DC Power Connector",,,,,,
+2,Flange Bearing F688-2RS 8x16x5mm,"Flange Bearing, F688-2RS 8x16x5mm, plastic seal",,,,,,
