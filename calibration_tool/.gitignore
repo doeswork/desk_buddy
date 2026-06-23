@@ -1,0 +1,5 @@
+.env
+mqtt-ca.crt
+captures/
+sessions/
+__pycache__/
