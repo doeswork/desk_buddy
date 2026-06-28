@@ -6,6 +6,7 @@
 #include "FactoryReset.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // secure TCP
+#include <WiFiClient.h>         // plain TCP
 #include <PubSubClient.h>
 #include <Preferences.h>
 #include <Arduino.h>
@@ -36,8 +37,11 @@ namespace {
   String HEARTBEAT_TOPIC;    // Built from USER/HEARTBEAT
 
 
-  WiFiClientSecure netClient;     // TLS client
-  PubSubClient     mqttClient(netClient);
+  WiFiClientSecure tlsClient;     // TLS client (port 8883)
+  WiFiClient       plainClient;   // plain TCP client (port 1883)
+  // mqttClient is pointed at the right one in ensureInited()
+  WiFiClientSecure dummySecure;   // placeholder so mqttClient can be declared here
+  PubSubClient     mqttClient(dummySecure);
 
   bool   inited = false;
   String receivedMessage;
@@ -125,9 +129,17 @@ namespace {
     Serial.println("  Status Topic: " + STATUS_TOPIC);
     Serial.println("  Heartbeat Topic: " + HEARTBEAT_TOPIC);
 
-    // TODO: load cert from Preferences/web UI for proper TLS verification
-    netClient.setInsecure();
-    netClient.setTimeout(15);
+    // Use plain TCP for port 1883, TLS for anything else (e.g. 8883)
+    if (PORT == 1883) {
+      Serial.println("  Mode: plain TCP (port 1883)");
+      plainClient.setTimeout(15);
+      mqttClient.setClient(plainClient);
+    } else {
+      Serial.println("  Mode: TLS (port != 1883)");
+      tlsClient.setInsecure();  // TODO: load cert for proper verification
+      tlsClient.setTimeout(15);
+      mqttClient.setClient(tlsClient);
+    }
     mqttClient.setKeepAlive(30);
 
     // MQTT setup
@@ -174,7 +186,7 @@ void BuddyMQTT::maintain() {
 
   if (!mqttClient.connected()) {
     sentReadyMessage = false;  // Reset flag on disconnect
-    Serial.print("Connecting MQTT (TLS)… ");
+    Serial.print(PORT == 1883 ? "Connecting MQTT (plain)… " : "Connecting MQTT (TLS)… ");
     LED::Blink(0.5);
 
     mqttClient.setCallback(messageCallback);
