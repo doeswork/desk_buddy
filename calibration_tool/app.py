@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 import traceback
 from typing import Any, Callable, Dict, Optional
 
@@ -116,6 +116,29 @@ class CalibrationWizard(tk.Tk):
         self.geometry("1280x960")
         self.minsize(1100, 760)
 
+        # UI text scaling. Some systems default the Tk named fonts to the
+        # "fixed" bitmap family, which cannot be resized (zoom looks like it
+        # does nothing). Move every named font onto a scalable TrueType family
+        # first, then record its base size so zoom re-derives from the original
+        # rather than compounding.
+        self.ui_scale = 1.0
+        self._base_font_sizes: Dict[str, int] = {}
+        scalable_family = self._pick_scalable_family()
+        for font_name in tkfont.names(self):
+            font = tkfont.nametofont(font_name)
+            size = font.cget("size") or font.actual("size")
+            if size <= 0:
+                size = 10
+            if scalable_family:
+                font.configure(family=scalable_family, size=size)
+            self._base_font_sizes[font_name] = size
+        self.bind_all("<Control-plus>", lambda _e: self._bump_ui_scale(0.1))
+        self.bind_all("<Control-KP_Add>", lambda _e: self._bump_ui_scale(0.1))
+        self.bind_all("<Control-equal>", lambda _e: self._bump_ui_scale(0.1))
+        self.bind_all("<Control-minus>", lambda _e: self._bump_ui_scale(-0.1))
+        self.bind_all("<Control-KP_Subtract>", lambda _e: self._bump_ui_scale(-0.1))
+        self.bind_all("<Control-0>", lambda _e: self._set_ui_scale(1.0))
+
         self.config_values = load_config()
         self.events: "queue.Queue[tuple[str, Any]]" = queue.Queue()
         self.robot = MqttRobot(self._queue_event)
@@ -159,6 +182,38 @@ class CalibrationWizard(tk.Tk):
     def _queue_event(self, kind: str, payload: Any) -> None:
         self.events.put((kind, payload))
 
+    def _pick_scalable_family(self) -> Optional[str]:
+        # Prefer a common scalable TrueType family; bitmap families like
+        # "fixed" ignore size changes.
+        available = set(tkfont.families(self))
+        # Keep the current family if it is already scalable (system Tk usually
+        # defaults to Liberation Sans); only override when stuck on a bitmap
+        # family such as "fixed".
+        current = tkfont.nametofont("TkDefaultFont").actual("family")
+        if current and current.lower() not in ("fixed", ""):
+            return current
+        for candidate in ("Liberation Sans", "Noto Sans", "DejaVu Sans", "Arial", "Helvetica"):
+            if candidate in available:
+                return candidate
+        return None
+
+    def _bump_ui_scale(self, delta: float) -> None:
+        self._set_ui_scale(self.ui_scale + delta)
+
+    def _set_ui_scale(self, scale: float) -> None:
+        # Clamp to a sane range and re-scale every named font from its base
+        # size. ttk widgets in this app resolve to these named fonts, so this
+        # resizes labels, buttons, entries, Text boxes, and menus together.
+        self.ui_scale = max(0.5, min(4.0, round(scale, 2)))
+        for font_name, base_size in self._base_font_sizes.items():
+            if not base_size:
+                continue
+            sign = 1 if base_size > 0 else -1
+            scaled = sign * max(1, int(round(abs(base_size) * self.ui_scale)))
+            tkfont.nametofont(font_name).configure(size=scaled)
+        if hasattr(self, "scale_text"):
+            self.scale_text.set(f"Text: {int(round(self.ui_scale * 100))}%")
+
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -170,6 +225,14 @@ class CalibrationWizard(tk.Tk):
         ttk.Label(banner, textvariable=self.robot_text).grid(row=0, column=1, sticky="w", padx=(0, 16))
         ttk.Label(banner, textvariable=self.health_text).grid(row=0, column=2, sticky="w", padx=(0, 16))
         ttk.Button(banner, text="Refresh Status", command=self.refresh_status).grid(row=0, column=3, sticky="e")
+
+        zoom = ttk.Frame(banner)
+        zoom.grid(row=0, column=5, sticky="e")
+        self.scale_text = tk.StringVar(value=f"Text: {int(round(self.ui_scale * 100))}%")
+        ttk.Button(zoom, text="A-", width=3, command=lambda: self._bump_ui_scale(-0.1)).pack(side="left")
+        ttk.Button(zoom, text="A+", width=3, command=lambda: self._bump_ui_scale(0.1)).pack(side="left", padx=(4, 0))
+        ttk.Button(zoom, text="Reset", command=lambda: self._set_ui_scale(1.0)).pack(side="left", padx=(4, 8))
+        ttk.Label(zoom, textvariable=self.scale_text).pack(side="left")
 
         self.main_pane = ttk.PanedWindow(self, orient="vertical")
         self.main_pane.grid(row=1, column=0, sticky="nsew")
