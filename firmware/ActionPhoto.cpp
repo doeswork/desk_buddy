@@ -1,6 +1,6 @@
 // ActionPhoto.cpp
 
-#include "camera_pins.h"
+#include "Utility_camera_pins.h"
 #include "ActionPhoto.h"
 #include "Network_Wifi.h"
 #include "Network_MQTT.h"

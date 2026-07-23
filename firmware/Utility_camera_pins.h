@@ -1,4 +1,4 @@
-// camera_pins.h
+// Utility_camera_pins.h
 #pragma once
 
 #define CAMERA_MODEL_ESP32S3_EYE
