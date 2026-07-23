@@ -1,4 +1,4 @@
-// BuddyMQTT.h
+// Network_MQTT.h
 #ifndef BUDDY_MQTT_H
 #define BUDDY_MQTT_H
 

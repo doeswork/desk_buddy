@@ -1,7 +1,7 @@
-// ActionCalibrate.cpp
-#include "ActionCalibrate.h"
+// CalibrateController.cpp
+#include "CalibrateController.h"
 #include "ActionBaseRotate.h"
-#include "BuddyMQTT.h"
+#include "Network_MQTT.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <cstring>  // for strcmp
@@ -104,7 +104,7 @@ static bool extractLong(JsonVariantConst var, long &out) {
   return false;
 }
 
-void ActionCalibrate::run(const String &message) {
+void CalibrateController::run(const String &message) {
   // parse incoming JSON
   StaticJsonDocument<384> inDoc;
   if (deserializeJson(inDoc, message) != DeserializationError::Ok) {

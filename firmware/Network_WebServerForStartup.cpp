@@ -1,6 +1,6 @@
-#include "WebServerForStartup.h"
-#include "ConfigPageHTML.h"
-#include "SavedPageHTML.h"
+#include "Network_WebServerForStartup.h"
+#include "Network_ConfigPageHTML.h"
+#include "Network_SavedPageHTML.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>

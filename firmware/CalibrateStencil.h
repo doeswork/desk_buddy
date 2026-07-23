@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
 
-namespace ActionStencilCalibrate {
+namespace CalibrateStencil {
   bool run(const String& message, String& statusJson);
 }

@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include "BuddyWifi.h"
-#include "BuddyMQTT.h"
+#include "Network_Wifi.h"
+#include "Network_MQTT.h"
 #include "ActionServo.h"
 #include "FactoryReset.h"
 #include <LED.h>

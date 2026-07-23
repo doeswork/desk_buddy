@@ -1,9 +1,9 @@
-// Calibrate.h
+// CalibrateController.h
 #pragma once
 
 #include <Arduino.h>
 
-class ActionCalibrate {
+class CalibrateController {
 public:
   static void run(const String &message);
 };

@@ -1,6 +1,6 @@
-// ActionOTA.cpp
-#include "ActionOTA.h"
-#include "BuddyMQTT.h"
+// Network_OTA.cpp
+#include "Network_OTA.h"
+#include "Network_MQTT.h"
 #include <ArduinoJson.h>
 
 #include <WiFi.h>

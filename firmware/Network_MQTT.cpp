@@ -1,7 +1,7 @@
-#include "BuddyMQTT.h"
-#include "BuddyWifi.h"
+#include "Network_MQTT.h"
+#include "Network_Wifi.h"
 #include "ActionController.h"
-#include "ActionOTA.h"
+#include "Network_OTA.h"
 #include "Heartbeat.h"
 #include "FactoryReset.h"
 #include <WiFi.h>

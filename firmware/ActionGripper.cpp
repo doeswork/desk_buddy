@@ -1,6 +1,6 @@
 // ActionGripper.cpp
 #include "ActionGripper.h"
-#include "BuddyMQTT.h"
+#include "Network_MQTT.h"
 #include <ESP32Servo.h>     // <-- ESP32‐friendly
 #include <ArduinoJson.h>
 #include <Preferences.h>

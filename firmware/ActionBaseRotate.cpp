@@ -1,5 +1,7 @@
 // ActionBaseRotate.cpp
 #include "ActionBaseRotate.h"
+#include "Network_MQTT.h"
+#include "Network_Wifi.h"
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
 #include <Arduino.h>
@@ -166,6 +168,25 @@ namespace {
     encoderRaw = readEncoderRaw();
     lastEncoderRaw = encoderRaw;
     encoderUnwrapped = 0;
+  }
+
+  // Every blocking wait loop below used to spin on nothing but delay(1) for
+  // up to PROFILE_CALIBRATION_TIMEOUT_MS (3 minutes), never giving WiFi/MQTT
+  // a chance to run. loop() in firmware.ino is single-threaded — it only
+  // pumps BuddyWifi::maintain()/BuddyMQTT::maintain() between top-level MQTT
+  // messages, so a single long-running action (rotate, home, calibrate)
+  // silently starved the connection: no mqttClient.loop() meant no keepalive
+  // ping, so the broker/peer would drop the connection and heartbeats would
+  // stop, even though the motor itself kept running. Throttled to roughly
+  // once every 20ms so it doesn't meaningfully slow the encoder polling.
+  void maintainConnectionDuringWait() {
+    static unsigned long lastMaintainMs = 0;
+    unsigned long now = millis();
+    if (now - lastMaintainMs < 20) return;
+    lastMaintainMs = now;
+
+    BuddyWifi::maintain();
+    BuddyMQTT::maintain();
   }
 
   long updateEncoderTracking() {
@@ -531,6 +552,7 @@ namespace {
     while (labs(encoderUnwrapped - startCounts) + TARGET_TOLERANCE_COUNTS < targetCounts) {
       updateEncoderTracking();
       correctIfAtTrueNorth();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > MOVE_TIMEOUT_MS) {
         error = "move timeout";
@@ -594,6 +616,7 @@ namespace {
     driveServo(rotateLeft, speed);
     while (!trueNorthHitDetected(startHits)) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > timeoutMs) {
         error = "true north timeout";
@@ -634,6 +657,7 @@ namespace {
     driveServoAngle(rotateLeft, driveAngle);
     while (!trueNorthHitDetected(startHits)) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > timeoutMs) {
         error = "true north timeout";
@@ -699,6 +723,7 @@ namespace {
     driveServoAngle(rotateLeft, driveAngle);
     while (isTrueNorthPressed()) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > PROFILE_CALIBRATION_TIMEOUT_MS) {
         error = "profile timeout while leaving true north";
@@ -730,6 +755,7 @@ namespace {
 
     while (true) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > PROFILE_CALIBRATION_TIMEOUT_MS) {
         error = "profile full revolution timeout";
@@ -786,6 +812,7 @@ namespace {
                       phaseName, elapsedMs, movedCounts, minTravelCounts);
         while (isTrueNorthPressed()) {
           updateEncoderTracking();
+          maintainConnectionDuringWait();
           delay(TRUE_NORTH_POLL_DELAY_MS);
         }
       }
@@ -1014,6 +1041,7 @@ namespace {
     driveServo(rotateLeft, speed);
     while (isTrueNorthPressed()) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > CALIBRATION_TIMEOUT_MS) {
         error = "calibration timeout while leaving true north";
@@ -1042,6 +1070,7 @@ namespace {
     uint32_t baselineHits = getTrueNorthHitCount();
     while (!trueNorthHitDetected(baselineHits)) {
       updateEncoderTracking();
+      maintainConnectionDuringWait();
 
       if (millis() - startMs > CALIBRATION_TIMEOUT_MS) {
         error = "calibration timeout";

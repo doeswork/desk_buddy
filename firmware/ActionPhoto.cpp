@@ -2,8 +2,8 @@
 
 #include "camera_pins.h"
 #include "ActionPhoto.h"
-#include "BuddyWifi.h"
-#include "BuddyMQTT.h"
+#include "Network_Wifi.h"
+#include "Network_MQTT.h"
 
 #include <esp_camera.h>
 #include <esp_heap_caps.h>

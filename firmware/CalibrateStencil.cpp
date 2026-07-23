@@ -1,4 +1,4 @@
-#include "ActionStencilCalibrate.h"
+#include "CalibrateStencil.h"
 #include "ActionBaseRotate.h"
 #include "ActionInverseKinematics.h"
 #include "ActionGripper.h"
@@ -506,7 +506,7 @@ namespace {
   }
 }
 
-bool ActionStencilCalibrate::run(const String& message, String& statusJson) {
+bool CalibrateStencil::run(const String& message, String& statusJson) {
   statusJson = "";
 
   StaticJsonDocument<512> doc;
