@@ -7,7 +7,9 @@
 namespace ActionBaseRotate {
 // Runs a base rotation command and serializes the current base_rotation
 // status object into statusJson. Returns true when the command completed.
-bool run(const String& message, String& statusJson);
+// Always sets detailsKey to "base_rotation" (RequestFlow uses it to decide
+// the sendCompletedDetails key).
+bool run(const String& message, String& statusJson, String& detailsKey);
 
 // Runs the full base rotation self-profiling calibration and serializes the
 // current base_rotation status object into statusJson. Pass -1 to use the

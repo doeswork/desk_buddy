@@ -1,7 +1,6 @@
 #include "Network_MQTT.h"
 #include "Network_Wifi.h"
-#include "ActionController.h"
-#include "Network_OTA.h"
+#include "Network_MQTT_Router.h"
 #include "Utility_Heartbeat.h"
 #include "Utility_FactoryReset.h"
 #include <WiFi.h>
@@ -12,6 +11,8 @@
 #include <time.h>
 #include <Utility_LED.h>
 #include <ArduinoJson.h>
+
+#define FIRMWARE_VERSION "not_set"
 
 namespace {
   // —— Default broker settings (TLS) - can be overridden via web config ————
@@ -50,11 +51,6 @@ namespace {
     if (currentWorkflowId      >= 0) doc["workflow_id"]       = currentWorkflowId;
     if (currentWorkflowEventId >= 0) doc["workflow_event_id"] = currentWorkflowEventId;
   }
-
-  constexpr unsigned long PUBLISH_INTERVAL = 3000;
-  unsigned long lastPublish = 0;
-  int publishCount = 0;
-  constexpr unsigned long OTA_ENFORCE_INTERVAL_MS = 60000;
 
   // Forward declarations
   String getTimestamp();
@@ -169,8 +165,6 @@ void BuddyMQTT::maintain() {
   if (!BuddyWifi::isConnected()) return;
 
   static bool sentReadyMessage = false;
-  static bool otaBootMarked = false;
-  static unsigned long lastOtaEnforceAttemptMs = 0;
 
   if (!mqttClient.connected()) {
     sentReadyMessage = false;  // Reset flag on disconnect
@@ -200,58 +194,19 @@ void BuddyMQTT::maintain() {
 
   mqttClient.loop();
 
-  if (mqttClient.connected() && !otaBootMarked) {
-    ActionOTA::markBooted();
-    otaBootMarked = true;
-  }
-
-  // Auto-enforcement disabled - OTA only via explicit ota_update command
-  // if (mqttClient.connected()) {
-  //   ActionOTA::OtaStatus otaStatus = ActionOTA::getStatus();
-  //   unsigned long nowMs = millis();
-  //   if (otaStatus.updateRequired &&
-  //       (lastOtaEnforceAttemptMs == 0 || nowMs - lastOtaEnforceAttemptMs >= OTA_ENFORCE_INTERVAL_MS)) {
-  //     lastOtaEnforceAttemptMs = nowMs;
-  //     if (ActionOTA::enforceDesiredVersion()) {
-  //       return;
-  //     }
-  //   }
-  // }
-
-  if (Heartbeat::isEnabled()) {
-    unsigned long now = millis();
-    if (now - lastPublish >= PUBLISH_INTERVAL) {
-      lastPublish = now;
-      ++publishCount;
-      String payload = String("{\"count\":") + publishCount +
-                       ",\"time\":\"" + getTimestamp() + "\"}";
-      if (publishInternal(STATUS_TOPIC.c_str(), payload)) {
-        Serial.println("Published → " + payload);
-      } else {
-        Serial.println("Publish failed");
-      }
-    }
-  }
-
   // Send "ready to play" message once per connection session
   if (mqttClient.connected() && !sentReadyMessage) {
-    ActionOTA::OtaStatus otaStatus = ActionOTA::getStatus();
-
     StaticJsonDocument<1024> doc;
     doc["sender"] = "firmware";
     doc["status"] = "ready";
-    doc["message"] = otaStatus.updateRequired
-      ? "Connected - OTA required (running behind desired)"
-      : "Connected - you can now play game on";
-    doc["firmware_version"] = otaStatus.runningVersion;
+    doc["message"] = "Connected - you can now play game on";
+    doc["firmware_version"] = FIRMWARE_VERSION;
     doc["compiled_firmware_version"] = FIRMWARE_VERSION;
-    doc["running_version"] = otaStatus.runningVersion;
-    doc["desired_version"] = otaStatus.desiredVersion;
-    doc["ota_state"] = otaStatus.otaState;
-    doc["ota_update_required"] = otaStatus.updateRequired;
-    doc["last_attempted_version"] = otaStatus.lastAttemptedVersion;
-    if (otaStatus.lastError.length()) doc["last_error"] = otaStatus.lastError;
-    if (otaStatus.desiredUrl.length()) doc["desired_url"] = otaStatus.desiredUrl;
+    doc["running_version"] = FIRMWARE_VERSION;
+    doc["desired_version"] = "";
+    doc["ota_state"] = "disabled";
+    doc["ota_update_required"] = false;
+    doc["last_attempted_version"] = "";
     doc["ready_message_revision"] = 20;
 
     // Reset diagnostics - helps track brownouts and crashes
@@ -295,7 +250,7 @@ void BuddyMQTT::listen() {
   if (receivedMessage.length()) {
     Serial.println("Received MQTT message:");
     Serial.println(receivedMessage);
-    ActionController::dispatch(receivedMessage);
+    MQTTRouter::route(receivedMessage);
   }
   if (Heartbeat::isEnabled()) Serial.println("End of Listen Loop");
 }
@@ -380,173 +335,6 @@ void BuddyMQTT::sendCompletedDetails(const String& actionId, const char* key, co
   }
 }
 
-void BuddyMQTT::sendCalibrationValues(const String& actionId) {
-  ensureInited();
-
-  Preferences prefs;
-  if (!prefs.begin("config", true)) {
-    Serial.println("[MQTT] Failed to open prefs namespace 'config' for calibrationvalues");
-    sendCompleted(actionId, "calibrationvalues", "failed");
-    return;
-  }
-
-  DynamicJsonDocument doc(6144);
-  auto hasAnyKey = [&](const char* shortKey, const char* legacyKey) {
-    return prefs.isKey(shortKey) || prefs.isKey(legacyKey);
-  };
-  auto addFloatOrNull = [&](const char* storageKey, const char* reportKey, float defaultValue) {
-    if (prefs.isKey(storageKey)) {
-      doc[reportKey] = prefs.getFloat(storageKey, defaultValue);
-    } else if (prefs.isKey(reportKey)) { // legacy long key fallback
-      doc[reportKey] = prefs.getFloat(reportKey, defaultValue);
-    } else {
-      doc[reportKey] = nullptr;
-    }
-  };
-  struct HoverPoint {
-    bool present;
-    bool valid;
-    float dist;
-  };
-  auto readHoverPoint = [&](const char* key) {
-    HoverPoint point = {false, false, 0.0f};
-    if (!prefs.isKey(key)) return point;
-
-    point.present = true;
-    String raw = prefs.getString(key, "{}");
-    StaticJsonDocument<256> tmp;
-    if (deserializeJson(tmp, raw) != DeserializationError::Ok) return point;
-    if (!tmp["DISTANCE"].is<float>() &&
-        !tmp["DISTANCE"].is<int>() &&
-        !tmp["DISTANCE"].is<long>()) {
-      return point;
-    }
-
-    point.dist = tmp["DISTANCE"].as<float>();
-    point.valid = point.dist >= 0.0f;
-    return point;
-  };
-  auto validHoverSet = [&](const char* minKey, const char* midKey, const char* maxKey) {
-    HoverPoint minPoint = readHoverPoint(minKey);
-    HoverPoint midPoint = readHoverPoint(midKey);
-    HoverPoint maxPoint = readHoverPoint(maxKey);
-    return minPoint.present && midPoint.present && maxPoint.present &&
-           minPoint.valid && midPoint.valid && maxPoint.valid &&
-           minPoint.dist < midPoint.dist && midPoint.dist < maxPoint.dist;
-  };
-
-  addFloatOrNull("ELBOW_ANGLE",       "ELBOW_ANGLE",       0.0f);
-  addFloatOrNull("WRIST_ANGLE",       "WRIST_ANGLE",       0.0f);
-  addFloatOrNull("TWIST_ANGLE",       "TWIST_ANGLE",       0.0f);
-  addFloatOrNull("GRIPPER_ANGLE",     "GRIPPER_ANGLE",     0.0f);
-  addFloatOrNull("p_elbow",           "PERCH_ELBOW_ANGLE", 120.0f);
-  addFloatOrNull("p_wrist",           "PERCH_WRIST_ANGLE", 90.0f);
-  addFloatOrNull("p_twist",           "PERCH_TWIST_ANGLE", 90.0f);
-  addFloatOrNull("p_min",             "PERCH_MIN",         0.0f);
-  addFloatOrNull("p_mid",             "PERCH_MID",         50.0f);
-  addFloatOrNull("p_max",             "PERCH_MAX",         100.0f);
-
-  bool perchConfigured = hasAnyKey("p_elbow", "PERCH_ELBOW_ANGLE") &&
-                         hasAnyKey("p_wrist", "PERCH_WRIST_ANGLE") &&
-                         hasAnyKey("p_twist", "PERCH_TWIST_ANGLE");
-  bool perchDistanceConfigured = hasAnyKey("p_min", "PERCH_MIN") &&
-                                 hasAnyKey("p_mid", "PERCH_MID") &&
-                                 hasAnyKey("p_max", "PERCH_MAX");
-  doc["perch_configured"] = perchConfigured;
-  doc["perch_distance_configured"] = perchDistanceConfigured;
-  doc["perch_defaults_applied"] = !perchConfigured;
-  JsonObject perchEffective = doc.createNestedObject("perch_effective");
-  perchEffective["ELBOW"] = prefs.getFloat("p_elbow", prefs.getFloat("PERCH_ELBOW_ANGLE", 120.0f));
-  perchEffective["WRIST"] = prefs.getFloat("p_wrist", prefs.getFloat("PERCH_WRIST_ANGLE", 90.0f));
-  perchEffective["TWIST"] = prefs.getFloat("p_twist", prefs.getFloat("PERCH_TWIST_ANGLE", 90.0f));
-  perchEffective["MIN"] = prefs.getFloat("p_min", prefs.getFloat("PERCH_MIN", 0.0f));
-  perchEffective["MID"] = prefs.getFloat("p_mid", prefs.getFloat("PERCH_MID", 50.0f));
-  perchEffective["MAX"] = prefs.getFloat("p_max", prefs.getFloat("PERCH_MAX", 100.0f));
-  perchEffective["source"] = perchConfigured ? "saved" : "firmware_default";
-
-  auto addHoverObject = [&](const char* key) {
-    if (!prefs.isKey(key)) {
-      doc[key] = nullptr;
-      return;
-    }
-    String raw = prefs.getString(key, "{}");
-    StaticJsonDocument<256> tmp;
-    if (deserializeJson(tmp, raw) == DeserializationError::Ok) {
-      JsonObject obj = doc.createNestedObject(key);
-      for (auto kv : tmp.as<JsonObject>()) obj[kv.key()] = kv.value();
-    } else {
-      doc[key] = raw;
-    }
-  };
-  addHoverObject("hover_over_min");
-  addHoverObject("hover_over_mid");
-  addHoverObject("hover_over_max");
-  addHoverObject("hover_min_120");
-  addHoverObject("hover_mid_120");
-  addHoverObject("hover_max_120");
-
-  bool ikHoverCalibrated = validHoverSet("hover_over_min", "hover_over_mid", "hover_over_max");
-  bool ikZ120Calibrated = validHoverSet("hover_min_120", "hover_mid_120", "hover_max_120");
-  doc["ik_hover_calibrated"] = ikHoverCalibrated;
-  doc["ik_z120_calibrated"] = ikZ120Calibrated;
-  doc["ik_z50_calibrated"] = ikZ120Calibrated;
-  doc["ik_hover_source"] = ikHoverCalibrated ? "saved" : "firmware_default";
-  doc["ik_z120_source"] = ikZ120Calibrated ? "saved" : "optional_not_saved";
-  doc["ik_z50_source"] = ikZ120Calibrated ? "saved_legacy_keys" : "optional_not_saved";
-
-  addFloatOrNull("rot_off_deg", "rot_off_deg", 0.0f);
-  addFloatOrNull("ik_off_mm", "ik_off_mm", 0.0f);
-  bool hasStencilMap = prefs.isKey("st_map");
-  bool hasRotationOffset = prefs.isKey("rot_off_deg");
-  bool hasIkOffset = prefs.isKey("ik_off_mm");
-  if (prefs.isKey("st_map")) {
-    doc["st_map"] = prefs.getString("st_map", "{}");
-  } else {
-    doc["st_map"] = nullptr;
-  }
-  bool stencilCalibrated = hasStencilMap && hasRotationOffset && hasIkOffset;
-  doc["stencil_calibrated"] = stencilCalibrated;
-  doc["stencil_runtime_mode"] = "average_offsets";
-
-  prefs.end();
-
-  Preferences rotPrefs;
-  bool baseRotationReady = false;
-  if (rotPrefs.begin("rot", true)) {
-    bool baseCalibrated = rotPrefs.getBool("calibrated", false);
-    bool baseProfileCalibrated = rotPrefs.getBool("prof_cal", false);
-    long leftCountsPerRev = rotPrefs.getLong("left_cpr", 0);
-    long rightCountsPerRev = rotPrefs.getLong("right_cpr", 0);
-    bool lastValid = rotPrefs.getBool("last_valid", false);
-
-    doc["base_rotation_calibrated"] = baseCalibrated;
-    doc["base_rotation_profileCalibrated"] = baseProfileCalibrated;
-    doc["base_rotation_leftCountsPerRev"] = leftCountsPerRev;
-    doc["base_rotation_rightCountsPerRev"] = rightCountsPerRev;
-    doc["base_rotation_lastCounts"] = rotPrefs.getLong("last_counts", 0);
-    doc["base_rotation_lastValid"] = lastValid;
-    baseRotationReady = baseCalibrated && baseProfileCalibrated &&
-                        leftCountsPerRev > 0 && rightCountsPerRev > 0 &&
-                        lastValid;
-    doc["base_rotation_ready"] = baseRotationReady;
-    rotPrefs.end();
-  } else {
-    doc["base_rotation_calibrated"] = nullptr;
-    doc["base_rotation_profileCalibrated"] = nullptr;
-    doc["base_rotation_leftCountsPerRev"] = nullptr;
-    doc["base_rotation_rightCountsPerRev"] = nullptr;
-    doc["base_rotation_lastCounts"] = nullptr;
-    doc["base_rotation_lastValid"] = nullptr;
-    doc["base_rotation_ready"] = false;
-  }
-
-  doc["motion_calibration_ready"] = baseRotationReady && ikHoverCalibrated;
-  doc["initial_calibration_ready"] = baseRotationReady && ikHoverCalibrated && stencilCalibrated;
-
-  String jsonOut;
-  serializeJson(doc, jsonOut);
-  sendCompletedDetails(actionId, "calibrationvalues", jsonOut, "calibrationvalues");
-}
 
 // Write all bytes with small sub-chunks and retry if partial writes happen.
 // Returns true when exactly 'len' bytes have been pushed.
@@ -578,33 +366,6 @@ bool writeAll(PubSubClient& client, const uint8_t* data, size_t len) {
   return true;
 }
 
-
-bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t length) {
-  ensureInited();
-  if (!topic.length() || !data || length == 0) {
-    Serial.println("publishBinary: invalid arguments");
-    return false;
-  }
-  if (!mqttClient.connected()) {
-    Serial.println("publishBinary: MQTT not connected");
-    return false;
-  }
-  if (!mqttClient.beginPublish(topic.c_str(), length, false)) {
-    Serial.println("publishBinary: beginPublish failed");
-    return false;
-  }
-
-  bool ok = writeAll(mqttClient, data, length);
-  if (!ok) {
-    Serial.println("publishBinary: writeAll failed");
-    mqttClient.endPublish(); // end regardless to flush/reset state
-    return false;
-  }
-
-  ok = mqttClient.endPublish();
-  if (!ok) Serial.println("publishBinary: endPublish failed");
-  return ok;
-}
 
 bool BuddyMQTT::publishStatusPhoto(const String& actionId, const String& requester, const uint8_t* data, size_t length, JsonVariantConst phrase, int useModel, const String& useModelJson) {
   ensureInited();

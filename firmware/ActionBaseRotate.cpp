@@ -1172,9 +1172,10 @@ namespace {
   }
 }
 
-bool ActionBaseRotate::run(const String& message, String& statusJson) {
+bool ActionBaseRotate::run(const String& message, String& statusJson, String& detailsKey) {
   initAll();
   statusJson = "";
+  detailsKey = "base_rotation";
 
   StaticJsonDocument<384> doc;
   DeserializationError jsonError = deserializeJson(doc, message);

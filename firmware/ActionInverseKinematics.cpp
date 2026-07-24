@@ -1,6 +1,6 @@
 // ActionInverseKinematics.cpp
 #include "ActionInverseKinematics.h"
-#include "ArmServos.h"
+#include "Utility_ArmServos.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -255,7 +255,9 @@ bool ActionInverseKinematics::moveTo(float dist, float z, bool applyStoredOffset
   return ok;
 }
 
-bool ActionInverseKinematics::run(const String& message) {
+bool ActionInverseKinematics::run(const String& message, String& statusJson, String& detailsKey) {
+  (void)statusJson;
+  (void)detailsKey;
   StaticJsonDocument<256> doc;
   if (deserializeJson(doc, message) != DeserializationError::Ok) {
     Serial.print("[IK] JSON parse error: ");

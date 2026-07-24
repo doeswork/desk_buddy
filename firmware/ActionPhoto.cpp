@@ -135,14 +135,17 @@ void ActionPhoto::initializeCamera() {
   initCamera();
 }
 
-void ActionPhoto::run(const String &message, int useModel) {
+bool ActionPhoto::run(const String &message, String& statusJson, String& detailsKey) {
+  (void)statusJson;
+  (void)detailsKey;
+
   // Parse JSON payload
   DynamicJsonDocument doc(512);
   auto err = deserializeJson(doc, message);
   if (err) {
     Serial.print("JSON parse error: ");
     Serial.println(err.c_str());
-    return;
+    return false;
   }
 
   String sender   = readJsonString(doc["sender"]);
@@ -164,11 +167,11 @@ void ActionPhoto::run(const String &message, int useModel) {
   Serial.println("this is the action ^");
   if (!(action == "photo" || action == "detect_color" || action == "detect_object" || action == "calibrate_depth")) {
     Serial.println("Not a photo action; skipping");
-    return;
+    return false;
   }
   if (!BuddyWifi::isConnected()) {
     Serial.println("WiFi not connected; skipping camera");
-    return;
+    return false;
   }
 
   // Ensure camera ready (with fallbacks)
@@ -176,7 +179,7 @@ void ActionPhoto::run(const String &message, int useModel) {
     initCamera();
     if (!cameraInited) {
       Serial.println("Camera init failed");
-      return;
+      return false;
     }
   }
 
@@ -193,18 +196,27 @@ void ActionPhoto::run(const String &message, int useModel) {
     Serial.println("Camera capture failed (fb=null), attempting one recovery re-init...");
     if (!recoverCameraOnce()) {
       Serial.println("Recovery re-init failed");
-      return;
+      return false;
     }
     fb = esp_camera_fb_get();
     if (!fb) {
       Serial.println("Camera capture failed again");
-      return;
+      return false;
     }
   }
 
   Serial.printf("Photo captured: %d bytes\n", fb->len);
 
-  bool published = BuddyMQTT::publishStatusPhoto(actionId, sender, fb->buf, fb->len, phrase, useModel, useModelJson);
+  // Deliberate exception to "Action files don't call Network_MQTT.h
+  // directly": the JPEG frame buffer (fb->buf/fb->len) has to stream out
+  // through PubSubClient's chunked publish API right here, while the frame
+  // buffer is still held — routing it through Network_RequestFlow would mean
+  // either leaking a camera_fb_t* up into the request layer (worse coupling
+  // than the one being removed) or copying tens of KB of JPEG data across a
+  // layer boundary just to move one function call. Every other MQTT call in
+  // this codebase goes through Network_RequestFlow/Utility_Logger; this is
+  // the one case where that pattern doesn't fit the constraint.
+  bool published = BuddyMQTT::publishStatusPhoto(actionId, sender, fb->buf, fb->len, phrase, -1, useModelJson);
   if (published) {
     Serial.printf("Photo payload published to status topic (%d bytes)\n", fb->len);
   } else {
@@ -213,4 +225,6 @@ void ActionPhoto::run(const String &message, int useModel) {
 
   // Always return FB to free memory ASAP
   esp_camera_fb_return(fb);
+
+  return published;
 }

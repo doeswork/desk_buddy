@@ -1,6 +1,6 @@
 // ActionServo.cpp
 #include "ActionServo.h"
-#include "ArmServos.h"
+#include "Utility_ArmServos.h"
 #include <ArduinoJson.h>
 #include <Arduino.h>
 
@@ -8,7 +8,9 @@ void ActionServo::begin() {
   ArmServos::begin();
 }
 
-bool ActionServo::run(const String &message) {
+bool ActionServo::run(const String &message, String& statusJson, String& detailsKey) {
+  (void)statusJson;
+  (void)detailsKey;
   ArmServos::begin();
 
   StaticJsonDocument<256> doc;

@@ -21,9 +21,6 @@ namespace BuddyMQTT {
   // new multi-argument version for detailed results
   void sendCompletedDetails(const String& actionId, const char* key, const String& jsonOut, const String& type = "", const char* status = "completed", JsonVariantConst phrase = JsonVariantConst());
 
-  void sendCalibrationValues(const String& actionId);
-
-  bool publishBinary(const String& topic, const uint8_t* data, size_t length);
   bool publishStatusPhoto(const String& actionId, const String& requester, const uint8_t* data, size_t length, JsonVariantConst phrase = JsonVariantConst(), int useModel = -1, const String& useModelJson = String());
 
   // Workflow context — set once per incoming action; automatically included

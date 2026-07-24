@@ -1,5 +1,5 @@
 #include "ActionPerch.h"
-#include "ArmServos.h"
+#include "Utility_ArmServos.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <Arduino.h>
@@ -30,7 +30,9 @@ namespace {
   }
 }
 
-void ActionPerch::run(const String& message) {
+bool ActionPerch::run(const String& message, String& statusJson, String& detailsKey) {
+  (void)statusJson;
+  (void)detailsKey;
   ArmServos::begin();
 
   Serial.println("[Perch] start");
@@ -39,6 +41,7 @@ void ActionPerch::run(const String& message) {
   if (deserializeJson(doc, message) != DeserializationError::Ok) {
     Serial.print("[Perch] JSON parse error: ");
     Serial.println(message);
+    return false;
   }
 
   auto settings = loadSettings();
@@ -51,4 +54,5 @@ void ActionPerch::run(const String& message) {
   ArmServos::moveTo(ArmServos::Twist, settings.twist);
 
   Serial.println("[Perch] done");
+  return true;
 }

@@ -1,8 +1,11 @@
 #include "Utility_Heartbeat.h"
-#include "Network_OTA.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <time.h>
+
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "not_set"
+#endif
 
 namespace {
   bool heartbeat_enabled = true;
@@ -79,10 +82,8 @@ void Heartbeat::send(bool simple) {
   String hoverMax = prefs.getString("hover_over_max", "{}");
 
   prefs.end();
-  ActionOTA::OtaStatus otaStatus = ActionOTA::getStatus();
 
-  Serial.print("[Heartbeat] Running firmware version: ");
-  Serial.println(otaStatus.runningVersion);
+  Serial.println("[Heartbeat] Running firmware version: " FIRMWARE_VERSION);
 
   String ts = getTimestampCallback();
 
@@ -92,10 +93,10 @@ void Heartbeat::send(bool simple) {
     doc["sender"]       = "firmware";
     doc["log"]          = "heartbeat";
     doc["time"]         = ts;
-    doc["firmware_version"] = otaStatus.runningVersion;
-    doc["desired_version"] = otaStatus.desiredVersion;
-    doc["ota_state"] = otaStatus.otaState;
-    doc["ota_update_required"] = otaStatus.updateRequired;
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    doc["desired_version"] = "";
+    doc["ota_state"] = "disabled";
+    doc["ota_update_required"] = false;
     doc["ELBOW_ANGLE"]  = b;
     doc["WRIST_ANGLE"]  = e;
     doc["TWIST_ANGLE"]  = w;

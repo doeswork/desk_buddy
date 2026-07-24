@@ -83,7 +83,8 @@ namespace {
 
   void moveArmToPerch(const char* reason) {
     Serial.printf("[Stencil] moving arm to perch before %s\n", reason ? reason : "rotation");
-    ActionPerch::run("{}");
+    String unusedStatus, unusedKey;
+    ActionPerch::run("{}", unusedStatus, unusedKey);
   }
 
   const char* phaseName(Phase p) {
@@ -506,8 +507,9 @@ namespace {
   }
 }
 
-bool CalibrateStencil::run(const String& message, String& statusJson) {
+bool CalibrateStencil::run(const String& message, String& statusJson, String& detailsKey) {
   statusJson = "";
+  detailsKey = "stencil_calibration";
 
   StaticJsonDocument<512> doc;
   if (deserializeJson(doc, message) != DeserializationError::Ok) {

@@ -14,13 +14,11 @@ void setup() {
 
   Serial.println("\n\n=== DeskBuddy Starting ===");
 
-  // Print diagnostics FIRST to catch reset reason
   Diagnostics::printResetDiagnostics();
 
   // Store reset info for MQTT ready message
   esp_reset_reason_t reason = esp_reset_reason();
   BuddyMQTT::setResetReason(Diagnostics::getResetReasonStr(reason), ESP.getFreeHeap(), ESP.getMinFreeHeap());
-
 
   FactoryReset::checkAndReset();  // Hold BOOT button during power-on to factory reset
 
@@ -33,6 +31,4 @@ void loop() {
   BuddyWifi::maintain();  // keep Wi-Fi alive
   BuddyMQTT::maintain();  // not blocking
   BuddyMQTT::listen();    // blocking until MQTT message arrives
-
-  // no delay to keep mqttClient.loop() responsive inside BuddyMQTT::listen()
 }
