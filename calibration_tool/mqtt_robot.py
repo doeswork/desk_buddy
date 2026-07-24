@@ -38,6 +38,12 @@ def photo_payload(sender: str, label: str = "photo") -> Payload:
     return base_payload("photo", label, sender)
 
 
+def visual_calibration_payload(sender: str, magnet_position: int = 1) -> Payload:
+    payload = base_payload("calibrate_depth", "visual_calibration", sender)
+    payload["MagnetPosition"] = int(magnet_position)
+    return payload
+
+
 def base_profile_payload(sender: str, neutral: Optional[int] = None) -> Payload:
     payload = base_payload("baseRotate", "base_profile", sender)
     payload["controlType"] = "CALIBRATE_PROFILE"
@@ -157,6 +163,12 @@ def resolve_cert_path(path_text: str) -> Optional[Path]:
 
 
 @dataclass
+class VisualCalibrationCapture:
+    photo_path: Path
+    response: Dict[str, Any]
+
+
+@dataclass
 class RobotState:
     broker_connected: bool = False
     robot_online: bool = False
@@ -166,6 +178,7 @@ class RobotState:
     last_heartbeat_at: float = 0.0
     calibrationvalues: Dict[str, Any] = field(default_factory=dict)
     last_response: Dict[str, Any] = field(default_factory=dict)
+    last_visual_calibration: Dict[str, Any] = field(default_factory=dict)
     last_photo_path: str = ""
 
     def heartbeat_age(self) -> Optional[float]:
@@ -334,6 +347,64 @@ class MqttRobot:
             with self._lock:
                 self._pending.pop(target, None)
 
+    def capture_visual_calibration(
+        self,
+        output_dir: Path,
+        magnet_position: int = 1,
+        timeout: Optional[float] = None,
+    ) -> VisualCalibrationCapture:
+        """Capture a firmware photo and wait for the Visual AI calibration result."""
+        if not self.config:
+            raise RuntimeError("MQTT is not configured")
+
+        payload = visual_calibration_payload(self.config.sender, magnet_position)
+        target = str(payload["action_id"])
+        wait_timeout = timeout if timeout is not None else self.config.timeout
+        deadline = time.monotonic() + wait_timeout
+        photo_event = threading.Event()
+        result_event = threading.Event()
+        pending = {
+            "want": "visual_calibration",
+            "photo": None,
+            "response": None,
+            "photo_event": photo_event,
+            "result_event": result_event,
+        }
+        with self._lock:
+            self._pending[target] = pending
+
+        try:
+            self.publish(payload)
+            if not photo_event.wait(max(0.0, deadline - time.monotonic())):
+                raise TimeoutError(
+                    f"Timed out waiting for visual calibration photo action_id={target}"
+                )
+
+            photo = pending["photo"]
+            if not isinstance(photo, DecodedPhoto):
+                raise RuntimeError(f"No visual calibration photo for action_id={target}")
+
+            path = save_photo(photo, output_dir, "visual_calibration")
+            self.state.last_photo_path = str(path)
+            self._emit("photo_saved", str(path))
+            self._emit("visual_calibration_photo_saved", str(path))
+            self._emit("state", self.state)
+
+            if not result_event.wait(max(0.0, deadline - time.monotonic())):
+                raise TimeoutError(
+                    f"Timed out waiting for Visual AI calibration result action_id={target}"
+                )
+
+            response = pending["response"]
+            if not isinstance(response, dict):
+                raise RuntimeError(
+                    f"No Visual AI calibration result for action_id={target}"
+                )
+            return VisualCalibrationCapture(photo_path=path, response=response)
+        finally:
+            with self._lock:
+                self._pending.pop(target, None)
+
     def refresh_calibrationvalues(self) -> Dict[str, Any]:
         if not self.config:
             raise RuntimeError("MQTT is not configured")
@@ -358,6 +429,8 @@ class MqttRobot:
             return
 
         self._emit("message", data)
+        if self._handle_visual_calibration_result(data):
+            return
         if data.get("sender") != "firmware":
             return
 
@@ -388,6 +461,28 @@ class MqttRobot:
                 pending["result"] = data
                 pending["event"].set()
 
+    def _handle_visual_calibration_result(self, data: Dict[str, Any]) -> bool:
+        message_type = str(data.get("type") or data.get("action") or "").lower()
+        status = str(data.get("status") or "").lower()
+        if (
+            data.get("sender") != "visual_ai"
+            or message_type != "calibrate_depth"
+            or status not in ("completed", "failed")
+        ):
+            return False
+
+        self.state.last_visual_calibration = data
+        self._emit("visual_calibration_result", data)
+        self._emit("state", self.state)
+
+        target = str(data.get("action_id", ""))
+        with self._lock:
+            pending = self._pending.get(target)
+        if pending and pending.get("want") == "visual_calibration":
+            pending["response"] = data
+            pending["result_event"].set()
+        return True
+
     def _handle_photo(self, photo: DecodedPhoto) -> None:
         self._emit("photo", photo)
         with self._lock:
@@ -395,3 +490,6 @@ class MqttRobot:
         if pending and pending.get("want") == "photo":
             pending["result"] = photo
             pending["event"].set()
+        elif pending and pending.get("want") == "visual_calibration":
+            pending["photo"] = photo
+            pending["photo_event"].set()

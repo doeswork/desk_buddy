@@ -21,6 +21,7 @@ try:
     from .config import DEFAULT_CA_CERT, ENV_PATH, WizardConfig, load_config, save_config
     from .mqtt_robot import (
         MqttRobot,
+        VisualCalibrationCapture,
         base_angle_payload,
         base_degrees_payload,
         base_profile_payload,
@@ -38,6 +39,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from config import DEFAULT_CA_CERT, ENV_PATH, WizardConfig, load_config, save_config
     from mqtt_robot import (
         MqttRobot,
+        VisualCalibrationCapture,
         base_angle_payload,
         base_degrees_payload,
         base_profile_payload,
@@ -302,11 +304,14 @@ class CalibrationWizard(tk.Tk):
         self.stencil_rotation_nudge = tk.DoubleVar(value=0.0)
         self.stencil_distance_nudge = tk.DoubleVar(value=0.0)
         self.stencil_status: Dict[str, Any] = {}
+        self.visual_calibration_magnet_position = tk.IntVar(value=1)
+        self.visual_calibration_status_text = tk.StringVar(value="Not run yet")
         self.live_mode = tk.BooleanVar(value=False)
         self.user_editing_until = 0.0
         self.last_photo_path: Optional[Path] = None
         self.photo_image: Any = None
         self.photo_labels: list[ttk.Label] = []
+        self.visual_calibration_photo_image: Any = None
         self.topic_log_lines: list[str] = []
         self._last_ik_sync_signature = ""
         self._last_perch_sync_signature = ""
@@ -499,11 +504,13 @@ class CalibrationWizard(tk.Tk):
         self.status_tab = ttk.Frame(self.notebook, padding=12)
         self.base_perch_tab = ttk.Frame(self.notebook, padding=12)
         self.ik_tab = ttk.Frame(self.notebook, padding=12)
+        self.visual_calibration_tab = ttk.Frame(self.notebook, padding=12)
         self.stencil_tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(self.setup_tab, text="Setup")
         self.notebook.add(self.status_tab, text="Status")
         self.notebook.add(self.base_perch_tab, text="Base + Perch")
         self.notebook.add(self.ik_tab, text="IK")
+        self.notebook.add(self.visual_calibration_tab, text="Visual Calibration")
         self.notebook.add(self.stencil_tab, text="Stencil")
 
         self.controller_shell = ttk.Frame(workspace, style="Panel.TFrame", padding=8)
@@ -554,6 +561,7 @@ class CalibrationWizard(tk.Tk):
         self._build_status_tab()
         self._build_base_perch_tab()
         self._build_ik_tab()
+        self._build_visual_calibration_tab()
         self._build_stencil_tab()
         self._build_servo_controls(self.controller_content)
         self._build_topic_log()
@@ -1041,6 +1049,102 @@ class CalibrationWizard(tk.Tk):
                 ttk.Label(group, textvariable=vars_for_row["result"]).grid(row=idx, column=10, sticky="w", padx=8)
             row += 1
 
+    def _build_visual_calibration_tab(self) -> None:
+        self.visual_calibration_tab.columnconfigure(0, weight=1)
+        self.visual_calibration_tab.columnconfigure(1, weight=1)
+        self.visual_calibration_tab.rowconfigure(1, weight=1)
+
+        instructions = ttk.LabelFrame(
+            self.visual_calibration_tab,
+            text="Visual AI calibration",
+            padding=12,
+            style="Card.TLabelframe",
+        )
+        instructions.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 10))
+        instructions.columnconfigure(1, weight=1)
+        ttk.Label(
+            instructions,
+            text=(
+                "Place the visual calibration target in the camera's working area. "
+                "This sends calibrate_depth so firmware captures a fresh photo and "
+                "the Vision server stores a new calibration grid."
+            ),
+            foreground=MUTED,
+            wraplength=500,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        ttk.Label(instructions, text="Magnet position").grid(
+            row=1, column=0, sticky="w", padx=(0, 8)
+        )
+        magnet_entry = ttk.Spinbox(
+            instructions,
+            from_=0,
+            to=999,
+            textvariable=self.visual_calibration_magnet_position,
+            width=10,
+        )
+        magnet_entry.grid(row=1, column=1, sticky="w")
+        self._bind_edit_guard(magnet_entry)
+        ttk.Button(
+            instructions,
+            text="Capture Visual Calibration",
+            style="Accent.TButton",
+            command=self.run_visual_calibration,
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 8))
+        ttk.Label(
+            instructions,
+            textvariable=self.visual_calibration_status_text,
+            wraplength=500,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w")
+
+        preview = ttk.LabelFrame(
+            self.visual_calibration_tab,
+            text="Calibration photo",
+            padding=10,
+            style="Card.TLabelframe",
+        )
+        preview.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 10))
+        preview.columnconfigure(0, weight=1)
+        preview.rowconfigure(0, weight=1)
+        self.visual_calibration_photo_label = ttk.Label(
+            preview,
+            text="No visual calibration photo captured yet",
+            anchor="center",
+            justify="center",
+        )
+        self.visual_calibration_photo_label.grid(row=0, column=0, sticky="nsew")
+
+        results = ttk.LabelFrame(
+            self.visual_calibration_tab,
+            text="Vision server result",
+            padding=10,
+            style="Card.TLabelframe",
+        )
+        results.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        results.columnconfigure(0, weight=1)
+        results.rowconfigure(0, weight=1)
+        self.visual_calibration_result_box = tk.Text(
+            results,
+            height=14,
+            wrap="word",
+            font=self.ui_fonts["mono"],
+        )
+        self.visual_calibration_result_box.grid(row=0, column=0, sticky="nsew")
+        result_scroll = ttk.Scrollbar(
+            results,
+            orient="vertical",
+            command=self.visual_calibration_result_box.yview,
+        )
+        result_scroll.grid(row=0, column=1, sticky="ns")
+        self.visual_calibration_result_box.configure(
+            yscrollcommand=result_scroll.set,
+            state="disabled",
+        )
+        self._set_visual_calibration_result_text(
+            "No result yet. Connect to MQTT and capture a visual calibration image."
+        )
+
     def _build_stencil_tab(self) -> None:
         self.stencil_tab.columnconfigure(0, weight=1)
         self.stencil_tab.rowconfigure(2, weight=1)
@@ -1259,6 +1363,95 @@ class CalibrationWizard(tk.Tk):
         def work() -> Path:
             return self.robot.capture_photo(label, CAPTURE_DIR)
         self._run_worker(f"capture {label} photo", work, on_success=self._display_photo)
+
+    def run_visual_calibration(self) -> None:
+        try:
+            magnet_position = int(self.visual_calibration_magnet_position.get())
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showerror(
+                "Visual Calibration",
+                "Magnet position must be a whole number.",
+            )
+            return
+        if magnet_position < 0:
+            messagebox.showerror(
+                "Visual Calibration",
+                "Magnet position must be zero or greater.",
+            )
+            return
+
+        self.visual_calibration_status_text.set(
+            "Capturing a fresh camera image and waiting for the Vision server…"
+        )
+        self._set_visual_calibration_result_text(
+            "Waiting for firmware photo and Visual AI calibration result…"
+        )
+        self._run_worker(
+            "visual calibration",
+            lambda: self.robot.capture_visual_calibration(
+                CAPTURE_DIR,
+                magnet_position=magnet_position,
+            ),
+            on_success=self._render_visual_calibration_result,
+        )
+
+    def _set_visual_calibration_result_text(self, text: str) -> None:
+        if not hasattr(self, "visual_calibration_result_box"):
+            return
+        self.visual_calibration_result_box.configure(state="normal")
+        self.visual_calibration_result_box.delete("1.0", tk.END)
+        self.visual_calibration_result_box.insert(tk.END, text)
+        self.visual_calibration_result_box.configure(state="disabled")
+
+    def _render_visual_calibration_result(
+        self,
+        capture: VisualCalibrationCapture,
+    ) -> None:
+        response = capture.response
+        status = str(response.get("status") or "unknown").lower()
+        points = response.get("calibration_points")
+        point_count = len(points) if isinstance(points, dict) else 0
+        image_id = response.get("image_id")
+
+        lines = [
+            f"Status: {status}",
+            f"Action ID: {response.get('action_id', '-')}",
+            f"Vision image ID: {image_id if image_id is not None else '-'}",
+            f"Magnet position: {response.get('MagnetPosition', '-')}",
+            f"Photo: {capture.photo_path}",
+        ]
+
+        if status == "completed":
+            self.status_text.set("Done: visual calibration")
+            self.visual_calibration_status_text.set(
+                f"Completed — {point_count} calibration points saved"
+                + (f" as Vision image {image_id}" if image_id is not None else "")
+                + "."
+            )
+            lines.extend(["", f"Calibration points ({point_count}):"])
+            if isinstance(points, dict) and points:
+                for name, values in points.items():
+                    lines.append(
+                        f"{name}: {json.dumps(values, sort_keys=True, separators=(',', ':'))}"
+                    )
+            else:
+                lines.append("The server completed without returning point details.")
+        else:
+            error = str(response.get("error") or "Visual AI calibration failed")
+            self.status_text.set("Error: visual calibration")
+            self.visual_calibration_status_text.set(f"Failed — {error}")
+            lines.extend(["", f"Error: {error}"])
+
+        self._set_visual_calibration_result_text("\n".join(lines))
+        self.session["visual_calibration"] = {
+            "photo": str(capture.photo_path),
+            "response": response,
+        }
+        self.last_result_text.set(
+            "Visual calibration completed"
+            if status == "completed"
+            else "Visual calibration failed"
+        )
 
     def save_perch_angles(self) -> None:
         def work() -> None:
@@ -1515,6 +1708,32 @@ class CalibrationWizard(tk.Tk):
         for label in self.photo_labels:
             label.configure(image=self.photo_image, text="")
 
+    def _display_visual_calibration_photo(self, path: Path) -> None:
+        path = Path(path)
+        self.last_photo_path = path
+        if str(path) not in self.session["captures"]:
+            self.session["captures"].append(str(path))
+        self.visual_calibration_status_text.set(
+            "Photo received; waiting for the Vision server to build the calibration grid…"
+        )
+        if Image is None or ImageTk is None:
+            self.visual_calibration_photo_label.configure(
+                text=(
+                    f"Photo saved: {path}\n"
+                    "Install Pillow to preview images:\n"
+                    "python3 -m pip install Pillow"
+                ),
+                image="",
+            )
+            return
+        image = Image.open(path)
+        image.thumbnail((460, 300))
+        self.visual_calibration_photo_image = ImageTk.PhotoImage(image)
+        self.visual_calibration_photo_label.configure(
+            image=self.visual_calibration_photo_image,
+            text="",
+        )
+
     def _run_worker(self, label: str, work: Callable[[], Any], on_success: Optional[Callable[[Any], None]] = None) -> None:
         self.status_text.set(f"Working: {label}")
 
@@ -1546,6 +1765,9 @@ class CalibrationWizard(tk.Tk):
                 print(f"[CalibrationWizard] {label} failed: {error}", file=sys.stderr)
                 self.status_text.set(f"Error: {label}")
                 self.last_result_text.set(error)
+                if label == "visual calibration":
+                    self.visual_calibration_status_text.set(f"Failed — {error}")
+                    self._set_visual_calibration_result_text(f"Error: {error}")
                 messagebox.showerror("Calibration Wizard", error)
             elif kind == "error":
                 print(f"[CalibrationWizard] {payload}", file=sys.stderr)
@@ -1557,6 +1779,11 @@ class CalibrationWizard(tk.Tk):
                 self.last_result_text.set("Sent: " + json.dumps(payload, separators=(",", ":")))
             elif kind == "photo_saved":
                 self.last_result_text.set(f"Photo saved: {payload}")
+            elif kind == "visual_calibration_photo_saved":
+                self._display_visual_calibration_photo(Path(payload))
+            elif kind == "visual_calibration_result":
+                status = str(payload.get("status") or "result")
+                self.last_result_text.set(f"Visual AI calibration: {status}")
         self.after(150, self._process_events)
 
     def _append_log(self, kind: str, payload: Any) -> None:

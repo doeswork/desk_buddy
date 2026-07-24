@@ -16,7 +16,11 @@ The interface is organized around the calibration flow:
 - **Status** shows saved preferences, firmware defaults, missing required
   calibration, and optional values as a checklist.
 - **Base + Perch** keeps the two physical setup steps together.
-- **IK** and **Stencil** contain the later calibration workflows.
+- **IK** contains the saved reach-plane workflow.
+- **Visual Calibration**, immediately after IK, sends `calibrate_depth`, previews
+  the fresh firmware photo, and reports the calibration points returned by the
+  Visual AI server.
+- **Stencil** contains the final physical pickup-offset workflow.
 - The robot controller remains on the right side on every page, with live
   servo, gripper, and base state when telemetry is available.
 

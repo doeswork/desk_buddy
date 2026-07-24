@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
+import tempfile
+import threading
 import tkinter as tk
 import unittest
 
 try:
     from .app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
-    from .mqtt_robot import base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload
-    from .photo_decode import decode_photo_message
+    from .mqtt_robot import MqttRobot, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
+    from .photo_decode import DecodedPhoto, decode_photo_message
 except ImportError:  # pragma: no cover - direct execution from calibration_tool/
     from app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
-    from mqtt_robot import base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload
-    from photo_decode import decode_photo_message
+    from mqtt_robot import MqttRobot, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
+    from photo_decode import DecodedPhoto, decode_photo_message
 
 
 class PayloadTests(unittest.TestCase):
@@ -64,6 +69,13 @@ class PayloadTests(unittest.TestCase):
         payload = photo_payload("tester", "perch")
         self.assertEqual(payload["action"], "photo")
         self.assertTrue(str(payload["action_id"]).startswith("perch_"))
+
+    def test_visual_calibration_payload(self) -> None:
+        payload = visual_calibration_payload("tester", 3)
+        self.assertEqual(payload["action"], "calibrate_depth")
+        self.assertEqual(payload["sender"], "tester")
+        self.assertEqual(payload["MagnetPosition"], 3)
+        self.assertTrue(str(payload["action_id"]).startswith("visual_calibration_"))
 
     def test_resolve_root_cert_from_relative_path(self) -> None:
         resolved = resolve_cert_path("mqtt-ca.crt")
@@ -148,6 +160,74 @@ class PhotoDecodeTests(unittest.TestCase):
 
     def test_non_photo_returns_none(self) -> None:
         self.assertIsNone(decode_photo_message(b'{"sender":"firmware"}'))
+
+
+class VisualCalibrationMqttTests(unittest.TestCase):
+    def test_capture_waits_for_photo_and_visual_ai_result(self) -> None:
+        robot = MqttRobot()
+        robot.config = SimpleNamespace(sender="tester", timeout=1.0)
+
+        def fake_publish(payload: dict) -> None:
+            target = str(payload["action_id"])
+            robot._handle_photo(
+                DecodedPhoto(
+                    metadata={
+                        "sender": "firmware",
+                        "action_id": target,
+                        "photo": "sending_photo",
+                    },
+                    jpeg_bytes=b"\xff\xd8visual calibration\xff\xd9",
+                )
+            )
+            robot._handle_visual_calibration_result(
+                {
+                    "sender": "visual_ai",
+                    "type": "calibrate_depth",
+                    "action_id": target,
+                    "status": "completed",
+                    "image_id": 42,
+                    "MagnetPosition": 3,
+                    "calibration_points": {"origin": {"x": 10.0, "y": 20.0}},
+                }
+            )
+
+        robot.publish = fake_publish  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as directory:
+            capture = robot.capture_visual_calibration(
+                Path(directory),
+                magnet_position=3,
+            )
+
+            self.assertTrue(capture.photo_path.exists())
+            self.assertEqual(capture.response["status"], "completed")
+            self.assertEqual(capture.response["image_id"], 42)
+            self.assertEqual(robot.state.last_visual_calibration["image_id"], 42)
+            self.assertEqual(robot._pending, {})
+
+    def test_visual_ai_failed_result_is_correlated(self) -> None:
+        robot = MqttRobot()
+        target = "visual_calibration_1"
+        result_event = threading.Event()
+        robot._pending[target] = {
+            "want": "visual_calibration",
+            "response": None,
+            "result_event": result_event,
+        }
+        response = {
+            "sender": "visual_ai",
+            "type": "calibrate_depth",
+            "action_id": target,
+            "status": "failed",
+            "error": "not enough calibration points",
+        }
+
+        robot._on_message(
+            None,
+            None,
+            SimpleNamespace(payload=json.dumps(response).encode("utf-8")),
+        )
+        self.assertTrue(result_event.is_set())
+        self.assertEqual(robot._pending[target]["response"], response)
 
 
 class TopicLogFormatTests(unittest.TestCase):
@@ -253,12 +333,57 @@ class GuiStateTests(unittest.TestCase):
 
         try:
             tab_texts = [app.notebook.tab(tab_id, "text") for tab_id in app.notebook.tabs()]
-            self.assertEqual(tab_texts, ["Setup", "Status", "Base + Perch", "IK", "Stencil"])
+            self.assertEqual(
+                tab_texts,
+                [
+                    "Setup",
+                    "Status",
+                    "Base + Perch",
+                    "IK",
+                    "Visual Calibration",
+                    "Stencil",
+                ],
+            )
             self.assertTrue(hasattr(app, "status_tree"))
             self.assertTrue(hasattr(app, "controller_shell"))
             self.assertNotEqual(app.controller_shell.master, app.notebook)
+            self.assertTrue(hasattr(app, "visual_calibration_result_box"))
             self.assertTrue(hasattr(app, "stencil_status_box"))
             self.assertTrue(hasattr(app, "stencil_points_box"))
+        finally:
+            app.destroy()
+
+    def test_visual_calibration_result_rendering(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app._render_visual_calibration_result(
+                VisualCalibrationCapture(
+                    photo_path=Path("/tmp/visual_calibration.jpg"),
+                    response={
+                        "sender": "visual_ai",
+                        "type": "calibrate_depth",
+                        "action_id": "visual_calibration_1",
+                        "status": "completed",
+                        "image_id": 42,
+                        "MagnetPosition": 1,
+                        "calibration_points": {
+                            "origin": {"x": 10.0, "y": 20.0},
+                            "far": {"x": 300.0, "y": 220.0},
+                        },
+                    },
+                )
+            )
+            self.assertIn("2 calibration points", app.visual_calibration_status_text.get())
+            rendered = app.visual_calibration_result_box.get("1.0", tk.END)
+            self.assertIn("Vision image ID: 42", rendered)
+            self.assertIn("origin:", rendered)
+            self.assertIn("far:", rendered)
         finally:
             app.destroy()
 
