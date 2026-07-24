@@ -79,7 +79,7 @@ void setup() {
 
 void loop() {
   BuddyWifi::maintain();  // keep Wi-Fi alive
-  BuddyMQTT::maintain();  // not blocking
+  BuddyMQTT::maintain();  // bounded connection attempt with retry backoff
   BuddyMQTT::listen();    // blocking until MQTT message arrives
 
   // no delay to keep mqttClient.loop() responsive inside BuddyMQTT::listen()

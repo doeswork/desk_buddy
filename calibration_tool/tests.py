@@ -5,11 +5,11 @@ import tkinter as tk
 import unittest
 
 try:
-    from .app import CalibrationWizard, format_topic_log_event
+    from .app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
     from .mqtt_robot import base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload
     from .photo_decode import decode_photo_message
 except ImportError:  # pragma: no cover - direct execution from calibration_tool/
-    from app import CalibrationWizard, format_topic_log_event
+    from app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
     from mqtt_robot import base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload
     from photo_decode import decode_photo_message
 
@@ -110,6 +110,32 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(payload["distanceNudgeMm"], -3.0)
 
 
+class CalibrationStatusTests(unittest.TestCase):
+    def test_status_rows_distinguish_saved_defaults_and_missing(self) -> None:
+        rows = build_calibration_status_rows(
+            {
+                "base_rotation_profileCalibrated": True,
+                "base_rotation_calibrated": True,
+                "base_rotation_leftCountsPerRev": 24000,
+                "base_rotation_rightCountsPerRev": 24100,
+                "base_rotation_lastValid": True,
+                "PERCH_ELBOW_ANGLE": None,
+                "PERCH_WRIST_ANGLE": 94.0,
+                "perch_effective": {"ELBOW": 120, "WRIST": 94, "TWIST": 90, "MIN": 0, "MID": 50, "MAX": 100},
+                "hover_over_min": {"DISTANCE": 0, "ELBOW": 126, "WRIST": 0, "TWIST": 90},
+                "rot_off_deg": 0.0,
+            }
+        )
+        by_key = {row["key"]: row for row in rows}
+        self.assertEqual(by_key["PERCH_ELBOW_ANGLE"]["state"], "DEFAULT")
+        self.assertEqual(by_key["PERCH_ELBOW_ANGLE"]["value"], "120")
+        self.assertEqual(by_key["PERCH_WRIST_ANGLE"]["state"], "SAVED")
+        self.assertEqual(by_key["hover_over_min"]["state"], "SAVED")
+        self.assertEqual(by_key["hover_over_mid"]["state"], "MISSING")
+        self.assertEqual(by_key["hover_min_120"]["state"], "OPTIONAL")
+        self.assertEqual(by_key["rot_off_deg"]["state"], "SAVED")
+
+
 class PhotoDecodeTests(unittest.TestCase):
     def test_raw_jpeg_photo_decode(self) -> None:
         jpeg = b"\xff\xd8jpeg bytes with } inside\xff\xd9"
@@ -177,7 +203,7 @@ class GuiStateTests(unittest.TestCase):
             self.assertEqual(app.controller_angles["ELBOW"].get(), 11)
             self.assertEqual(app.controller_angles["WRIST"].get(), 22)
             self.assertEqual(app.controller_angles["TWIST"].get(), 33)
-            self.assertEqual(app.observed_angles["ELBOW"].get(), "101")
+            self.assertEqual(app.observed_angles["ELBOW"].get(), "101 °")
 
             app.sync_controller_from_robot()
             self.assertEqual(app.controller_angles["ELBOW"].get(), 101)
@@ -217,7 +243,7 @@ class GuiStateTests(unittest.TestCase):
         finally:
             app.destroy()
 
-    def test_stencil_tab_exists(self) -> None:
+    def test_simplified_tabs_and_persistent_controller_exist(self) -> None:
         if not os.environ.get("DISPLAY"):
             self.skipTest("Tk display is not available")
         try:
@@ -227,10 +253,43 @@ class GuiStateTests(unittest.TestCase):
 
         try:
             tab_texts = [app.notebook.tab(tab_id, "text") for tab_id in app.notebook.tabs()]
-            self.assertIn("5. Stencil", tab_texts)
-            self.assertIn("6. Final Check", tab_texts)
+            self.assertEqual(tab_texts, ["Setup", "Status", "Base + Perch", "IK", "Stencil"])
+            self.assertTrue(hasattr(app, "status_tree"))
+            self.assertTrue(hasattr(app, "controller_shell"))
+            self.assertNotEqual(app.controller_shell.master, app.notebook)
             self.assertTrue(hasattr(app, "stencil_status_box"))
             self.assertTrue(hasattr(app, "stencil_points_box"))
+        finally:
+            app.destroy()
+
+    def test_window_resize_zoom_and_controller_scroll(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            self.assertEqual(app.resizable(), (1, 1))
+            self.assertEqual(app.minsize(), (900, 650))
+            app.geometry("900x650")
+            app.update_idletasks()
+            app.update()
+            self.assertTrue(app.controller_canvas.cget("scrollregion"))
+
+            app._set_zoom(0.75)
+            self.assertEqual(app.zoom_text.get(), "75%")
+            self.assertEqual(app.ui_fonts["body"].cget("size"), 8)
+            self.assertEqual(int(app.controller_shell.cget("width")), 300)
+
+            app._set_zoom(1.25)
+            self.assertEqual(app.zoom_text.get(), "125%")
+            self.assertEqual(app.ui_fonts["body"].cget("size"), 12)
+            self.assertEqual(int(app.controller_shell.cget("width")), 469)
+
+            app._reset_zoom()
+            self.assertEqual(app.zoom_text.get(), "100%")
         finally:
             app.destroy()
 

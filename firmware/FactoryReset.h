@@ -9,9 +9,9 @@ namespace FactoryReset {
   // Call this early in setup() before WiFi/MQTT initialize
   void checkAndReset();
 
-  // Check if BOOT button is currently being held (non-blocking)
-  // Returns true if held for the required duration
-  bool checkButtonHeld();
+  // Service runtime BOOT-button events. A dedicated monitor latches a
+  // completed hold even while a network call temporarily blocks loop().
+  void maintain();
 
   // Perform factory reset and reboot
   void performReset();

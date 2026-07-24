@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 namespace WebServerForStartup {
-  void begin();                    // Initialize the web server
+  bool begin();                    // Initialize server; false if AP startup fails
   void maintain();                 // Call in loop to handle requests
   void stop();                     // Stop the web server
   bool isRunning();                // Check if server is active

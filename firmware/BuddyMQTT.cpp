@@ -3,7 +3,6 @@
 #include "ActionController.h"
 #include "ActionOTA.h"
 #include "Heartbeat.h"
-#include "FactoryReset.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // secure TCP
 #include <PubSubClient.h>
@@ -52,6 +51,8 @@ namespace {
   }
 
   constexpr unsigned long PUBLISH_INTERVAL = 3000;
+  constexpr unsigned long RECONNECT_INTERVAL_MS = 5000;
+  constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 2;
   unsigned long lastPublish = 0;
   int publishCount = 0;
   constexpr unsigned long OTA_ENFORCE_INTERVAL_MS = 60000;
@@ -127,12 +128,12 @@ namespace {
 
     // TODO: load cert from Preferences/web UI for proper TLS verification
     netClient.setInsecure();
-    netClient.setTimeout(15);
+    netClient.setTimeout(2000);
     mqttClient.setKeepAlive(30);
 
     // MQTT setup
     mqttClient.setServer(SERVER.c_str(), PORT);
-    mqttClient.setSocketTimeout(15);
+    mqttClient.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SEC);
     // Increase buffer so larger JSON payloads (like calibrationvalues) can publish
     mqttClient.setBufferSize(6144);
 
@@ -171,8 +172,15 @@ void BuddyMQTT::maintain() {
   static bool sentReadyMessage = false;
   static bool otaBootMarked = false;
   static unsigned long lastOtaEnforceAttemptMs = 0;
+  static unsigned long nextReconnectAttemptMs = 0;
 
   if (!mqttClient.connected()) {
+    const unsigned long now = millis();
+    if (nextReconnectAttemptMs != 0 &&
+        static_cast<long>(now - nextReconnectAttemptMs) < 0) {
+      return;
+    }
+
     sentReadyMessage = false;  // Reset flag on disconnect
     Serial.print("Connecting MQTT (TLS)… ");
     LED::Blink(0.5);
@@ -180,6 +188,7 @@ void BuddyMQTT::maintain() {
     mqttClient.setCallback(messageCallback);
 
     if (mqttClient.connect(CLIENT_ID.c_str(), USER.c_str(), PASS.c_str())) {
+      nextReconnectAttemptMs = 0;
       LED::On();
       Serial.println("connected");
       mqttClient.subscribe(STATUS_TOPIC.c_str());
@@ -187,12 +196,10 @@ void BuddyMQTT::maintain() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());   // -4 timeout, 5 not authorized, etc.
-      Serial.println("; retrying next loop (hold BOOT 3s to factory reset)");
-
-      // Check if user is holding BOOT button to trigger factory reset
-      if (FactoryReset::checkButtonHeld()) {
-        FactoryReset::performReset();  // Never returns - reboots device
-      }
+      Serial.print("; retrying in ");
+      Serial.print(RECONNECT_INTERVAL_MS / 1000);
+      Serial.println("s (hold BOOT 3s to factory reset)");
+      nextReconnectAttemptMs = millis() + RECONNECT_INTERVAL_MS;
 
       return;
     }
