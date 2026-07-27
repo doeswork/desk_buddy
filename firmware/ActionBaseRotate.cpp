@@ -54,6 +54,11 @@ namespace {
   constexpr int CALIBRATION_DRIVE_OFFSET = 10;
   constexpr int CALIBRATION_NEUTRAL_MIN = 70;
   constexpr int CALIBRATION_NEUTRAL_MAX = 110;
+  // FIND_NEUTRAL: a sweep sample must move at least this many encoder counts
+  // (in its dwell window) to count as "the servo is actually rotating" rather
+  // than jitter/creep. Tuned against observed data: stalled ~1-5 counts,
+  // real motion 40+.
+  constexpr long NEUTRAL_MOVEMENT_THRESHOLD_COUNTS = 20;
   constexpr int CALIBRATION_MIN_PASSES = 2;
   constexpr int CALIBRATION_MAX_PASSES = 8;
   constexpr unsigned long CALIBRATION_BALANCE_TOLERANCE_MS = 2000;
@@ -111,6 +116,9 @@ namespace {
   long calibrationLastPulseMinCounts = 0;
   uint32_t calibrationIgnoredPulseCount = 0;
   bool usingEstimatedStepCounts = false;
+  long lastRawAngleTestMovedCounts = -1;  // -1 = RAW_ANGLE hasn't run this session
+  int  lastFoundNeutral = -1;             // -1 = FIND_NEUTRAL hasn't run this session
+  int  lastFoundOffset  = -1;             // -1 = not found; min offset from neutral for reliable motion
 
   struct RotationProfileBackup {
     int resting;
@@ -1161,6 +1169,9 @@ namespace {
     doc["trueNorthPinLevel"] = digitalRead(TRUE_NORTH_PIN);
     doc["trueNorthHitCount"] = getTrueNorthHitCount();
     doc["rawEncoder"] = readEncoderRaw();
+    if (lastRawAngleTestMovedCounts >= 0) doc["lastRawAngleTestMovedCounts"] = lastRawAngleTestMovedCounts;
+    if (lastFoundNeutral >= 0) doc["foundNeutral"] = lastFoundNeutral;
+    if (lastFoundOffset >= 0) doc["foundOffset"] = lastFoundOffset;
     JsonObject speedProfile = doc.createNestedObject("speedProfile");
     for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
       JsonObject speed = speedProfile.createNestedObject(SPEED_PROFILE_NAMES[i]);
@@ -1223,6 +1234,162 @@ bool ActionBaseRotate::run(const String& message, String& statusJson, String& de
     long neutralOverride = NO_NEUTRAL_OVERRIDE;
     if (parseNeutralOverride(doc["neutralServoAngle"], neutralOverride, error)) {
       ok = calibrateBoth(neutralOverride, error);
+    }
+  } else if (strcasecmp(ctl, "RAW_ANGLE") == 0) {
+    // Diagnostic: write an exact raw servo angle for durationMs and report
+    // how many encoder counts that produced. Same driveServoAngle() path
+    // calibration uses internally — lets you probe the servo's actual dead
+    // zone (e.g. is 80 too close to the true stop point?) without running
+    // the full calibration routine. Does NOT require true-north/calibration
+    // state; always returns to restingValue afterward.
+    long angleValue = -1;
+    long durationMs = 500;
+    if (!extractLong(doc["angle"], angleValue) || angleValue < 0 || angleValue > 180) {
+      error = "invalid angle";
+    } else {
+      extractLong(doc["durationMs"], durationMs);
+      if (durationMs < 0) durationMs = 0;
+      if (durationMs > 5000) durationMs = 5000;
+
+      resetEncoderTracking();
+      long startCounts = encoderUnwrapped;
+      unsigned long startMs = millis();
+      Serial.printf("[Rotate] RAW_ANGLE angle=%ld durationMs=%ld (resting=%d)\n", angleValue, durationMs, restingValue);
+      baseServo.write(static_cast<int>(angleValue));
+      while (millis() - startMs < static_cast<unsigned long>(durationMs)) {
+        updateEncoderTracking();
+        maintainConnectionDuringWait();
+        delay(TRUE_NORTH_POLL_DELAY_MS);
+      }
+      stopServo();
+      long movedCounts = labs(encoderUnwrapped - startCounts);
+      lastRawAngleTestMovedCounts = movedCounts;
+      Serial.printf("[Rotate] RAW_ANGLE result: movedCounts=%ld\n", movedCounts);
+      saveLastPosition();
+      ok = true;
+    }
+  } else if (strcasecmp(ctl, "FIND_NEUTRAL") == 0) {
+    // Auto-discovers the servo's true stop point and a working drive offset,
+    // then persists the stop point as restingValue. This servo is
+    // continuous-rotation — write(angle) sets speed and direction, not
+    // position. Its true "neutral" is where the base holds still; below it
+    // spins one way, above it the other. We sweep write() values, record
+    // SIGNED encoder movement at each, then derive:
+    //   center  = the sign-flip (zero-crossing) between the two spin directions
+    //   offset  = the smallest distance from center where movement is reliably
+    //             above NEUTRAL_MOVEMENT_THRESHOLD_COUNTS (enough torque to move)
+    // Everything downstream (calibration drive angles, speed profiles) can
+    // then be symmetric around the found center instead of a hardcoded 90.
+    long fromAngle = 75, toAngle = 105, stepAngle = 1, dwellMs = 350;
+    extractLong(doc["from"], fromAngle);
+    extractLong(doc["to"], toAngle);
+    extractLong(doc["step"], stepAngle);
+    extractLong(doc["dwellMs"], dwellMs);
+    if (fromAngle < 0) fromAngle = 0;
+    if (toAngle > 180) toAngle = 180;
+    if (stepAngle < 1) stepAngle = 1;
+    if (dwellMs < 50) dwellMs = 50;
+    if (dwellMs > 2000) dwellMs = 2000;
+
+    int neutralGuess = -1;
+    long prevSigned = 0;
+    long prevAngle = 0;
+    bool havePrev = false;
+    // Nearest angle above/below center that moves reliably (for offset calc).
+    int firstNegMoveAngle = -1;  // largest angle with strong NEGATIVE motion
+    int firstPosMoveAngle = -1;  // smallest angle with strong POSITIVE motion
+
+    Serial.printf("[Rotate] FIND_NEUTRAL sweep from=%ld to=%ld step=%ld dwellMs=%ld\n",
+                  fromAngle, toAngle, stepAngle, dwellMs);
+    for (long a = fromAngle; a <= toAngle; a += stepAngle) {
+      resetEncoderTracking();
+      long startCounts = encoderUnwrapped;
+      unsigned long startMs = millis();
+      baseServo.write(static_cast<int>(a));
+      while (millis() - startMs < static_cast<unsigned long>(dwellMs)) {
+        updateEncoderTracking();
+        maintainConnectionDuringWait();
+        delay(TRUE_NORTH_POLL_DELAY_MS);
+      }
+      baseServo.write(restingValue);  // brief pause between samples
+      long signedMoved = encoderUnwrapped - startCounts;
+
+      Serial.printf("[Rotate] FIND_NEUTRAL angle=%ld signedCounts=%ld\n", a, signedMoved);
+
+      // Center = where signed movement crosses zero (direction flips).
+      if (havePrev && neutralGuess < 0 &&
+          ((prevSigned <= 0 && signedMoved > 0) || (prevSigned >= 0 && signedMoved < 0)) &&
+          prevSigned != signedMoved) {
+        neutralGuess = static_cast<int>((prevAngle + a) / 2);
+      }
+
+      // Track the reliable-motion boundaries for the working-offset calc.
+      if (signedMoved <= -NEUTRAL_MOVEMENT_THRESHOLD_COUNTS) {
+        firstNegMoveAngle = static_cast<int>(a);  // keep updating -> largest such angle
+      }
+      if (signedMoved >= NEUTRAL_MOVEMENT_THRESHOLD_COUNTS && firstPosMoveAngle < 0) {
+        firstPosMoveAngle = static_cast<int>(a);  // first (smallest) such angle
+      }
+
+      prevSigned = signedMoved;
+      prevAngle = a;
+      havePrev = true;
+
+      delay(150);
+    }
+
+    stopServo();
+
+    // Derive working offset: distance from center to the nearest reliable-motion
+    // boundary on each side; take the larger so BOTH directions clear threshold.
+    int workingOffset = -1;
+    if (neutralGuess >= 0) {
+      int negOff = (firstNegMoveAngle >= 0) ? (neutralGuess - firstNegMoveAngle) : -1;
+      int posOff = (firstPosMoveAngle >= 0) ? (firstPosMoveAngle - neutralGuess) : -1;
+      workingOffset = negOff;
+      if (posOff > workingOffset) workingOffset = posOff;
+      if (workingOffset < 1) workingOffset = -1;  // nonsensical -> report not found
+    }
+
+    lastFoundNeutral = neutralGuess;
+    lastFoundOffset = workingOffset;
+
+    // Auto-persist the found center as the servo's resting/neutral point so
+    // subsequent calibration drives symmetrically around it. User can override
+    // later via SET_NEUTRAL.
+    if (neutralGuess >= CALIBRATION_NEUTRAL_MIN && neutralGuess <= CALIBRATION_NEUTRAL_MAX) {
+      restingValue = neutralGuess;
+      initFixedSpeedProfileAngles();
+      baseServo.write(restingValue);
+      prefs.begin(PREF_NAMESPACE, false);
+      prefs.putInt(KEY_RESTING_VALUE, restingValue);
+      prefs.end();
+      Serial.printf("[Rotate] FIND_NEUTRAL persisted restingValue=%d\n", restingValue);
+    } else {
+      Serial.println("[Rotate] FIND_NEUTRAL: no reliable center found, restingValue unchanged");
+    }
+
+    saveLastPosition();
+    Serial.printf("[Rotate] FIND_NEUTRAL done. foundNeutral=%d foundOffset=%d\n",
+                  neutralGuess, workingOffset);
+    ok = true;
+  } else if (strcasecmp(ctl, "SET_NEUTRAL") == 0) {
+    // Manually set + persist the servo's resting/neutral point. Lets the user
+    // override the auto-found value from the calibration UI.
+    long angleValue = -1;
+    if (!extractLong(doc["angle"], angleValue) ||
+        angleValue < CALIBRATION_NEUTRAL_MIN || angleValue > CALIBRATION_NEUTRAL_MAX) {
+      error = "invalid neutral angle";
+    } else {
+      restingValue = static_cast<int>(angleValue);
+      lastFoundNeutral = restingValue;
+      initFixedSpeedProfileAngles();
+      baseServo.write(restingValue);
+      prefs.begin(PREF_NAMESPACE, false);
+      prefs.putInt(KEY_RESTING_VALUE, restingValue);
+      prefs.end();
+      Serial.printf("[Rotate] SET_NEUTRAL persisted restingValue=%d\n", restingValue);
+      ok = true;
     }
   } else if (strcasecmp(ctl, "ENCODER") == 0) {
     bool rotateLeft = false;

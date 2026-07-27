@@ -175,3 +175,4 @@ bool ActionGripper::drop() {
   initGripper();
   return handleDrop();
 }
+
