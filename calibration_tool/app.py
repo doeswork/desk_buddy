@@ -109,6 +109,7 @@ def build_calibration_status_rows(values: Dict[str, Any]) -> list[Dict[str, str]
 
     base_fields = (
         ("Profile calibrated", "base_rotation_profileCalibrated", "boolean"),
+        ("Veryslow motion validated", "base_rotation_veryslowValidated", "boolean"),
         ("Rotation calibrated", "base_rotation_calibrated", "boolean"),
         ("Left counts / revolution", "base_rotation_leftCountsPerRev", "positive"),
         ("Right counts / revolution", "base_rotation_rightCountsPerRev", "positive"),
@@ -341,6 +342,8 @@ class CalibrationWizard(tk.Tk):
         self.base_direction = tk.StringVar(value="LEFT")
         self.base_speed = tk.StringVar(value="slow")
         self.observed_base_text = tk.StringVar(value="Base: no status yet")
+        self.ik_control_y = tk.IntVar(value=100)
+        self.ik_control_z = tk.IntVar(value=0)
         self.stencil_rotation_nudge = tk.DoubleVar(value=0.0)
         self.stencil_distance_nudge = tk.DoubleVar(value=0.0)
         self.stencil_status: Dict[str, Any] = {}
@@ -1115,12 +1118,57 @@ class CalibrationWizard(tk.Tk):
         top.columnconfigure(0, weight=1)
         ttk.Label(
             top,
-            text="Set the arm with the persistent controller, then copy its targets into a calibration row.",
+            text=(
+                "Send a calibrated IK target directly, or set the arm with the persistent controller "
+                "and copy its targets into a calibration row."
+            ),
             foreground=MUTED,
             wraplength=420,
         ).grid(row=0, column=0, sticky="w", pady=(0, 6))
-        ttk.Button(top, text="Move to controller targets", command=self.move_all_servos).grid(row=1, column=0, sticky="ew", pady=4)
-        ttk.Button(top, text="Capture IK photo", command=lambda: self.capture_photo("ik")).grid(row=2, column=0, sticky="ew", pady=4)
+
+        direct = ttk.LabelFrame(top, text="Direct IK control", padding=8)
+        direct.grid(row=1, column=0, sticky="ew", pady=(2, 6))
+        direct.columnconfigure(1, weight=1)
+        ttk.Label(direct, text="Y distance").grid(row=0, column=0, sticky="w", pady=3)
+        y_entry = ttk.Spinbox(
+            direct,
+            from_=0,
+            to=1000,
+            increment=1,
+            textvariable=self.ik_control_y,
+            width=8,
+        )
+        y_entry.grid(row=0, column=1, sticky="ew", padx=(8, 4), pady=3)
+        ttk.Label(direct, text="mm", foreground=MUTED).grid(row=0, column=2, sticky="w", pady=3)
+        self._bind_edit_guard(y_entry)
+
+        ttk.Label(direct, text="Z height").grid(row=1, column=0, sticky="w", pady=3)
+        z_entry = ttk.Spinbox(
+            direct,
+            from_=0,
+            to=50,
+            increment=1,
+            textvariable=self.ik_control_z,
+            width=8,
+        )
+        z_entry.grid(row=1, column=1, sticky="ew", padx=(8, 4), pady=3)
+        ttk.Label(direct, text="mm", foreground=MUTED).grid(row=1, column=2, sticky="w", pady=3)
+        self._bind_edit_guard(z_entry)
+        ttk.Button(
+            direct,
+            text="Send IK command",
+            style="Accent.TButton",
+            command=self.send_ik_control,
+        ).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(7, 0))
+        ttk.Label(
+            direct,
+            text="Publishes controlik with distance=Y and z_height=Z. Firmware applies the saved IK calibration.",
+            foreground=MUTED,
+            wraplength=390,
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        ttk.Button(top, text="Move to controller targets", command=self.move_all_servos).grid(row=2, column=0, sticky="ew", pady=4)
+        ttk.Button(top, text="Capture IK photo", command=lambda: self.capture_photo("ik")).grid(row=3, column=0, sticky="ew", pady=4)
         self._build_photo_panel(self.ik_tab, 0, 1)
 
         self.ik_rows: Dict[str, Dict[str, Dict[str, tk.Variable]]] = {}
@@ -1596,7 +1644,44 @@ class CalibrationWizard(tk.Tk):
         ):
             return
         neutral = self.base_neutral.get()
-        self._run_worker("base profile calibration", lambda: self.robot.request(base_profile_payload(self.config_values.sender, neutral)))
+
+        def work() -> Dict[str, Any]:
+            response = self.robot.request(
+                base_profile_payload(self.config_values.sender, neutral),
+                timeout=900,
+            )
+            if str(response.get("status") or "").lower() != "completed":
+                base = response.get("base_rotation")
+                firmware_error = base.get("error") if isinstance(base, dict) else None
+                raise RuntimeError(
+                    "Base profile calibration failed: "
+                    f"{firmware_error or response.get('error') or 'firmware returned failed'}"
+                )
+            return response
+
+        self._run_worker(
+            "base profile calibration",
+            work,
+            self._show_base_profile_result,
+        )
+
+    def _show_base_profile_result(self, response: Dict[str, Any]) -> None:
+        base = response.get("base_rotation")
+        validation = base.get("verySlowValidation") if isinstance(base, dict) else None
+        if not isinstance(validation, dict):
+            self._info("Base profile completed, but the firmware did not return veryslow validation telemetry.")
+            return
+
+        summary = (
+            "Base profile and automatic veryslow verification passed.\n\n"
+            f"Veryslow learning passes: {validation.get('calibrationPasses', '-')}\n"
+            f"Full revolution left: {validation.get('leftFullRevMs', '-')} ms, "
+            f"{validation.get('leftCountsPerRev', '-')} counts\n"
+            f"Full revolution right: {validation.get('rightFullRevMs', '-')} ms, "
+            f"{validation.get('rightCountsPerRev', '-')} counts"
+        )
+        self.last_result_text.set("Base profile and veryslow verification passed")
+        messagebox.showinfo("Base Profile Result", summary)
 
     def base_status(self) -> None:
         self._run_worker("base status", lambda: self.robot.request(base_status_payload(self.config_values.sender)))
@@ -2029,6 +2114,40 @@ class CalibrationWizard(tk.Tk):
         row["elbow"].set(self.controller_angles["ELBOW"].get())
         row["wrist"].set(self.controller_angles["WRIST"].get())
         row["twist"].set(self.controller_angles["TWIST"].get())
+
+    def send_ik_control(self) -> None:
+        try:
+            distance_y = int(self.ik_control_y.get())
+            height_z = int(self.ik_control_z.get())
+        except (tk.TclError, TypeError, ValueError):
+            messagebox.showerror("Calibration Wizard", "Enter whole-number Y and Z values.")
+            return
+
+        if distance_y < 0:
+            messagebox.showerror("Calibration Wizard", "Y distance must be 0 mm or greater.")
+            return
+        if height_z < 0 or height_z > 50:
+            messagebox.showerror("Calibration Wizard", "Z height must be between 0 and 50 mm.")
+            return
+
+        def work() -> Dict[str, Any]:
+            response = self.robot.request(
+                ik_payload(self.config_values.sender, float(distance_y), float(height_z))
+            )
+            if str(response.get("status") or "").lower() != "completed":
+                raise RuntimeError(
+                    f"Robot rejected IK target Y={distance_y} mm, Z={height_z} mm. "
+                    "Check that the requested point is inside the calibrated workspace."
+                )
+            return response
+
+        self._run_worker(
+            f"IK Y={distance_y} mm Z={height_z} mm",
+            work,
+            on_success=lambda _response: self.last_result_text.set(
+                f"IK completed: Y={distance_y} mm, Z={height_z} mm"
+            ),
+        )
 
     def move_ik_row(self, plane: str, kind: str) -> None:
         row = self.ik_rows[plane][kind]

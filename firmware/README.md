@@ -47,6 +47,13 @@ Backward-compatible alias
 {"action":"baseRotate","action_id":"71b","controlType":"CALIBRATE_BOTH","sender":"ai_server"}
 ```
 
+After the normal left/right neutral calibration, firmware learns and saves a
+balanced `veryslow` angle for each direction. It then verifies one additional
+full revolution left and right at those learned speeds. The final timing must
+be balanced, and each final encoder count must remain within 5 percent of the
+directional count learned by the primary calibration. A mismatch fails
+calibration and restores the previous saved profile.
+
 Rotate by firmware steps. There are 216 firmware steps per full base rotation,
 so 2 firmware steps are about 1 physical tooth on the 108-tooth base gear.
 `ENCODER` uses firmware steps, not raw AS5600 counts. If calibration exists,
@@ -77,7 +84,7 @@ Backward-compatible step alias:
 Fields:
 - `controlType`: `"STATUS" | "HOME" | "CALIBRATE" | "CALIBRATE_PROFILE" | "CALIBRATE_BOTH" | "STEPS" | "ENCODER"`
 - `direction`: `"LEFT" | "RIGHT"` for commands that move in a specified direction
-- `speed`: `"veryslow" | "slow" | "regular" | "fast" | "superfast"`; base rotation uses neutral offsets of 8, 12, 18, 20, and 30. For `"ENCODER"`/`"STEPS"`, omitted speed defaults to `slow`; explicit speed values are honored.
+- `speed`: `"veryslow" | "slow" | "regular" | "fast" | "superfast"`; base rotation initially uses neutral offsets of 8, 12, 18, 20, and 30. Profile calibration may independently move the left/right `veryslow` angles toward neutral, and those learned angles are persisted. For `"ENCODER"`/`"STEPS"`, omitted speed defaults to `slow`; explicit speed values are honored.
 - `value`: firmware steps when `controlType` is `"ENCODER"`; 216 steps is one full base rotation.
 - `steps`: optional alias for `value` when `controlType` is `"STEPS"`
 - `neutralServoAngle`: optional neutral override for `"CALIBRATE_PROFILE"` or `"CALIBRATE_BOTH"`

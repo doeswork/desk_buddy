@@ -243,7 +243,7 @@ The IK movement can still fail if the resulting elbow/wrist sequence is blocked 
 | `STATUS` | none | Updates encoder tracking, corrects position to zero if true north is pressed, and returns status |
 | `HOME` | `direction`; optional `speed` | Rotates until the true-north input is detected and makes position trusted |
 | `CALIBRATE` | `direction`; optional `speed` | Measures counts per revolution for one direction |
-| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Runs the complete left/right counts, timing, neutral-balance, and speed-profile calibration |
+| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Runs the complete left/right counts and neutral-balance calibration, learns a balanced `veryslow` profile, then verifies one final full revolution each way |
 | `CALIBRATE_BOTH` | optional `neutralServoAngle` | Alias for `CALIBRATE_PROFILE` |
 | `ENCODER` | `direction`, positive `value`; optional `speed` | Moves a number of firmware base steps; despite the name, `value` is not raw encoder counts |
 | `STEPS` | `direction`, positive `value` or `steps`; optional `speed` | Same firmware-step movement as `ENCODER` |
@@ -253,6 +253,8 @@ The IK movement can still fail if the resulting elbow/wrist sequence is blocked 
 Accepted `direction` values are `LEFT` and `RIGHT`.
 
 Accepted speed labels are `veryslow`, `slow`, `regular`, `fast`, and `superfast`. Missing speed defaults to `slow` for `ENCODER`/`STEPS`, and `veryslow` for the other controls. An unrecognized supplied speed also becomes `veryslow`.
+
+The initial speed-angle offsets are fixed defaults, but `CALIBRATE_PROFILE` independently learns the left and right `veryslow` angles. Learned speed-profile angles are saved in the `rot` Preferences namespace and are no longer overwritten by defaults when firmware reloads them.
 
 There are `216` firmware steps per base revolution. `ENCODER` and `STEPS` use calibrated directional counts when available; otherwise they use an estimated `24576` counts per revolution. These step modes can therefore operate before calibration, but estimated movement is not precision motion.
 
@@ -265,9 +267,13 @@ Every terminal response contains `base_rotation`. Its fields are:
 - State: `calibrated`, `profileCalibrated`, `positionTrusted`, `baseAngleDegrees`, `basePositionCounts`.
 - Counts/math: `leftCountsPerRev`, `rightCountsPerRev`, `driveGearTeeth`, `baseGearTeeth`, `baseStepsPerRev`, `encoderSign`, directional/average counts per step, estimated counts fields, and `usingEstimatedStepCounts`.
 - Stencil/runtime: `rotationOffsetDegrees`.
-- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, pass count, timing difference, balanced flag, phase, pulse diagnostics, full-revolution timings, and nested `speedProfile` angles.
+- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, pass count, timing difference, balanced flag, phase, pulse diagnostics, full-revolution timings, nested `speedProfile` angles, and `verySlowValidation`.
 - Hardware diagnostics: true-north pressed/level/hit count and `rawEncoder`.
 - Failure: optional `error` while the outer status is `failed`.
+
+`verySlowValidation` reports the learned-speed pass count, final full-revolution time/count measurements, balance result, and `validated`. Calibration succeeds only when the final left and right `veryslow` revolutions have balanced timing and each encoder count remains within 5% of the directional count learned by the primary calibration.
+
+Successful `veryslow` validation is persisted as `vs_valid` in the `rot` namespace and is exposed by `calibrationvalues` as `base_rotation_veryslowValidated`. Older saved profiles remain usable but report this new field as false until the updated profile calibration succeeds.
 
 ## 5. Calibration API
 
@@ -342,7 +348,7 @@ Returns a complete calibration inventory under `calibrationvalues`.
 | IK points | `hover_over_min`, `hover_over_mid`, `hover_over_max`, `hover_min_120`, `hover_mid_120`, `hover_max_120`; parsed object, `null`, or raw stored string if invalid JSON |
 | IK readiness | `ik_hover_calibrated`, `ik_z120_calibrated`, `ik_z50_calibrated`, `ik_hover_source`, `ik_z120_source`, `ik_z50_source` |
 | Stencil | `rot_off_deg`, `ik_off_mm`, `st_map`, `stencil_calibrated`, `stencil_runtime_mode` |
-| Base rotation | `base_rotation_calibrated`, `base_rotation_profileCalibrated`, `base_rotation_leftCountsPerRev`, `base_rotation_rightCountsPerRev`, `base_rotation_lastCounts`, `base_rotation_lastValid`, `base_rotation_ready` |
+| Base rotation | `base_rotation_calibrated`, `base_rotation_profileCalibrated`, `base_rotation_veryslowValidated`, `base_rotation_leftCountsPerRev`, `base_rotation_rightCountsPerRev`, `base_rotation_lastCounts`, `base_rotation_lastValid`, `base_rotation_ready` |
 | Combined readiness | `motion_calibration_ready`, `initial_calibration_ready` |
 
 `st_map` is returned as a JSON-encoded string, not a nested object.

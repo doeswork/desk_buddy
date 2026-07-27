@@ -166,6 +166,7 @@ class CalibrationStatusTests(unittest.TestCase):
         rows = build_calibration_status_rows(
             {
                 "base_rotation_profileCalibrated": True,
+                "base_rotation_veryslowValidated": True,
                 "base_rotation_calibrated": True,
                 "base_rotation_leftCountsPerRev": 24000,
                 "base_rotation_rightCountsPerRev": 24100,
@@ -185,6 +186,7 @@ class CalibrationStatusTests(unittest.TestCase):
         self.assertEqual(by_key["hover_over_mid"]["state"], "MISSING")
         self.assertEqual(by_key["hover_min_120"]["state"], "OPTIONAL")
         self.assertEqual(by_key["rot_off_deg"]["state"], "SAVED")
+        self.assertEqual(by_key["base_rotation_veryslowValidated"]["state"], "SAVED")
 
 
 class PhotoDecodeTests(unittest.TestCase):

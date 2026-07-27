@@ -537,6 +537,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     long leftCountsPerRev = rotPrefs.getLong("left_cpr", 0);
     long rightCountsPerRev = rotPrefs.getLong("right_cpr", 0);
     bool lastValid = rotPrefs.getBool("last_valid", false);
+    bool verySlowValidated = rotPrefs.getBool("vs_valid", false);
 
     doc["base_rotation_calibrated"] = baseCalibrated;
     doc["base_rotation_profileCalibrated"] = baseProfileCalibrated;
@@ -544,6 +545,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     doc["base_rotation_rightCountsPerRev"] = rightCountsPerRev;
     doc["base_rotation_lastCounts"] = rotPrefs.getLong("last_counts", 0);
     doc["base_rotation_lastValid"] = lastValid;
+    doc["base_rotation_veryslowValidated"] = verySlowValidated;
     baseRotationReady = baseCalibrated && baseProfileCalibrated &&
                         leftCountsPerRev > 0 && rightCountsPerRev > 0 &&
                         lastValid;
@@ -556,6 +558,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     doc["base_rotation_rightCountsPerRev"] = nullptr;
     doc["base_rotation_lastCounts"] = nullptr;
     doc["base_rotation_lastValid"] = nullptr;
+    doc["base_rotation_veryslowValidated"] = nullptr;
     doc["base_rotation_ready"] = false;
   }
 

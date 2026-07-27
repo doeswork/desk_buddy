@@ -1,5 +1,6 @@
 // ActionBaseRotate.cpp
 #include "ActionBaseRotate.h"
+#include "BuddyMQTT.h"
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
 #include <Arduino.h>
@@ -34,6 +35,7 @@ namespace {
   constexpr const char KEY_LEFT_FULL_REV_MS[] = "left_ms";
   constexpr const char KEY_RIGHT_FULL_REV_MS[] = "right_ms";
   constexpr const char KEY_ENCODER_SIGN[] = "enc_sign";
+  constexpr const char KEY_VERY_SLOW_VALIDATED[] = "vs_valid";
 
   constexpr unsigned long MOVE_TIMEOUT_MS = 15000;
   constexpr unsigned long HOME_TIMEOUT_MS = 20000;
@@ -55,6 +57,10 @@ namespace {
   constexpr int CALIBRATION_MIN_PASSES = 2;
   constexpr int CALIBRATION_MAX_PASSES = 8;
   constexpr unsigned long CALIBRATION_BALANCE_TOLERANCE_MS = 2000;
+  constexpr int VERY_SLOW_CALIBRATION_MAX_PASSES = 4;
+  constexpr unsigned long VERY_SLOW_BALANCE_TOLERANCE_MS = 1500;
+  constexpr int VERY_SLOW_MIN_SLOWDOWN_PERCENT = 10;
+  constexpr int VERY_SLOW_MIN_OFFSET = 2;
   constexpr long NO_NEUTRAL_OVERRIDE = -1;
   constexpr size_t SPEED_PROFILE_COUNT = 5;
 
@@ -109,6 +115,13 @@ namespace {
   long calibrationLastPulseMinCounts = 0;
   uint32_t calibrationIgnoredPulseCount = 0;
   bool usingEstimatedStepCounts = false;
+  int verySlowCalibrationPasses = 0;
+  bool verySlowCalibrationBalanced = false;
+  unsigned long verySlowLeftFullRevMs = 0;
+  unsigned long verySlowRightFullRevMs = 0;
+  long verySlowLeftCountsPerRev = 0;
+  long verySlowRightCountsPerRev = 0;
+  bool verySlowValidationPassed = false;
 
   struct RotationProfileBackup {
     int resting;
@@ -116,6 +129,7 @@ namespace {
     long rightCpr;
     bool calibratedFlag;
     bool profileCalibratedFlag;
+    bool verySlowValidationFlag;
     unsigned long leftMs;
     unsigned long rightMs;
     int leftAngles[SPEED_PROFILE_COUNT];
@@ -123,6 +137,7 @@ namespace {
   };
 
   void saveLastPosition();
+  long signedCalibrationDiffMs(unsigned long leftMs, unsigned long rightMs);
 
   void IRAM_ATTR onTrueNorthFalling() {
     ++trueNorthHitCount;
@@ -180,6 +195,9 @@ namespace {
   void stopServo() {
     baseServo.write(restingValue);
     Serial.println("[Rotate] stop");
+    // Long profile calibration is synchronous. Service/reconnect MQTT only
+    // after motion stops so network delays can never extend a powered move.
+    BuddyMQTT::maintain();
   }
 
   int clampServoAngle(int angle) {
@@ -235,6 +253,7 @@ namespace {
     backup.rightCpr = rightCountsPerRev;
     backup.calibratedFlag = calibrated;
     backup.profileCalibratedFlag = profileCalibrated;
+    backup.verySlowValidationFlag = verySlowValidationPassed;
     backup.leftMs = leftFullRevMs;
     backup.rightMs = rightFullRevMs;
     for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
@@ -250,6 +269,7 @@ namespace {
     rightCountsPerRev = backup.rightCpr;
     calibrated = backup.calibratedFlag;
     profileCalibrated = backup.profileCalibratedFlag;
+    verySlowValidationPassed = backup.verySlowValidationFlag;
     leftFullRevMs = backup.leftMs;
     rightFullRevMs = backup.rightMs;
     for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
@@ -353,6 +373,7 @@ namespace {
     prefs.putLong(KEY_LAST_BASE_COUNTS, basePositionCounts);
     prefs.putBool(KEY_LAST_KNOWN_VALID, positionTrusted);
     prefs.putInt(KEY_ENCODER_SIGN, ENCODER_SIGN);
+    prefs.putBool(KEY_VERY_SLOW_VALIDATED, verySlowValidationPassed);
     prefs.end();
   }
 
@@ -383,6 +404,7 @@ namespace {
     positionTrusted = prefs.getBool(KEY_LAST_KNOWN_VALID, false);
     int savedEncoderSign = prefs.getInt(KEY_ENCODER_SIGN, 0);
     profileCalibrated = prefs.getBool(KEY_PROFILE_CALIBRATED, false);
+    verySlowValidationPassed = prefs.getBool(KEY_VERY_SLOW_VALIDATED, false);
     restingValue = prefs.getInt(KEY_RESTING_VALUE, restingValue);
     leftFullRevMs = prefs.getULong(KEY_LEFT_FULL_REV_MS, 0);
     rightFullRevMs = prefs.getULong(KEY_RIGHT_FULL_REV_MS, 0);
@@ -391,7 +413,6 @@ namespace {
       rightSpeedAngles[i] = prefs.getInt(KEY_RIGHT_SPEED_ANGLES[i], rightSpeedAngles[i]);
     }
     prefs.end();
-    initFixedSpeedProfileAngles();
 
     if (savedEncoderSign != ENCODER_SIGN) {
       positionTrusted = false;
@@ -686,6 +707,13 @@ namespace {
 
   bool measureFullRevolution(bool rotateLeft, int driveAngle, const char* phaseName,
                              unsigned long& revMs, long& countsPerRev, const char*& error) {
+    if (!isTrueNorthPressed()) {
+      Serial.printf("[Rotate] %s re-acquiring true north before revolution measurement\n", phaseName);
+      if (!seekTrueNorthRaw(rotateLeft, driveAngle, PROFILE_CALIBRATION_TIMEOUT_MS, error)) {
+        return false;
+      }
+    }
+
     basePositionCounts = 0;
     positionTrusted = true;
     calibrationPhase = rotateLeft ? "measuring_left_revolution" : "measuring_right_revolution";
@@ -794,6 +822,137 @@ namespace {
     }
   }
 
+  unsigned long allowedVerySlowTimeDifference(unsigned long leftMs, unsigned long rightMs) {
+    unsigned long averageMs = (leftMs + rightMs) / 2;
+    unsigned long percentTolerance = averageMs * 15UL / 100UL;
+    return percentTolerance > VERY_SLOW_BALANCE_TOLERANCE_MS
+        ? percentTolerance
+        : VERY_SLOW_BALANCE_TOLERANCE_MS;
+  }
+
+  bool verySlowTimesBalanced(unsigned long leftMs, unsigned long rightMs) {
+    long differenceMs = signedCalibrationDiffMs(leftMs, rightMs);
+    return labs(differenceMs) <= static_cast<long>(allowedVerySlowTimeDifference(leftMs, rightMs));
+  }
+
+  bool verySlowIsActuallySlower(unsigned long measuredMs, unsigned long calibrationMs) {
+    if (calibrationMs == 0) return true;
+    return measuredMs * 100UL >= calibrationMs * (100UL + VERY_SLOW_MIN_SLOWDOWN_PERCENT);
+  }
+
+  bool adjustVerySlowTowardNeutral(bool rotateLeft) {
+    int& angle = rotateLeft ? leftSpeedAngles[0] : rightSpeedAngles[0];
+    int offset = rotateLeft ? restingValue - angle : angle - restingValue;
+    if (offset <= VERY_SLOW_MIN_OFFSET) return false;
+    angle += rotateLeft ? 1 : -1;
+    Serial.printf("[Rotate] veryslow slow-down dir=%s newAngle=%d offset=%d\n",
+                  rotateLeft ? "LEFT" : "RIGHT", angle, offset - 1);
+    return true;
+  }
+
+  bool calibrateVerySlowSpeed(const char*& error) {
+    verySlowCalibrationPasses = 0;
+    verySlowCalibrationBalanced = false;
+    calibrationPhase = "calibrating_veryslow";
+
+    for (int pass = 1; pass <= VERY_SLOW_CALIBRATION_MAX_PASSES; ++pass) {
+      unsigned long measuredLeftMs = 0;
+      unsigned long measuredRightMs = 0;
+      long measuredLeftCounts = 0;
+      long measuredRightCounts = 0;
+      int leftAngle = leftSpeedAngles[0];
+      int rightAngle = rightSpeedAngles[0];
+
+      Serial.printf("[Rotate] veryslow calibration pass=%d leftAngle=%d rightAngle=%d\n",
+                    pass, leftAngle, rightAngle);
+      if (!measureFullRevolution(true, leftAngle, "VERYSLOW_CAL_LEFT",
+                                 measuredLeftMs, measuredLeftCounts, error)) {
+        return false;
+      }
+      if (!measureFullRevolution(false, rightAngle, "VERYSLOW_CAL_RIGHT",
+                                 measuredRightMs, measuredRightCounts, error)) {
+        return false;
+      }
+
+      verySlowCalibrationPasses = pass;
+      verySlowLeftFullRevMs = measuredLeftMs;
+      verySlowRightFullRevMs = measuredRightMs;
+      verySlowLeftCountsPerRev = measuredLeftCounts;
+      verySlowRightCountsPerRev = measuredRightCounts;
+      bool leftSlowEnough = verySlowIsActuallySlower(measuredLeftMs, leftFullRevMs);
+      bool rightSlowEnough = verySlowIsActuallySlower(measuredRightMs, rightFullRevMs);
+      bool balanced = verySlowTimesBalanced(measuredLeftMs, measuredRightMs);
+
+      Serial.printf("[Rotate] veryslow calibration pass=%d leftMs=%lu rightMs=%lu diff=%ld balanced=%d leftSlowEnough=%d rightSlowEnough=%d leftCounts=%ld rightCounts=%ld\n",
+                    pass, measuredLeftMs, measuredRightMs,
+                    signedCalibrationDiffMs(measuredLeftMs, measuredRightMs), balanced,
+                    leftSlowEnough, rightSlowEnough, measuredLeftCounts, measuredRightCounts);
+
+      if (balanced && leftSlowEnough && rightSlowEnough) {
+        verySlowCalibrationBalanced = true;
+        return true;
+      }
+
+      bool adjusted = false;
+      if (!leftSlowEnough) adjusted = adjustVerySlowTowardNeutral(true) || adjusted;
+      if (!rightSlowEnough) adjusted = adjustVerySlowTowardNeutral(false) || adjusted;
+      if (leftSlowEnough && rightSlowEnough && !balanced) {
+        if (measuredLeftMs > measuredRightMs) {
+          adjusted = adjustVerySlowTowardNeutral(false) || adjusted;
+        } else {
+          adjusted = adjustVerySlowTowardNeutral(true) || adjusted;
+        }
+      }
+      if (!adjusted) break;
+    }
+
+    error = "veryslow speed calibration did not balance";
+    return false;
+  }
+
+  bool countsWithinPercent(long actual, long expected, int tolerancePercent) {
+    if (actual <= 0 || expected <= 0) return false;
+    long difference = labs(actual - expected);
+    return difference * 100L <= expected * tolerancePercent;
+  }
+
+  bool verifyVerySlowFullRevolutions(const char*& error) {
+    calibrationPhase = "verifying_veryslow_full_revolutions";
+    unsigned long leftMs = 0;
+    unsigned long rightMs = 0;
+    long leftCounts = 0;
+    long rightCounts = 0;
+
+    if (!measureFullRevolution(true, leftSpeedAngles[0], "VERYSLOW_VERIFY_LEFT",
+                               leftMs, leftCounts, error)) {
+      return false;
+    }
+    if (!measureFullRevolution(false, rightSpeedAngles[0], "VERYSLOW_VERIFY_RIGHT",
+                               rightMs, rightCounts, error)) {
+      return false;
+    }
+
+    verySlowLeftFullRevMs = leftMs;
+    verySlowRightFullRevMs = rightMs;
+    verySlowLeftCountsPerRev = leftCounts;
+    verySlowRightCountsPerRev = rightCounts;
+    verySlowCalibrationBalanced = verySlowTimesBalanced(leftMs, rightMs);
+    bool countsValid = countsWithinPercent(leftCounts, leftCountsPerRev, 5) &&
+                       countsWithinPercent(rightCounts, rightCountsPerRev, 5);
+    Serial.printf("[Rotate] veryslow final full-rev verify leftMs=%lu rightMs=%lu diff=%ld balanced=%d leftCounts=%ld rightCounts=%ld countsValid=%d\n",
+                  leftMs, rightMs, signedCalibrationDiffMs(leftMs, rightMs),
+                  verySlowCalibrationBalanced, leftCounts, rightCounts, countsValid);
+    if (!verySlowCalibrationBalanced) {
+      error = "veryslow full revolution timing mismatch";
+      return false;
+    }
+    if (!countsValid) {
+      error = "veryslow full revolution encoder mismatch";
+      return false;
+    }
+    return true;
+  }
+
   void deriveSpeedProfile() {
     initFixedSpeedProfileAngles();
     for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
@@ -892,6 +1051,13 @@ namespace {
     calibrationLastPulseCounts = 0;
     calibrationLastPulseMinCounts = 0;
     calibrationIgnoredPulseCount = 0;
+    verySlowCalibrationPasses = 0;
+    verySlowCalibrationBalanced = false;
+    verySlowLeftFullRevMs = 0;
+    verySlowRightFullRevMs = 0;
+    verySlowLeftCountsPerRev = 0;
+    verySlowRightCountsPerRev = 0;
+    verySlowValidationPassed = false;
 
     if (!applyCalibrationNeutralOverride(neutralOverride, error)) {
       restoreProfileBackup(backup);
@@ -981,6 +1147,20 @@ namespace {
       restoreProfileBackup(backup);
       return false;
     }
+
+    if (!calibrateVerySlowSpeed(error)) {
+      calibrationPhase = "failed";
+      restoreProfileBackup(backup);
+      return false;
+    }
+
+    if (!verifyVerySlowFullRevolutions(error)) {
+      calibrationPhase = "failed";
+      restoreProfileBackup(backup);
+      return false;
+    }
+
+    verySlowValidationPassed = true;
 
     profileCalibrated = calibrated;
     basePositionCounts = 0;
@@ -1094,7 +1274,7 @@ namespace {
   }
 
   void buildStatusJson(String& out, const char* error = nullptr) {
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<2304> doc;
     doc["calibrated"] = calibrated;
     doc["profileCalibrated"] = profileCalibrated;
     doc["positionTrusted"] = positionTrusted;
@@ -1128,6 +1308,14 @@ namespace {
     doc["calibrationIgnoredPulseCount"] = calibrationIgnoredPulseCount;
     doc["leftFullRevMs"] = leftFullRevMs;
     doc["rightFullRevMs"] = rightFullRevMs;
+    JsonObject verySlowValidation = doc.createNestedObject("verySlowValidation");
+    verySlowValidation["calibrationPasses"] = verySlowCalibrationPasses;
+    verySlowValidation["balanced"] = verySlowCalibrationBalanced;
+    verySlowValidation["leftFullRevMs"] = verySlowLeftFullRevMs;
+    verySlowValidation["rightFullRevMs"] = verySlowRightFullRevMs;
+    verySlowValidation["leftCountsPerRev"] = verySlowLeftCountsPerRev;
+    verySlowValidation["rightCountsPerRev"] = verySlowRightCountsPerRev;
+    verySlowValidation["validated"] = verySlowValidationPassed;
     doc["trueNorthPressed"] = readTrueNorthPin();
     doc["trueNorthPinLevel"] = digitalRead(TRUE_NORTH_PIN);
     doc["trueNorthHitCount"] = getTrueNorthHitCount();
