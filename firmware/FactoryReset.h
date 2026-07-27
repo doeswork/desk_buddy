@@ -13,7 +13,7 @@ namespace FactoryReset {
   // completed hold even while a network call temporarily blocks loop().
   void maintain();
 
-  // Perform factory reset and reboot
+  // Clear WiFi/MQTT connection settings, preserve robot calibration, and reboot
   void performReset();
 }
 

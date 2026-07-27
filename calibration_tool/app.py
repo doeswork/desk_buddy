@@ -21,6 +21,7 @@ try:
     from .config import DEFAULT_CA_CERT, ENV_PATH, WizardConfig, load_config, save_config
     from .mqtt_robot import (
         MqttRobot,
+        ReachAndGrabResult,
         VisualCalibrationCapture,
         base_angle_payload,
         base_degrees_payload,
@@ -30,6 +31,7 @@ try:
         gripper_payload,
         ik_payload,
         perch_payload,
+        reach_and_grab_payload,
         save_hover_payload,
         save_perch_payload,
         servo_payload,
@@ -39,6 +41,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from config import DEFAULT_CA_CERT, ENV_PATH, WizardConfig, load_config, save_config
     from mqtt_robot import (
         MqttRobot,
+        ReachAndGrabResult,
         VisualCalibrationCapture,
         base_angle_payload,
         base_degrees_payload,
@@ -48,6 +51,7 @@ except ImportError:  # pragma: no cover - direct script execution
         gripper_payload,
         ik_payload,
         perch_payload,
+        reach_and_grab_payload,
         save_hover_payload,
         save_perch_payload,
         servo_payload,
@@ -69,6 +73,15 @@ GOOD = "#1f7a4d"
 WARN = "#9a6700"
 BAD = "#b42318"
 UI_ZOOM_LEVELS = (0.75, 0.85, 1.0, 1.1, 1.25, 1.4, 1.5)
+
+
+def fit_image_to_width(source_width: int, source_height: int, available_width: int) -> tuple[int, int]:
+    """Return uncropped image dimensions that fit the available pane width."""
+    if source_width <= 0 or source_height <= 0 or available_width <= 0:
+        raise ValueError("Image and available widths must be positive")
+    output_width = min(source_width, available_width)
+    output_height = max(1, round(source_height * (output_width / source_width)))
+    return output_width, output_height
 
 
 def build_calibration_status_rows(values: Dict[str, Any]) -> list[Dict[str, str]]:
@@ -235,6 +248,8 @@ def format_topic_log_event(kind: str, payload: Any) -> Optional[str]:
 
     if kind == "worker_success":
         label = payload[0] if isinstance(payload, tuple) and payload else str(payload)
+        if label == "reach and grab":
+            return "APP reach and grab terminal result received"
         return f"APP {label} completed"
 
     if kind == "worker_error":
@@ -249,6 +264,33 @@ def format_topic_log_event(kind: str, payload: Any) -> Optional[str]:
         return f"APP {payload}"
 
     return None
+
+
+def explain_reach_and_grab_failure(response: Dict[str, Any]) -> tuple[str, list[str]]:
+    """Turn a Visual AI failure code into operator-facing timeout semantics."""
+    error = str(response.get("error") or "unknown Vision server error")
+    failed_action = str(response.get("failed_action") or "robot command")
+    failed_step = response.get("failed_step")
+    step_text = f"step {failed_step} ({failed_action})" if failed_step is not None else failed_action
+
+    if error == "robot_command_timeout":
+        return (
+            f"Failed — firmware response timeout during {step_text}.",
+            [
+                "Timeout type: Vision-server per-command firmware response timeout",
+                (
+                    "Meaning: the Vision server published this robot command but did not receive "
+                    "the exact matching firmware status=completed before its command deadline."
+                ),
+                (
+                    "This was not a camera, detection, or GUI timeout. The command may have been "
+                    "missed, may still have executed, or its response may have been lost. Treat the "
+                    "robot's physical state as uncertain and do not automatically retry."
+                ),
+            ],
+        )
+
+    return f"Failed — {error}", []
 
 
 def _compact_log_line(direction: str, label: str, action_id: str, payload: Dict[str, Any]) -> str:
@@ -295,9 +337,7 @@ class CalibrationWizard(tk.Tk):
         }
         self.perch_angle_vars = {"ELBOW": tk.IntVar(value=90), "WRIST": tk.IntVar(value=90), "TWIST": tk.IntVar(value=90)}
         self.base_neutral = tk.IntVar(value=90)
-        self.base_angle = tk.DoubleVar(value=0)
-        self.base_degrees = tk.DoubleVar(value=10)
-        self.base_steps = tk.IntVar(value=1)
+        self.base_rotation_value = tk.IntVar(value=10)
         self.base_direction = tk.StringVar(value="LEFT")
         self.base_speed = tk.StringVar(value="slow")
         self.observed_base_text = tk.StringVar(value="Base: no status yet")
@@ -306,12 +346,31 @@ class CalibrationWizard(tk.Tk):
         self.stencil_status: Dict[str, Any] = {}
         self.visual_calibration_magnet_position = tk.IntVar(value=1)
         self.visual_calibration_status_text = tk.StringVar(value="Not run yet")
+        self.reach_and_grab_target = tk.StringVar(value="")
+        self.reach_and_grab_use_model = tk.BooleanVar(value=False)
+        self.reach_and_grab_model_name = tk.StringVar(value="")
+        self.reach_and_grab_box_threshold = tk.DoubleVar(value=0.35)
+        self.reach_and_grab_text_threshold = tk.DoubleVar(value=0.25)
+        self.reach_and_grab_magnet_position = tk.IntVar(value=1)
+        self.reach_and_grab_workflow_id = tk.StringVar(value="")
+        self.reach_and_grab_workflow_event_id = tk.StringVar(value="")
+        self.reach_and_grab_status_text = tk.StringVar(value="Not run yet")
+        self.reach_and_grab_action_text = tk.StringVar(value="Action ID: —")
+        self.reach_and_grab_running = False
+        self.reach_and_grab_current_action_id = ""
+        self.reach_and_grab_request: Dict[str, Any] = {}
+        self.reach_and_grab_progress: list[Dict[str, Any]] = []
         self.live_mode = tk.BooleanVar(value=False)
         self.user_editing_until = 0.0
         self.last_photo_path: Optional[Path] = None
         self.photo_image: Any = None
         self.photo_labels: list[ttk.Label] = []
+        self.controller_photo_image: Any = None
+        self.controller_photo_resize_job: Optional[str] = None
+        self.controller_photo_render_width = 0
         self.visual_calibration_photo_image: Any = None
+        self.reach_and_grab_photo_image: Any = None
+        self.reach_and_grab_photo_path: Optional[Path] = None
         self.topic_log_lines: list[str] = []
         self._last_ik_sync_signature = ""
         self._last_perch_sync_signature = ""
@@ -385,6 +444,8 @@ class CalibrationWizard(tk.Tk):
             controller_width = max(300, min(500, round(375 * zoom)))
             self.controller_shell.configure(width=controller_width)
         self.update_idletasks()
+        if hasattr(self, "controller_photo_panel"):
+            self._schedule_controller_photo_resize()
 
     def _toggle_maximize(self) -> None:
         if self._manual_maximized:
@@ -505,12 +566,14 @@ class CalibrationWizard(tk.Tk):
         self.base_perch_tab = ttk.Frame(self.notebook, padding=12)
         self.ik_tab = ttk.Frame(self.notebook, padding=12)
         self.visual_calibration_tab = ttk.Frame(self.notebook, padding=12)
+        self.reach_and_grab_tab = ttk.Frame(self.notebook, padding=12)
         self.stencil_tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(self.setup_tab, text="Setup")
         self.notebook.add(self.status_tab, text="Status")
         self.notebook.add(self.base_perch_tab, text="Base + Perch")
         self.notebook.add(self.ik_tab, text="IK")
         self.notebook.add(self.visual_calibration_tab, text="Visual Calibration")
+        self.notebook.add(self.reach_and_grab_tab, text="Reach and Grab")
         self.notebook.add(self.stencil_tab, text="Stencil")
 
         self.controller_shell = ttk.Frame(workspace, style="Panel.TFrame", padding=8)
@@ -562,6 +625,7 @@ class CalibrationWizard(tk.Tk):
         self._build_base_perch_tab()
         self._build_ik_tab()
         self._build_visual_calibration_tab()
+        self._build_reach_and_grab_tab()
         self._build_stencil_tab()
         self._build_servo_controls(self.controller_content)
         self._build_topic_log()
@@ -815,38 +879,98 @@ class CalibrationWizard(tk.Tk):
         ttk.Button(gripper, text="Soft hold", style="Compact.TButton", command=lambda: self.run_gripper("SOFTHOLD")).grid(row=1, column=1, sticky="ew", padx=3, pady=(5, 0))
         ttk.Button(gripper, text="Drop", style="Compact.TButton", command=lambda: self.run_gripper("DROP")).grid(row=1, column=2, sticky="ew", padx=(3, 0), pady=(5, 0))
 
-        base = ttk.LabelFrame(parent, text="Base", padding=6, style="Card.TLabelframe")
+        base = ttk.LabelFrame(parent, text="Base rotation", padding=6, style="Card.TLabelframe")
         base.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         base.columnconfigure(1, weight=1)
-        ttk.Label(base, text="Speed").grid(row=0, column=0, sticky="w", pady=3)
-        ttk.OptionMenu(base, self.base_speed, self.base_speed.get(), "veryslow", "slow", "regular", "fast", "superfast").grid(row=0, column=1, sticky="ew", padx=(6, 10), pady=3)
-        ttk.Label(base, text="Direction").grid(row=0, column=2, sticky="w", pady=3)
-        ttk.OptionMenu(base, self.base_direction, self.base_direction.get(), "LEFT", "RIGHT").grid(row=0, column=3, sticky="ew", padx=(6, 0), pady=3)
+        ttk.Label(base, text="Rotation value", font=self.ui_fonts["small_bold"]).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 3),
+        )
+        self.base_rotation_value_entry = ttk.Spinbox(
+            base,
+            from_=0,
+            to=9999,
+            increment=1,
+            textvariable=self.base_rotation_value,
+        )
+        self.base_rotation_value_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._bind_edit_guard(self.base_rotation_value_entry)
 
-        ttk.Label(base, text="Angle").grid(row=1, column=0, sticky="w", pady=3)
-        angle_entry = ttk.Entry(base, textvariable=self.base_angle, width=8)
-        angle_entry.grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=3)
-        self._bind_edit_guard(angle_entry)
-        ttk.Button(base, text="Move Angle", style="Compact.TButton", command=self.move_base_angle).grid(row=1, column=2, columnspan=2, sticky="ew", pady=3)
+        ttk.Label(base, text="Direction").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.OptionMenu(base, self.base_direction, self.base_direction.get(), "LEFT", "RIGHT").grid(
+            row=2,
+            column=1,
+            sticky="ew",
+            padx=(6, 0),
+            pady=3,
+        )
+        ttk.Label(base, text="Speed").grid(row=3, column=0, sticky="w", pady=3)
+        ttk.OptionMenu(base, self.base_speed, self.base_speed.get(), "veryslow", "slow", "regular", "fast", "superfast").grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            padx=(6, 0),
+            pady=3,
+        )
 
-        ttk.Label(base, text="Degrees").grid(row=2, column=0, sticky="w", pady=3)
-        degrees_entry = ttk.Entry(base, textvariable=self.base_degrees, width=8)
-        degrees_entry.grid(row=2, column=1, sticky="ew", padx=(6, 10), pady=3)
-        self._bind_edit_guard(degrees_entry)
-        ttk.Button(base, text="Move Degrees", style="Compact.TButton", command=self.move_base_degrees).grid(row=2, column=2, columnspan=2, sticky="ew", pady=3)
+        rotation_actions = ttk.Frame(base, style="Panel.TFrame")
+        rotation_actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        rotation_actions.columnconfigure(0, weight=1)
+        ttk.Button(
+            rotation_actions,
+            text="Go to absolute angle",
+            style="Compact.TButton",
+            command=self.move_base_angle,
+        ).grid(row=0, column=0, sticky="ew", pady=2)
+        ttk.Button(
+            rotation_actions,
+            text="Rotate relative degrees",
+            style="CompactAccent.TButton",
+            command=self.move_base_degrees,
+        ).grid(row=1, column=0, sticky="ew", pady=2)
+        ttk.Button(
+            rotation_actions,
+            text="Rotate firmware steps",
+            style="CompactAccent.TButton",
+            command=self.move_base_steps,
+        ).grid(row=2, column=0, sticky="ew", pady=2)
 
-        ttk.Label(base, text="Steps").grid(row=3, column=0, sticky="w", pady=3)
-        steps_entry = ttk.Entry(base, textvariable=self.base_steps, width=8)
-        steps_entry.grid(row=3, column=1, sticky="ew", padx=(6, 10), pady=3)
-        self._bind_edit_guard(steps_entry)
-        ttk.Button(base, text="Move Steps", style="Compact.TButton", command=self.move_base_steps).grid(row=3, column=2, columnspan=2, sticky="ew", pady=3)
-        ttk.Button(base, text="Read state", style="Compact.TButton", command=self.base_status).grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(base, text="Read state", style="Compact.TButton", command=self.base_status).grid(row=5, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(
             base,
             textvariable=self.observed_base_text,
             foreground=MUTED,
             wraplength=310,
-        ).grid(row=4, column=1, columnspan=3, sticky="w", padx=(6, 0), pady=(8, 0))
+        ).grid(row=5, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
+
+        self.controller_photo_panel = ttk.LabelFrame(
+            parent,
+            text="Camera",
+            padding=6,
+            style="Card.TLabelframe",
+        )
+        self.controller_photo_panel.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        self.controller_photo_panel.columnconfigure(0, weight=1)
+        self.controller_photo_label = ttk.Label(
+            self.controller_photo_panel,
+            text="No photo captured yet",
+            anchor="center",
+        )
+        self.controller_photo_label.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.controller_capture_button = ttk.Button(
+            self.controller_photo_panel,
+            text="Capture Photo",
+            style="CompactAccent.TButton",
+            command=lambda: self.capture_photo("controller"),
+        )
+        self.controller_capture_button.grid(row=1, column=0, sticky="ew")
+        self.controller_photo_panel.bind(
+            "<Configure>",
+            lambda _event: self._schedule_controller_photo_resize(),
+        )
 
     def _build_photo_panel(self, parent: ttk.Frame, row: int, column: int) -> None:
         panel = ttk.LabelFrame(parent, text="Camera", padding=10)
@@ -1015,7 +1139,7 @@ class CalibrationWizard(tk.Tk):
             group.grid(row=row, column=0, sticky="ew", pady=(0, 12))
             group.columnconfigure(7, weight=1)
             self.ik_rows[plane] = {}
-            headers = ["Point", "Distance", "ELBOW", "WRIST", "TWIST", "Actions", "Result"]
+            headers = ["Point", "Distance", "ELBOW", "WRIST", "TWIST", "Robot Controller", "Result"]
             for col, header in enumerate(headers):
                 ttk.Label(group, text=header, font=self.ui_fonts["small_bold"]).grid(row=0, column=col, sticky="w", padx=4)
             for idx, kind in enumerate(("min", "mid", "max"), start=1):
@@ -1038,7 +1162,7 @@ class CalibrationWizard(tk.Tk):
                     entry = ttk.Entry(group, textvariable=vars_for_row[key], width=8)
                     entry.grid(row=idx, column=col, sticky="w", padx=4, pady=4)
                     self._bind_edit_guard(entry)
-                ttk.Button(group, text="Copy Controller Angles To This Row", command=lambda p=plane, k=kind: self.use_controller_for_ik(p, k)).grid(row=idx, column=5, padx=2)
+                ttk.Button(group, text="Import", command=lambda p=plane, k=kind: self.use_controller_for_ik(p, k)).grid(row=idx, column=5, padx=2)
                 ttk.Button(group, text="Move", command=lambda p=plane, k=kind: self.move_ik_row(p, k)).grid(row=idx, column=6, padx=2)
                 if plane in ("z0", "z50"):
                     ttk.Button(group, text="Save", command=lambda p=plane, k=kind: self.save_ik_row(p, k)).grid(row=idx, column=7, padx=2, sticky="w")
@@ -1143,6 +1267,154 @@ class CalibrationWizard(tk.Tk):
         )
         self._set_visual_calibration_result_text(
             "No result yet. Connect to MQTT and capture a visual calibration image."
+        )
+
+    def _build_reach_and_grab_tab(self) -> None:
+        self.reach_and_grab_tab.columnconfigure(0, weight=1)
+        self.reach_and_grab_tab.columnconfigure(1, weight=1)
+        self.reach_and_grab_tab.rowconfigure(1, weight=1)
+
+        request = ttk.LabelFrame(
+            self.reach_and_grab_tab,
+            text="Automatic reach-and-grab request",
+            padding=12,
+            style="Card.TLabelframe",
+        )
+        request.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 10))
+        request.columnconfigure(1, weight=1)
+        request.columnconfigure(3, weight=1)
+        ttk.Label(
+            request,
+            text=(
+                "Describe one object. The GUI sends one detect_object request and then only "
+                "monitors firmware and Vision server progress. The Vision server owns all "
+                "base, IK, gripper, and telemetry child commands."
+            ),
+            foreground=MUTED,
+            wraplength=560,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
+
+        ttk.Label(request, text="Object description").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        target_entry = ttk.Entry(request, textvariable=self.reach_and_grab_target)
+        target_entry.grid(row=1, column=1, columnspan=3, sticky="ew", pady=4)
+        self._bind_edit_guard(target_entry)
+
+        ttk.Checkbutton(
+            request,
+            text="Use configured learned model",
+            variable=self.reach_and_grab_use_model,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Label(request, text="Model name (optional)").grid(row=2, column=2, sticky="e", padx=(8, 8), pady=4)
+        model_entry = ttk.Entry(request, textvariable=self.reach_and_grab_model_name)
+        model_entry.grid(row=2, column=3, sticky="ew", pady=4)
+        self._bind_edit_guard(model_entry)
+
+        ttk.Label(request, text="Box threshold").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=4)
+        box_entry = ttk.Spinbox(
+            request,
+            from_=0.0,
+            to=1.0,
+            increment=0.05,
+            textvariable=self.reach_and_grab_box_threshold,
+            width=9,
+        )
+        box_entry.grid(row=3, column=1, sticky="w", pady=4)
+        self._bind_edit_guard(box_entry)
+        ttk.Label(request, text="Text threshold").grid(row=3, column=2, sticky="e", padx=(8, 8), pady=4)
+        text_entry = ttk.Spinbox(
+            request,
+            from_=0.0,
+            to=1.0,
+            increment=0.05,
+            textvariable=self.reach_and_grab_text_threshold,
+            width=9,
+        )
+        text_entry.grid(row=3, column=3, sticky="w", pady=4)
+        self._bind_edit_guard(text_entry)
+
+        ttk.Label(request, text="Magnet position").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=4)
+        magnet_entry = ttk.Spinbox(
+            request,
+            from_=0,
+            to=999,
+            textvariable=self.reach_and_grab_magnet_position,
+            width=9,
+        )
+        magnet_entry.grid(row=4, column=1, sticky="w", pady=4)
+        self._bind_edit_guard(magnet_entry)
+
+        ttk.Label(request, text="Workflow ID (optional)").grid(row=5, column=0, sticky="w", padx=(0, 8), pady=4)
+        workflow_entry = ttk.Entry(request, textvariable=self.reach_and_grab_workflow_id, width=12)
+        workflow_entry.grid(row=5, column=1, sticky="ew", pady=4)
+        self._bind_edit_guard(workflow_entry)
+        ttk.Label(request, text="Event ID (optional)").grid(row=5, column=2, sticky="e", padx=(8, 8), pady=4)
+        event_entry = ttk.Entry(request, textvariable=self.reach_and_grab_workflow_event_id, width=12)
+        event_entry.grid(row=5, column=3, sticky="ew", pady=4)
+        self._bind_edit_guard(event_entry)
+
+        self.reach_and_grab_button = ttk.Button(
+            request,
+            text="Detect, Reach, and Grab",
+            style="Accent.TButton",
+            command=self.run_reach_and_grab,
+        )
+        self.reach_and_grab_button.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(14, 8))
+        ttk.Label(request, textvariable=self.reach_and_grab_action_text, foreground=MUTED).grid(
+            row=7, column=0, columnspan=4, sticky="w"
+        )
+        ttk.Label(
+            request,
+            textvariable=self.reach_and_grab_status_text,
+            wraplength=560,
+            justify="left",
+        ).grid(row=8, column=0, columnspan=4, sticky="w", pady=(3, 0))
+
+        preview = ttk.LabelFrame(
+            self.reach_and_grab_tab,
+            text="Detection photo",
+            padding=10,
+            style="Card.TLabelframe",
+        )
+        preview.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 10))
+        preview.columnconfigure(0, weight=1)
+        preview.rowconfigure(0, weight=1)
+        self.reach_and_grab_photo_label = ttk.Label(
+            preview,
+            text="No reach-and-grab photo received yet",
+            anchor="center",
+            justify="center",
+        )
+        self.reach_and_grab_photo_label.grid(row=0, column=0, sticky="nsew")
+
+        results = ttk.LabelFrame(
+            self.reach_and_grab_tab,
+            text="Vision and robot execution progress",
+            padding=10,
+            style="Card.TLabelframe",
+        )
+        results.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        results.columnconfigure(0, weight=1)
+        results.rowconfigure(0, weight=1)
+        self.reach_and_grab_result_box = tk.Text(
+            results,
+            height=15,
+            wrap="word",
+            font=self.ui_fonts["mono"],
+        )
+        self.reach_and_grab_result_box.grid(row=0, column=0, sticky="nsew")
+        result_scroll = ttk.Scrollbar(
+            results,
+            orient="vertical",
+            command=self.reach_and_grab_result_box.yview,
+        )
+        result_scroll.grid(row=0, column=1, sticky="ns")
+        self.reach_and_grab_result_box.configure(
+            yscrollcommand=result_scroll.set,
+            state="disabled",
+        )
+        self._set_reach_and_grab_result_text(
+            "No request yet. Connect to MQTT, describe an object, and start reach-and-grab."
         )
 
     def _build_stencil_tab(self) -> None:
@@ -1330,14 +1602,22 @@ class CalibrationWizard(tk.Tk):
         self._run_worker("base status", lambda: self.robot.request(base_status_payload(self.config_values.sender)))
 
     def move_base_angle(self) -> None:
-        angle = float(self.base_angle.get())
+        try:
+            angle = int(self.base_rotation_value.get())
+        except (tk.TclError, TypeError, ValueError):
+            messagebox.showerror("Calibration Wizard", "Enter a whole-number rotation value.")
+            return
         if angle < 0 or angle >= 360:
-            messagebox.showerror("Calibration Wizard", "Base angle must be between 0 and 359.999 degrees.")
+            messagebox.showerror("Calibration Wizard", "Absolute base angle must be between 0 and 359 degrees.")
             return
         self._run_worker("move base angle", lambda: self.robot.request(base_angle_payload(self.config_values.sender, angle, self.base_speed.get())))
 
     def move_base_degrees(self) -> None:
-        degrees = float(self.base_degrees.get())
+        try:
+            degrees = int(self.base_rotation_value.get())
+        except (tk.TclError, TypeError, ValueError):
+            messagebox.showerror("Calibration Wizard", "Enter a whole-number rotation value.")
+            return
         if degrees <= 0:
             messagebox.showerror("Calibration Wizard", "Base degrees must be greater than 0.")
             return
@@ -1347,7 +1627,11 @@ class CalibrationWizard(tk.Tk):
         )
 
     def move_base_steps(self) -> None:
-        steps = int(self.base_steps.get())
+        try:
+            steps = int(self.base_rotation_value.get())
+        except (tk.TclError, TypeError, ValueError):
+            messagebox.showerror("Calibration Wizard", "Enter a whole-number rotation value.")
+            return
         if steps <= 0:
             messagebox.showerror("Calibration Wizard", "Base steps must be greater than 0.")
             return
@@ -1452,6 +1736,274 @@ class CalibrationWizard(tk.Tk):
             if status == "completed"
             else "Visual calibration failed"
         )
+
+    def run_reach_and_grab(self) -> None:
+        if self.reach_and_grab_running:
+            messagebox.showinfo(
+                "Reach and Grab",
+                "A reach-and-grab request from this GUI is already in progress.",
+            )
+            return
+        if not self.robot.state.broker_connected:
+            messagebox.showerror("Reach and Grab", "Connect to MQTT before starting.")
+            return
+
+        target = self.reach_and_grab_target.get().strip()
+        if not target:
+            messagebox.showerror("Reach and Grab", "Enter a nonempty object description.")
+            return
+
+        try:
+            box_threshold = float(self.reach_and_grab_box_threshold.get())
+            text_threshold = float(self.reach_and_grab_text_threshold.get())
+            magnet_position = int(self.reach_and_grab_magnet_position.get())
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showerror(
+                "Reach and Grab",
+                "Thresholds must be numbers and magnet position must be a whole number.",
+            )
+            return
+        if not (0.0 <= box_threshold <= 1.0 and 0.0 <= text_threshold <= 1.0):
+            messagebox.showerror("Reach and Grab", "Thresholds must be between 0 and 1.")
+            return
+        if magnet_position < 0:
+            messagebox.showerror("Reach and Grab", "Magnet position must be zero or greater.")
+            return
+
+        workflow_text = self.reach_and_grab_workflow_id.get().strip()
+        event_text = self.reach_and_grab_workflow_event_id.get().strip()
+        try:
+            workflow_id = int(workflow_text) if workflow_text else None
+            workflow_event_id = int(event_text) if event_text else None
+        except ValueError:
+            messagebox.showerror("Reach and Grab", "Workflow IDs must be whole numbers.")
+            return
+        if workflow_event_id is not None and workflow_id is None:
+            messagebox.showerror(
+                "Reach and Grab",
+                "Workflow event ID requires a workflow ID.",
+            )
+            return
+
+        try:
+            payload = reach_and_grab_payload(
+                sender=self.config_values.sender,
+                phrase=target,
+                use_model=bool(self.reach_and_grab_use_model.get()),
+                model_name=self.reach_and_grab_model_name.get(),
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+                magnet_position=magnet_position,
+                workflow_id=workflow_id,
+                workflow_event_id=workflow_event_id,
+            )
+        except (TypeError, ValueError) as exc:
+            messagebox.showerror("Reach and Grab", str(exc))
+            return
+
+        self.reach_and_grab_running = True
+        self.reach_and_grab_current_action_id = str(payload["action_id"])
+        self.reach_and_grab_request = dict(payload)
+        self.reach_and_grab_progress = []
+        self.reach_and_grab_photo_path = None
+        self.reach_and_grab_action_text.set(
+            f"Action ID: {self.reach_and_grab_current_action_id}"
+        )
+        self.reach_and_grab_status_text.set(
+            "Requesting a fresh photo; waiting for firmware and the Vision server…"
+        )
+        self.reach_and_grab_button.configure(state="disabled")
+        self._set_reach_and_grab_result_text(
+            "Reach-and-grab started.\n\n"
+            + json.dumps(payload, indent=2, sort_keys=True)
+            + "\n\nThe GUI will not publish any child motion commands."
+        )
+        self._run_worker(
+            "reach and grab",
+            lambda: self.robot.reach_and_grab(payload, CAPTURE_DIR),
+            on_success=self._render_reach_and_grab_result,
+        )
+
+    def _set_reach_and_grab_result_text(self, text: str) -> None:
+        if not hasattr(self, "reach_and_grab_result_box"):
+            return
+        self.reach_and_grab_result_box.configure(state="normal")
+        self.reach_and_grab_result_box.delete("1.0", tk.END)
+        self.reach_and_grab_result_box.insert(tk.END, text)
+        self.reach_and_grab_result_box.configure(state="disabled")
+
+    def _reach_and_grab_message_summary(self, message: Dict[str, Any]) -> str:
+        sender = str(message.get("sender") or "unknown")
+        status = str(message.get("status") or "message")
+        stage = str(message.get("stage") or "")
+        log = str(message.get("log") or "")
+        error = str(message.get("error") or "")
+        detail = stage or log or error
+        if sender == "firmware" and log == "sent":
+            detail = "photo sent"
+        return f"{sender} · {status}" + (f" · {detail}" if detail else "")
+
+    def _render_reach_and_grab_progress_text(self) -> None:
+        lines = [
+            f"Action ID: {self.reach_and_grab_current_action_id or '-'}",
+            f"Target: {self.reach_and_grab_request.get('phrase', '-')}",
+            "",
+            "Progress:",
+        ]
+        if self.reach_and_grab_progress:
+            for index, message in enumerate(self.reach_and_grab_progress, start=1):
+                lines.append(f"{index}. {self._reach_and_grab_message_summary(message)}")
+            lines.extend(
+                [
+                    "",
+                    "Latest message:",
+                    json.dumps(self.reach_and_grab_progress[-1], indent=2, sort_keys=True),
+                ]
+            )
+        else:
+            lines.append("Waiting for the first matching MQTT message…")
+        self._set_reach_and_grab_result_text("\n".join(lines))
+
+    def _render_reach_and_grab_progress(self, message: Dict[str, Any]) -> None:
+        action_id = str(message.get("action_id") or "")
+        if not action_id or action_id != self.reach_and_grab_current_action_id:
+            return
+        self.reach_and_grab_progress.append(message)
+
+        sender = str(message.get("sender") or "")
+        status = str(message.get("status") or "").lower()
+        stage = str(message.get("stage") or "")
+        log = str(message.get("log") or "")
+        if sender == "firmware":
+            if log == "sent":
+                self.reach_and_grab_status_text.set(
+                    "Firmware sent the photo; waiting for Vision inference and motion planning…"
+                )
+            else:
+                self.reach_and_grab_status_text.set("Firmware is capturing the detection photo…")
+        elif status == "in_progress" and stage == "executing_reach_and_grab":
+            step_count = message.get("motion_step_count")
+            self.reach_and_grab_status_text.set(
+                "Vision server is executing reach-and-grab"
+                + (f" ({step_count} planned robot steps)…" if step_count is not None else "…")
+            )
+        elif status == "in_progress":
+            self.reach_and_grab_status_text.set(
+                str(message.get("log") or "Vision server is processing the detection…")
+            )
+
+        if sender == "visual_ai" and status in {"completed", "failed"}:
+            self._render_reach_and_grab_terminal(message)
+        else:
+            self._render_reach_and_grab_progress_text()
+
+    def _render_reach_and_grab_terminal(
+        self,
+        response: Dict[str, Any],
+        photo_path: Optional[Path] = None,
+    ) -> None:
+        status = str(response.get("status") or "unknown").lower()
+        stage = str(response.get("stage") or "")
+        grab_status = response.get("grab_status")
+        physical_success = (
+            status == "completed"
+            and stage == "reach_and_grab_completed"
+            and grab_status == "completed"
+        )
+
+        if physical_success:
+            summary = "Completed — the Vision server confirmed the object was grabbed."
+        elif status == "completed" and stage == "detection_only":
+            summary = "Detection completed, but automatic robot movement is disabled."
+        elif status == "failed":
+            summary, failure_explanation = explain_reach_and_grab_failure(response)
+        else:
+            summary = "Completed response received, but a successful physical grab was not confirmed."
+
+        if status != "failed":
+            failure_explanation = []
+
+        execution_message = next(
+            (
+                message
+                for message in reversed(self.reach_and_grab_progress)
+                if message.get("sender") == "visual_ai"
+                and message.get("stage") == "executing_reach_and_grab"
+            ),
+            {},
+        )
+        raw_x = response.get("raw_x", execution_message.get("raw_x", "-"))
+        raw_y = response.get("raw_y", execution_message.get("raw_y", "-"))
+
+        self.reach_and_grab_running = False
+        self.reach_and_grab_button.configure(state="normal")
+        self.reach_and_grab_status_text.set(summary)
+        self.status_text.set("Done: reach and grab" if physical_success else "Reach and grab finished")
+
+        details = [
+            summary,
+            "",
+            f"Action ID: {response.get('action_id', '-')}",
+            f"Target: {response.get('phrase', self.reach_and_grab_request.get('phrase', '-'))}",
+            f"Stage: {stage or '-'}",
+            f"Vision image ID: {response.get('image_id', '-')}",
+            f"Detection location: x={raw_x}% left-to-right, y={raw_y}% bottom-to-top",
+            f"Motion steps completed: {response.get('motion_steps_completed', '-')}",
+            f"Grab status: {grab_status if grab_status is not None else '-'}",
+            f"Telemetry status: {response.get('telemetry_status', '-')}",
+        ]
+        if execution_message:
+            rotation_control = execution_message.get("commanded_rotation_control_type")
+            if rotation_control:
+                details.append(
+                    "Planned rotation: "
+                    f"{rotation_control} "
+                    f"{execution_message.get('commanded_rotation_direction', '')} "
+                    f"{execution_message.get('commanded_rotation_value', '')}"
+                )
+            else:
+                details.append("Planned rotation: none")
+            details.append(
+                "Planned IK: "
+                f"distance={execution_message.get('commanded_ik_distance_mm', '-')} mm, "
+                f"z={execution_message.get('commanded_ik_z_height_mm', '-')} mm"
+            )
+            details.append(
+                f"Planned robot steps: {execution_message.get('motion_step_count', '-')}"
+            )
+        if response.get("warning"):
+            details.append(f"Warning: {response['warning']}")
+        if response.get("error"):
+            details.append(f"Error: {response['error']}")
+        details.extend(failure_explanation)
+        if response.get("failed_step") is not None:
+            details.append(f"Failed step: {response['failed_step']}")
+        if response.get("failed_action"):
+            details.append(f"Failed action: {response['failed_action']}")
+        if photo_path or self.reach_and_grab_photo_path:
+            details.append(f"Photo: {photo_path or self.reach_and_grab_photo_path}")
+        details.extend(["", "Progress:"])
+        for index, message in enumerate(self.reach_and_grab_progress, start=1):
+            details.append(f"{index}. {self._reach_and_grab_message_summary(message)}")
+        details.extend(["", "Terminal Visual AI message:", json.dumps(response, indent=2, sort_keys=True)])
+        self._set_reach_and_grab_result_text("\n".join(details))
+
+        self.session["reach_and_grab"] = {
+            "request": self.reach_and_grab_request,
+            "response": response,
+            "photo": str(photo_path or self.reach_and_grab_photo_path or ""),
+            "progress": self.reach_and_grab_progress,
+        }
+        self.last_result_text.set(
+            "Reach-and-grab completed" if physical_success else "Reach-and-grab finished"
+        )
+
+    def _render_reach_and_grab_result(self, result: ReachAndGrabResult) -> None:
+        self.reach_and_grab_request = dict(result.request)
+        self.reach_and_grab_progress = list(result.progress)
+        if result.photo_path:
+            self.reach_and_grab_photo_path = result.photo_path
+        self._render_reach_and_grab_terminal(result.response, result.photo_path)
 
     def save_perch_angles(self) -> None:
         def work() -> None:
@@ -1701,12 +2253,50 @@ class CalibrationWizard(tk.Tk):
         if Image is None or ImageTk is None:
             for label in self.photo_labels:
                 label.configure(text=f"Photo saved: {path}\nInstall Pillow to preview images:\npython3 -m pip install Pillow", image="")
+            self.controller_photo_label.configure(
+                text=f"Photo saved: {path}\nInstall Pillow to preview images:\npython3 -m pip install Pillow",
+                image="",
+            )
             return
         image = Image.open(path)
         image.thumbnail((360, 300))
         self.photo_image = ImageTk.PhotoImage(image)
         for label in self.photo_labels:
             label.configure(image=self.photo_image, text="")
+        self.controller_photo_render_width = 0
+        self._schedule_controller_photo_resize()
+
+    def _schedule_controller_photo_resize(self) -> None:
+        if not self.last_photo_path or not hasattr(self, "controller_photo_label"):
+            return
+        if self.controller_photo_resize_job is not None:
+            self.after_cancel(self.controller_photo_resize_job)
+        self.controller_photo_resize_job = self.after(50, self._render_controller_photo)
+
+    def _render_controller_photo(self) -> None:
+        self.controller_photo_resize_job = None
+        if not self.last_photo_path or Image is None or ImageTk is None:
+            return
+
+        panel_width = self.controller_photo_panel.winfo_width()
+        if panel_width <= 1:
+            panel_width = self.controller_canvas.winfo_width()
+        available_width = max(1, panel_width - max(16, round(20 * self.ui_zoom)))
+        if available_width == self.controller_photo_render_width and self.controller_photo_image is not None:
+            return
+
+        with Image.open(self.last_photo_path) as source:
+            source.load()
+            output_size = fit_image_to_width(source.width, source.height, available_width)
+            if output_size == source.size:
+                rendered = source.copy()
+            else:
+                resampling = getattr(Image, "Resampling", Image)
+                rendered = source.resize(output_size, resampling.LANCZOS)
+
+        self.controller_photo_image = ImageTk.PhotoImage(rendered)
+        self.controller_photo_label.configure(image=self.controller_photo_image, text="")
+        self.controller_photo_render_width = available_width
 
     def _display_visual_calibration_photo(self, path: Path) -> None:
         path = Path(path)
@@ -1731,6 +2321,34 @@ class CalibrationWizard(tk.Tk):
         self.visual_calibration_photo_image = ImageTk.PhotoImage(image)
         self.visual_calibration_photo_label.configure(
             image=self.visual_calibration_photo_image,
+            text="",
+        )
+
+    def _display_reach_and_grab_photo(self, path: Path) -> None:
+        path = Path(path)
+        self.last_photo_path = path
+        self.reach_and_grab_photo_path = path
+        if str(path) not in self.session["captures"]:
+            self.session["captures"].append(str(path))
+        if self.reach_and_grab_running:
+            self.reach_and_grab_status_text.set(
+                "Detection photo received; waiting for Vision inference and robot execution…"
+            )
+        if Image is None or ImageTk is None:
+            self.reach_and_grab_photo_label.configure(
+                text=(
+                    f"Photo saved: {path}\n"
+                    "Install Pillow to preview images:\n"
+                    "python3 -m pip install Pillow"
+                ),
+                image="",
+            )
+            return
+        image = Image.open(path)
+        image.thumbnail((460, 300))
+        self.reach_and_grab_photo_image = ImageTk.PhotoImage(image)
+        self.reach_and_grab_photo_label.configure(
+            image=self.reach_and_grab_photo_image,
             text="",
         )
 
@@ -1768,6 +2386,20 @@ class CalibrationWizard(tk.Tk):
                 if label == "visual calibration":
                     self.visual_calibration_status_text.set(f"Failed — {error}")
                     self._set_visual_calibration_result_text(f"Error: {error}")
+                elif label == "reach and grab":
+                    self.reach_and_grab_running = False
+                    self.reach_and_grab_button.configure(state="normal")
+                    if "Do not automatically resend" in error:
+                        self.reach_and_grab_status_text.set(
+                            "Timed out with an uncertain robot state. Do not automatically resend; "
+                            "the robot may already have moved. Late matching Vision results will still be shown."
+                        )
+                    else:
+                        self.reach_and_grab_status_text.set(f"Failed — {error}")
+                    self._set_reach_and_grab_result_text(
+                        f"Reach-and-grab did not produce a terminal result in this wait.\n\n{error}\n\n"
+                        "No retry was sent. Check the shared-topic activity log before deciding what to do next."
+                    )
                 messagebox.showerror("Calibration Wizard", error)
             elif kind == "error":
                 print(f"[CalibrationWizard] {payload}", file=sys.stderr)
@@ -1784,6 +2416,10 @@ class CalibrationWizard(tk.Tk):
             elif kind == "visual_calibration_result":
                 status = str(payload.get("status") or "result")
                 self.last_result_text.set(f"Visual AI calibration: {status}")
+            elif kind == "reach_and_grab_photo_saved":
+                self._display_reach_and_grab_photo(Path(payload))
+            elif kind == "reach_and_grab_progress":
+                self._render_reach_and_grab_progress(payload)
         self.after(150, self._process_events)
 
     def _append_log(self, kind: str, payload: Any) -> None:

@@ -70,7 +70,7 @@ void setup() {
   BuddyMQTT::setResetReason(getResetReasonStr(reason), ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
 
-  FactoryReset::checkAndReset();  // Hold BOOT button during power-on to factory reset
+  FactoryReset::checkAndReset();  // Hold BOOT to reset WiFi/MQTT while preserving calibration
 
   ActionServo::begin();  // initialize servos
 

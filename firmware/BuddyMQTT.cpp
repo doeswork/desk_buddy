@@ -11,6 +11,7 @@
 #include <time.h>
 #include <LED.h>
 #include <ArduinoJson.h>
+#include <cstring>
 
 namespace {
   // —— Default broker settings (TLS) - can be overridden via web config ————
@@ -38,7 +39,7 @@ namespace {
   WiFiClientSecure netClient;     // TLS client
   PubSubClient     mqttClient(netClient);
 
-  bool   inited = false;
+  bool inited = false;
   String receivedMessage;
 
   // Workflow context — persists until overwritten or cleared
@@ -150,6 +151,7 @@ namespace {
   }
 
   void messageCallback(char* topic, byte* payload, unsigned int length) {
+    (void)topic;
     String msg;
     msg.reserve(length);
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
@@ -158,9 +160,13 @@ namespace {
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, msg) == DeserializationError::Ok) {
-      const char* s = doc["sender"] | nullptr;
-      if (s && strcmp(s, "firmware") == 0) return;
+      const char* sender = doc["sender"] | nullptr;
+      if (sender && strcmp(sender, "firmware") == 0) return;
     }
+
+    // This is the last committed receive behavior that was known to work.
+    // Parsing failures are intentionally left for ActionController so this
+    // callback cannot silently discard an otherwise executable request.
     receivedMessage = msg;
   }
 } // namespace
@@ -191,6 +197,8 @@ void BuddyMQTT::maintain() {
       nextReconnectAttemptMs = 0;
       LED::On();
       Serial.println("connected");
+      // Never carry a command captured on a dead MQTT session into a new one.
+      receivedMessage.clear();
       mqttClient.subscribe(STATUS_TOPIC.c_str());
       Heartbeat::send(true);
     } else {
@@ -198,7 +206,7 @@ void BuddyMQTT::maintain() {
       Serial.print(mqttClient.state());   // -4 timeout, 5 not authorized, etc.
       Serial.print("; retrying in ");
       Serial.print(RECONNECT_INTERVAL_MS / 1000);
-      Serial.println("s (hold BOOT 3s to factory reset)");
+      Serial.println("s (hold BOOT 3s to reset WiFi/MQTT)");
       nextReconnectAttemptMs = millis() + RECONNECT_INTERVAL_MS;
 
       return;
@@ -283,8 +291,6 @@ void BuddyMQTT::listen() {
 
   if (Heartbeat::isEnabled()) Serial.println("Start of Listen Loop");
 
-  receivedMessage.clear();
-
   if (Heartbeat::isEnabled()) {
     while (mqttClient.connected() && receivedMessage == "") {
       BuddyWifi::maintain();
@@ -300,9 +306,14 @@ void BuddyMQTT::listen() {
   }
 
   if (receivedMessage.length()) {
+    // maintain() may have already received the next command immediately after
+    // the previous command's terminal response was published. Copy and clear
+    // only when consuming it; clearing at listen() entry dropped that command.
+    String messageToDispatch = receivedMessage;
+    receivedMessage.clear();
     Serial.println("Received MQTT message:");
-    Serial.println(receivedMessage);
-    ActionController::dispatch(receivedMessage);
+    Serial.println(messageToDispatch);
+    ActionController::dispatch(messageToDispatch);
   }
   if (Heartbeat::isEnabled()) Serial.println("End of Listen Loop");
 }
@@ -511,6 +522,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
   } else {
     doc["st_map"] = nullptr;
   }
+
   bool stencilCalibrated = hasStencilMap && hasRotationOffset && hasIkOffset;
   doc["stencil_calibrated"] = stencilCalibrated;
   doc["stencil_runtime_mode"] = "average_offsets";
@@ -692,6 +704,7 @@ void BuddyMQTT::sendDebug(const String& component, const String& message) {
   if (!mqttClient.connected()) return;
 
   StaticJsonDocument<256> doc;
+  doc["sender"] = "firmware";
   doc["debug"] = component;
   doc["msg"] = message;
 

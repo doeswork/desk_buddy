@@ -92,7 +92,7 @@ void BuddyWifi::maintain() {
   unsigned long start = millis();
   unsigned long lastProgress = start;
   while (WiFi.status() != WL_CONNECTED && millis() - start < TIMEOUT_MS) {
-    // Keep factory reset responsive while waiting for the station connection.
+    // Keep the connection-reset gesture responsive while waiting for the station connection.
     FactoryReset::maintain();
     delay(10);
 

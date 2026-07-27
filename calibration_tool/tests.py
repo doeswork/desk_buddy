@@ -10,12 +10,12 @@ import tkinter as tk
 import unittest
 
 try:
-    from .app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
-    from .mqtt_robot import MqttRobot, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
+    from .app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event
+    from .mqtt_robot import MqttRobot, ReachAndGrabResult, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, reach_and_grab_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
     from .photo_decode import DecodedPhoto, decode_photo_message
 except ImportError:  # pragma: no cover - direct execution from calibration_tool/
-    from app import CalibrationWizard, build_calibration_status_rows, format_topic_log_event
-    from mqtt_robot import MqttRobot, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
+    from app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event
+    from mqtt_robot import MqttRobot, ReachAndGrabResult, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, reach_and_grab_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
     from photo_decode import DecodedPhoto, decode_photo_message
 
 
@@ -76,6 +76,45 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(payload["sender"], "tester")
         self.assertEqual(payload["MagnetPosition"], 3)
         self.assertTrue(str(payload["action_id"]).startswith("visual_calibration_"))
+
+    def test_reach_and_grab_payload(self) -> None:
+        payload = reach_and_grab_payload(
+            "calibration_wizard",
+            "  red cup  ",
+            use_model=False,
+            model_name="detector-v2",
+            box_threshold=0.35,
+            text_threshold=0.25,
+            magnet_position=1,
+            workflow_id=812,
+            workflow_event_id=9914,
+            request_action_id="detect-unique-001",
+        )
+        self.assertEqual(payload["sender"], "calibration_wizard")
+        self.assertEqual(payload["action_id"], "detect-unique-001")
+        self.assertEqual(payload["action"], "detect_object")
+        self.assertEqual(payload["phrase"], "red cup")
+        self.assertIs(payload["use_model"], False)
+        self.assertEqual(payload["model_name"], "detector-v2")
+        self.assertEqual(payload["box_threshold"], 0.35)
+        self.assertEqual(payload["text_threshold"], 0.25)
+        self.assertEqual(payload["MagnetPosition"], 1)
+        self.assertEqual(payload["workflow_id"], 812)
+        self.assertEqual(payload["workflow_event_id"], 9914)
+
+    def test_reach_and_grab_payload_rejects_unsafe_contract_values(self) -> None:
+        with self.assertRaises(ValueError):
+            reach_and_grab_payload("firmware", "red cup")
+        with self.assertRaises(ValueError):
+            reach_and_grab_payload("calibration_wizard", "  ")
+        with self.assertRaises(ValueError):
+            reach_and_grab_payload("calibration_wizard", "red cup", use_model="train")  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            reach_and_grab_payload(
+                "calibration_wizard",
+                "red cup",
+                workflow_event_id=12,
+            )
 
     def test_resolve_root_cert_from_relative_path(self) -> None:
         resolved = resolve_cert_path("mqtt-ca.crt")
@@ -230,6 +269,176 @@ class VisualCalibrationMqttTests(unittest.TestCase):
         self.assertEqual(robot._pending[target]["response"], response)
 
 
+class ReachAndGrabMqttTests(unittest.TestCase):
+    def test_waits_for_matching_visual_ai_terminal_and_saves_photo(self) -> None:
+        events: list[tuple[str, object]] = []
+        robot = MqttRobot(lambda kind, payload: events.append((kind, payload)))
+        robot.config = SimpleNamespace(timeout=1.0)
+        payload = reach_and_grab_payload(
+            "calibration_wizard",
+            "red cup",
+            request_action_id="detect-unique-001",
+        )
+
+        def fake_publish(outgoing: dict) -> None:
+            target = str(outgoing["action_id"])
+            robot._handle_reach_and_grab_message(
+                {
+                    "sender": "firmware",
+                    "action_id": target,
+                    "status": "in_progress",
+                    "type": "detect_object",
+                }
+            )
+            robot._handle_photo(
+                DecodedPhoto(
+                    metadata={
+                        "sender": "firmware",
+                        "action_id": target,
+                        "photo": "sending_photo",
+                    },
+                    jpeg_bytes=b"\xff\xd8reach and grab\xff\xd9",
+                )
+            )
+            robot._handle_reach_and_grab_message(
+                {
+                    "sender": "visual_ai",
+                    "action_id": target,
+                    "status": "in_progress",
+                    "type": "detect_object",
+                    "stage": "executing_reach_and_grab",
+                    "motion_step_count": 3,
+                }
+            )
+            robot._handle_reach_and_grab_message(
+                {
+                    "sender": "visual_ai",
+                    "action_id": target,
+                    "status": "completed",
+                    "type": "detect_object",
+                    "stage": "reach_and_grab_completed",
+                    "grab_status": "completed",
+                    "telemetry_status": "completed",
+                }
+            )
+
+        robot.publish = fake_publish  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as directory:
+            result = robot.reach_and_grab(payload, Path(directory))
+
+            self.assertEqual(result.response["sender"], "visual_ai")
+            self.assertEqual(result.response["stage"], "reach_and_grab_completed")
+            self.assertEqual(len(result.progress), 3)
+            self.assertIsNotNone(result.photo_path)
+            assert result.photo_path is not None
+            self.assertTrue(result.photo_path.exists())
+            self.assertEqual(robot.state.active_reach_and_grab_action_id, "")
+            self.assertEqual(robot._pending, {})
+            self.assertTrue(any(kind == "reach_and_grab_photo_saved" for kind, _ in events))
+
+    def test_firmware_completed_does_not_finish_overall_operation(self) -> None:
+        robot = MqttRobot()
+        target = "detect-unique-002"
+        result_event = threading.Event()
+        robot._pending[target] = {
+            "want": "reach_and_grab",
+            "response": None,
+            "result_event": result_event,
+            "progress": [],
+        }
+        robot._reach_and_grab_action_ids.append(target)
+
+        handled = robot._handle_reach_and_grab_message(
+            {
+                "sender": "firmware",
+                "action_id": target,
+                "status": "completed",
+                "type": "detect_object",
+            }
+        )
+
+        self.assertFalse(handled)
+        self.assertFalse(result_event.is_set())
+        self.assertIsNone(robot._pending[target]["response"])
+
+    def test_unrelated_visual_ai_result_is_ignored(self) -> None:
+        robot = MqttRobot()
+        handled = robot._handle_reach_and_grab_message(
+            {
+                "sender": "visual_ai",
+                "action_id": "someone-elses-request",
+                "status": "completed",
+                "type": "detect_object",
+                "stage": "reach_and_grab_completed",
+                "grab_status": "completed",
+            }
+        )
+        self.assertFalse(handled)
+
+    def test_detection_only_is_a_terminal_visual_ai_result(self) -> None:
+        robot = MqttRobot()
+        target = "detect-unique-003"
+        result_event = threading.Event()
+        robot._pending[target] = {
+            "want": "reach_and_grab",
+            "response": None,
+            "result_event": result_event,
+            "progress": [],
+        }
+        robot._reach_and_grab_action_ids.append(target)
+        response = {
+            "sender": "visual_ai",
+            "action_id": target,
+            "status": "completed",
+            "type": "detect_object",
+            "stage": "detection_only",
+            "warning": "auto_reach_grab_disabled",
+        }
+
+        self.assertTrue(robot._handle_reach_and_grab_message(response))
+        self.assertTrue(result_event.is_set())
+        self.assertEqual(robot._pending[target]["response"], response)
+
+    def test_timeout_does_not_resend_and_late_terminal_is_still_observed(self) -> None:
+        events: list[tuple[str, object]] = []
+        publish_count = 0
+        robot = MqttRobot(lambda kind, payload: events.append((kind, payload)))
+        robot.config = SimpleNamespace(timeout=0.001)
+        payload = reach_and_grab_payload(
+            "calibration_wizard",
+            "red cup",
+            request_action_id="detect-late-001",
+        )
+
+        def fake_publish(outgoing: dict) -> None:
+            nonlocal publish_count
+            publish_count += 1
+
+        robot.publish = fake_publish  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(TimeoutError, "Do not automatically resend"):
+                robot.reach_and_grab(payload, Path(directory))
+
+        self.assertEqual(publish_count, 1)
+        self.assertEqual(robot._pending, {})
+        late_response = {
+            "sender": "visual_ai",
+            "action_id": "detect-late-001",
+            "status": "failed",
+            "type": "detect_object",
+            "stage": "reach_and_grab_failed",
+            "error": "robot_command_timeout",
+        }
+        self.assertTrue(robot._handle_reach_and_grab_message(late_response))
+        self.assertEqual(robot.state.last_reach_and_grab, late_response)
+        self.assertTrue(
+            any(
+                kind == "reach_and_grab_progress" and event_payload == late_response
+                for kind, event_payload in events
+            )
+        )
+
+
 class TopicLogFormatTests(unittest.TestCase):
     def test_heartbeat_message_is_ignored(self) -> None:
         self.assertIsNone(format_topic_log_event("message", {"sender": "firmware", "log": "heartbeat"}))
@@ -252,6 +461,48 @@ class TopicLogFormatTests(unittest.TestCase):
 
         line = format_topic_log_event("photo", FakePhoto())
         self.assertEqual(line, "PHOTO photo_1 received raw JPEG")
+
+    def test_failed_reach_worker_reports_terminal_result_not_success(self) -> None:
+        line = format_topic_log_event("worker_success", ("reach and grab", object(), None))
+        self.assertEqual(line, "APP reach and grab terminal result received")
+
+
+class ReachAndGrabFailureExplanationTests(unittest.TestCase):
+    def test_robot_command_timeout_identifies_firmware_response_deadline(self) -> None:
+        summary, explanation = explain_reach_and_grab_failure(
+            {
+                "error": "robot_command_timeout",
+                "failed_step": 1,
+                "failed_action": "baseRotate",
+            }
+        )
+
+        self.assertEqual(summary, "Failed — firmware response timeout during step 1 (baseRotate).")
+        rendered = "\n".join(explanation)
+        self.assertIn("per-command firmware response timeout", rendered)
+        self.assertIn("exact matching firmware status=completed", rendered)
+        self.assertIn("not a camera, detection, or GUI timeout", rendered)
+        self.assertIn("do not automatically retry", rendered)
+
+    def test_other_failure_preserves_server_error(self) -> None:
+        summary, explanation = explain_reach_and_grab_failure({"error": "robot_busy"})
+        self.assertEqual(summary, "Failed — robot_busy")
+        self.assertEqual(explanation, [])
+
+
+class ImageSizingTests(unittest.TestCase):
+    def test_fit_image_to_width_preserves_landscape_aspect_ratio(self) -> None:
+        self.assertEqual(fit_image_to_width(800, 600, 320), (320, 240))
+
+    def test_fit_image_to_width_preserves_portrait_aspect_ratio(self) -> None:
+        self.assertEqual(fit_image_to_width(600, 800, 300), (300, 400))
+
+    def test_fit_image_to_width_does_not_enlarge_small_images(self) -> None:
+        self.assertEqual(fit_image_to_width(200, 100, 400), (200, 100))
+
+    def test_fit_image_to_width_rejects_invalid_dimensions(self) -> None:
+        with self.assertRaises(ValueError):
+            fit_image_to_width(0, 600, 320)
 
 
 class GuiStateTests(unittest.TestCase):
@@ -341,15 +592,58 @@ class GuiStateTests(unittest.TestCase):
                     "Base + Perch",
                     "IK",
                     "Visual Calibration",
+                    "Reach and Grab",
                     "Stencil",
                 ],
             )
             self.assertTrue(hasattr(app, "status_tree"))
             self.assertTrue(hasattr(app, "controller_shell"))
             self.assertNotEqual(app.controller_shell.master, app.notebook)
+            self.assertTrue(hasattr(app, "base_rotation_value_entry"))
+            self.assertTrue(hasattr(app, "controller_photo_label"))
+            self.assertEqual(app.controller_capture_button.cget("text"), "Capture Photo")
             self.assertTrue(hasattr(app, "visual_calibration_result_box"))
+            self.assertTrue(hasattr(app, "reach_and_grab_result_box"))
+            self.assertTrue(hasattr(app, "reach_and_grab_button"))
             self.assertTrue(hasattr(app, "stencil_status_box"))
             self.assertTrue(hasattr(app, "stencil_points_box"))
+        finally:
+            app.destroy()
+
+    def test_reach_and_grab_terminal_rendering_distinguishes_physical_success(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.reach_and_grab_current_action_id = "detect-unique-001"
+            app.reach_and_grab_request = {"phrase": "red cup"}
+            response = {
+                "sender": "visual_ai",
+                "action_id": "detect-unique-001",
+                "status": "completed",
+                "type": "detect_object",
+                "stage": "reach_and_grab_completed",
+                "phrase": "red cup",
+                "image_id": 44,
+                "raw_x": 62,
+                "raw_y": 41,
+                "motion_steps_completed": 3,
+                "grab_status": "completed",
+                "telemetry_status": "completed",
+            }
+            app.reach_and_grab_progress = [response]
+
+            app._render_reach_and_grab_terminal(response)
+
+            self.assertIn("confirmed the object was grabbed", app.reach_and_grab_status_text.get())
+            rendered = app.reach_and_grab_result_box.get("1.0", tk.END)
+            self.assertIn("Vision image ID: 44", rendered)
+            self.assertIn("x=62% left-to-right", rendered)
+            self.assertEqual(app.session["reach_and_grab"]["response"], response)
         finally:
             app.destroy()
 

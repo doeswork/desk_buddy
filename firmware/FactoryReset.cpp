@@ -5,7 +5,9 @@
 
 namespace FactoryReset {
 
-// Factory reset: Hold BOOT for three seconds during startup or normal runtime.
+// Connection reset: Hold BOOT for three seconds during startup or normal runtime.
+// This intentionally preserves robot calibration stored in the config and rot
+// namespaces so changing networks does not require recalibrating the robot.
 constexpr int BOOT_BUTTON = 0;  // GPIO0 on ESP32-S3
 constexpr unsigned long HOLD_TIME_MS = 3000;  // 3 seconds
 constexpr unsigned long BUTTON_POLL_MS = 10;
@@ -74,8 +76,8 @@ namespace {
 }
 
 void performReset() {
-  Serial.println("\n=== FACTORY RESET ===");
-  Serial.println("Clearing all saved settings...");
+  Serial.println("\n=== CONNECTION RESET ===");
+  Serial.println("Clearing saved WiFi and MQTT settings...");
 
   Preferences prefs;
 
@@ -93,21 +95,8 @@ void performReset() {
     Serial.println("✓ MQTT cleared");
   }
 
-  // Clear config
-  if (prefs.begin("config", false)) {
-    prefs.clear();
-    prefs.end();
-    Serial.println("✓ Config cleared");
-  }
-
-  // Clear rotation
-  if (prefs.begin("rot", false)) {
-    prefs.clear();
-    prefs.end();
-    Serial.println("✓ Rotation cleared");
-  }
-
-  Serial.println("=== RESET COMPLETE ===");
+  Serial.println("✓ Robot calibration preserved");
+  Serial.println("=== CONNECTION RESET COMPLETE ===");
   Serial.println("Rebooting into config mode...\n");
 
   delay(1000);
@@ -133,7 +122,7 @@ void maintain() {
   portEXIT_CRITICAL(&buttonStateMux);
 
   if (shouldAnnouncePress) {
-    Serial.println("\n[BOOT] Button pressed! Hold for 3 seconds to factory reset...");
+    Serial.println("\n[BOOT] Button pressed! Hold for 3 seconds to reset WiFi/MQTT...");
     LED::Blink(0.1);
   }
 
@@ -154,7 +143,7 @@ void checkAndReset() {
   // Check if BOOT button is pressed during power-on
   if (digitalRead(BOOT_BUTTON) == LOW) {
     Serial.println("\n[BOOT] Button detected!");
-    Serial.println("[BOOT] Hold for 3 seconds to factory reset...");
+    Serial.println("[BOOT] Hold for 3 seconds to reset WiFi/MQTT...");
 
     LED::Blink(0.1);  // Fast blink during hold
 
