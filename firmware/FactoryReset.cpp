@@ -5,13 +5,79 @@
 
 namespace FactoryReset {
 
-// Factory reset: Hold BOOT button during power-on
+// Connection reset: Hold BOOT for three seconds during startup or normal runtime.
+// This intentionally preserves robot calibration stored in the config and rot
+// namespaces so changing networks does not require recalibrating the robot.
 constexpr int BOOT_BUTTON = 0;  // GPIO0 on ESP32-S3
 constexpr unsigned long HOLD_TIME_MS = 3000;  // 3 seconds
+constexpr unsigned long BUTTON_POLL_MS = 10;
+
+namespace {
+  TaskHandle_t buttonTaskHandle = nullptr;
+  portMUX_TYPE buttonStateMux = portMUX_INITIALIZER_UNLOCKED;
+  bool pressStarted = false;
+  bool releasedEarly = false;
+  bool resetRequested = false;
+
+  void pollButton(bool& wasPressed, unsigned long& pressStartTime) {
+    const bool isPressed = digitalRead(BOOT_BUTTON) == LOW;
+    const unsigned long now = millis();
+
+    if (isPressed) {
+      if (!wasPressed) {
+        wasPressed = true;
+        pressStartTime = now;
+        portENTER_CRITICAL(&buttonStateMux);
+        pressStarted = true;
+        portEXIT_CRITICAL(&buttonStateMux);
+      } else if (now - pressStartTime >= HOLD_TIME_MS) {
+        // Latch the request. Releasing BOOT before loop() runs again must not
+        // lose a valid three-second hold.
+        portENTER_CRITICAL(&buttonStateMux);
+        resetRequested = true;
+        portEXIT_CRITICAL(&buttonStateMux);
+      }
+    } else if (wasPressed) {
+      portENTER_CRITICAL(&buttonStateMux);
+      if (!resetRequested) releasedEarly = true;
+      portEXIT_CRITICAL(&buttonStateMux);
+      wasPressed = false;
+      pressStartTime = 0;
+    }
+  }
+
+  void buttonMonitorTask(void*) {
+    bool wasPressed = false;
+    unsigned long pressStartTime = 0;
+
+    for (;;) {
+      pollButton(wasPressed, pressStartTime);
+      vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
+    }
+  }
+
+  void startButtonMonitor() {
+    if (buttonTaskHandle != nullptr) return;
+
+    BaseType_t created = xTaskCreate(
+      buttonMonitorTask,
+      "boot_button",
+      2048,
+      nullptr,
+      1,
+      &buttonTaskHandle
+    );
+
+    if (created != pdPASS) {
+      buttonTaskHandle = nullptr;
+      Serial.println("[BOOT] ERROR: Could not start button monitor");
+    }
+  }
+}
 
 void performReset() {
-  Serial.println("\n=== FACTORY RESET ===");
-  Serial.println("Clearing all saved settings...");
+  Serial.println("\n=== CONNECTION RESET ===");
+  Serial.println("Clearing saved WiFi and MQTT settings...");
 
   Preferences prefs;
 
@@ -29,55 +95,45 @@ void performReset() {
     Serial.println("✓ MQTT cleared");
   }
 
-  // Clear config
-  if (prefs.begin("config", false)) {
-    prefs.clear();
-    prefs.end();
-    Serial.println("✓ Config cleared");
-  }
-
-  // Clear rotation
-  if (prefs.begin("rot", false)) {
-    prefs.clear();
-    prefs.end();
-    Serial.println("✓ Rotation cleared");
-  }
-
-  Serial.println("=== RESET COMPLETE ===");
+  Serial.println("✓ Robot calibration preserved");
+  Serial.println("=== CONNECTION RESET COMPLETE ===");
   Serial.println("Rebooting into config mode...\n");
 
   delay(1000);
   ESP.restart();
 }
 
-bool checkButtonHeld() {
-  // Non-blocking check: returns true if button held for HOLD_TIME_MS
-  static unsigned long pressStartTime = 0;
-  static bool wasPressed = false;
-
-  pinMode(BOOT_BUTTON, INPUT_PULLUP);
-
-  if (digitalRead(BOOT_BUTTON) == LOW) {
-    if (!wasPressed) {
-      // Button just pressed
-      wasPressed = true;
-      pressStartTime = millis();
-      Serial.println("\n[BOOT] Button pressed! Hold for 3 seconds to factory reset...");
-      LED::Blink(0.1);  // Fast blink
-    } else if (millis() - pressStartTime >= HOLD_TIME_MS) {
-      // Held long enough
-      return true;
-    }
-  } else {
-    if (wasPressed) {
-      Serial.println("[BOOT] Released early. Continuing...");
-      LED::On();  // Restore LED state
-    }
-    wasPressed = false;
-    pressStartTime = 0;
+void maintain() {
+  // Fall back to loop polling if the monitor task could not be allocated.
+  if (buttonTaskHandle == nullptr) {
+    static bool wasPressed = false;
+    static unsigned long pressStartTime = 0;
+    pollButton(wasPressed, pressStartTime);
   }
 
-  return false;
+  // Copy and clear notification flags atomically before printing. The
+  // background task continues monitoring while Serial or networking runs.
+  portENTER_CRITICAL(&buttonStateMux);
+  const bool shouldAnnouncePress = pressStarted;
+  const bool shouldAnnounceRelease = releasedEarly;
+  const bool shouldReset = resetRequested;
+  pressStarted = false;
+  releasedEarly = false;
+  portEXIT_CRITICAL(&buttonStateMux);
+
+  if (shouldAnnouncePress) {
+    Serial.println("\n[BOOT] Button pressed! Hold for 3 seconds to reset WiFi/MQTT...");
+    LED::Blink(0.1);
+  }
+
+  if (shouldAnnounceRelease) {
+    Serial.println("[BOOT] Released early. Continuing...");
+    LED::On();
+  }
+
+  if (shouldReset) {
+    performReset();  // Never returns
+  }
 }
 
 void checkAndReset() {
@@ -87,7 +143,7 @@ void checkAndReset() {
   // Check if BOOT button is pressed during power-on
   if (digitalRead(BOOT_BUTTON) == LOW) {
     Serial.println("\n[BOOT] Button detected!");
-    Serial.println("[BOOT] Hold for 3 seconds to factory reset...");
+    Serial.println("[BOOT] Hold for 3 seconds to reset WiFi/MQTT...");
 
     LED::Blink(0.1);  // Fast blink during hold
 
@@ -112,6 +168,10 @@ void checkAndReset() {
       delay(500);
     }
   }
+
+  // From this point on a background monitor records the entire hold, even if
+  // WiFi or TLS temporarily prevents loop() from polling the button.
+  startButtonMonitor();
 }
 
 } // namespace FactoryReset

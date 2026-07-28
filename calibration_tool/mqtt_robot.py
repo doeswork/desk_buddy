@@ -7,6 +7,7 @@ import ssl
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
+import uuid
 
 try:
     from .config import WizardConfig
@@ -36,6 +37,67 @@ def calibrationvalues_payload(sender: str) -> Payload:
 
 def photo_payload(sender: str, label: str = "photo") -> Payload:
     return base_payload("photo", label, sender)
+
+
+def visual_calibration_payload(sender: str, magnet_position: int = 1) -> Payload:
+    payload = base_payload("calibrate_depth", "visual_calibration", sender)
+    payload["MagnetPosition"] = int(magnet_position)
+    return payload
+
+
+def reach_and_grab_payload(
+    sender: str,
+    phrase: str,
+    use_model: bool = False,
+    model_name: str = "",
+    box_threshold: Optional[float] = None,
+    text_threshold: Optional[float] = None,
+    magnet_position: Optional[int] = None,
+    workflow_id: Optional[int] = None,
+    workflow_event_id: Optional[int] = None,
+    request_action_id: Optional[str] = None,
+) -> Payload:
+    """Build the one GUI-owned request that starts automatic reach-and-grab."""
+    normalized_sender = str(sender or "").strip()
+    if not normalized_sender:
+        raise ValueError("Reach-and-grab sender must not be empty")
+    if normalized_sender.lower() in {"ai_server", "visual_ai", "firmware"}:
+        raise ValueError(
+            "Reach-and-grab sender must identify this GUI, not ai_server, visual_ai, or firmware"
+        )
+
+    normalized_phrase = str(phrase or "").strip()
+    if not normalized_phrase:
+        raise ValueError("Reach-and-grab target must not be empty")
+    if not isinstance(use_model, bool):
+        raise ValueError("use_model must be true or false; modes such as 'train' are unsupported")
+
+    target_action_id = str(request_action_id or "").strip()
+    if not target_action_id:
+        target_action_id = f"detect-{uuid.uuid4().hex}"
+
+    payload: Payload = {
+        "sender": normalized_sender,
+        "action_id": target_action_id,
+        "action": "detect_object",
+        "phrase": normalized_phrase,
+        "use_model": use_model,
+    }
+    if str(model_name or "").strip():
+        payload["model_name"] = str(model_name).strip()
+    if box_threshold is not None:
+        payload["box_threshold"] = float(box_threshold)
+    if text_threshold is not None:
+        payload["text_threshold"] = float(text_threshold)
+    if magnet_position is not None:
+        payload["MagnetPosition"] = int(magnet_position)
+    if workflow_id is not None:
+        payload["workflow_id"] = int(workflow_id)
+    if workflow_event_id is not None:
+        if workflow_id is None:
+            raise ValueError("workflow_event_id requires workflow_id")
+        payload["workflow_event_id"] = int(workflow_event_id)
+    return payload
 
 
 def base_profile_payload(sender: str, neutral: Optional[int] = None) -> Payload:
@@ -157,6 +219,20 @@ def resolve_cert_path(path_text: str) -> Optional[Path]:
 
 
 @dataclass
+class VisualCalibrationCapture:
+    photo_path: Path
+    response: Dict[str, Any]
+
+
+@dataclass
+class ReachAndGrabResult:
+    request: Dict[str, Any]
+    response: Dict[str, Any]
+    photo_path: Optional[Path]
+    progress: list[Dict[str, Any]]
+
+
+@dataclass
 class RobotState:
     broker_connected: bool = False
     robot_online: bool = False
@@ -166,6 +242,10 @@ class RobotState:
     last_heartbeat_at: float = 0.0
     calibrationvalues: Dict[str, Any] = field(default_factory=dict)
     last_response: Dict[str, Any] = field(default_factory=dict)
+    last_visual_calibration: Dict[str, Any] = field(default_factory=dict)
+    last_reach_and_grab: Dict[str, Any] = field(default_factory=dict)
+    active_reach_and_grab_action_id: str = ""
+    last_reach_and_grab_photo_path: str = ""
     last_photo_path: str = ""
 
     def heartbeat_age(self) -> Optional[float]:
@@ -182,6 +262,7 @@ class MqttRobot:
         self.state = RobotState()
         self._lock = threading.Lock()
         self._pending: Dict[str, Dict[str, Any]] = {}
+        self._reach_and_grab_action_ids: list[str] = []
 
     def _emit(self, kind: str, payload: Any) -> None:
         if self.on_event:
@@ -282,7 +363,7 @@ class MqttRobot:
         if not self.client or not self.config or not self.state.broker_connected:
             raise RuntimeError("MQTT is not connected")
         encoded = json.dumps(payload, separators=(",", ":"))
-        info = self.client.publish(self.config.command_topic, encoded)
+        info = self.client.publish(self.config.command_topic, encoded, qos=0, retain=False)
         if getattr(info, "rc", 0) not in (0, None):
             raise RuntimeError(f"MQTT publish failed rc={info.rc}")
         self._emit("sent", payload)
@@ -334,6 +415,130 @@ class MqttRobot:
             with self._lock:
                 self._pending.pop(target, None)
 
+    def capture_visual_calibration(
+        self,
+        output_dir: Path,
+        magnet_position: int = 1,
+        timeout: Optional[float] = None,
+    ) -> VisualCalibrationCapture:
+        """Capture a firmware photo and wait for the Visual AI calibration result."""
+        if not self.config:
+            raise RuntimeError("MQTT is not configured")
+
+        payload = visual_calibration_payload(self.config.sender, magnet_position)
+        target = str(payload["action_id"])
+        wait_timeout = timeout if timeout is not None else self.config.timeout
+        deadline = time.monotonic() + wait_timeout
+        photo_event = threading.Event()
+        result_event = threading.Event()
+        pending = {
+            "want": "visual_calibration",
+            "photo": None,
+            "response": None,
+            "photo_event": photo_event,
+            "result_event": result_event,
+        }
+        with self._lock:
+            self._pending[target] = pending
+
+        try:
+            self.publish(payload)
+            if not photo_event.wait(max(0.0, deadline - time.monotonic())):
+                raise TimeoutError(
+                    f"Timed out waiting for visual calibration photo action_id={target}"
+                )
+
+            photo = pending["photo"]
+            if not isinstance(photo, DecodedPhoto):
+                raise RuntimeError(f"No visual calibration photo for action_id={target}")
+
+            path = save_photo(photo, output_dir, "visual_calibration")
+            self.state.last_photo_path = str(path)
+            self._emit("photo_saved", str(path))
+            self._emit("visual_calibration_photo_saved", str(path))
+            self._emit("state", self.state)
+
+            if not result_event.wait(max(0.0, deadline - time.monotonic())):
+                raise TimeoutError(
+                    f"Timed out waiting for Visual AI calibration result action_id={target}"
+                )
+
+            response = pending["response"]
+            if not isinstance(response, dict):
+                raise RuntimeError(
+                    f"No Visual AI calibration result for action_id={target}"
+                )
+            return VisualCalibrationCapture(photo_path=path, response=response)
+        finally:
+            with self._lock:
+                self._pending.pop(target, None)
+
+    def reach_and_grab(
+        self,
+        payload: Payload,
+        output_dir: Path,
+        timeout: Optional[float] = None,
+    ) -> ReachAndGrabResult:
+        """Publish one detect_object request and wait only for its terminal Visual AI result."""
+        if not self.config:
+            raise RuntimeError("MQTT is not configured")
+        if payload.get("action") != "detect_object":
+            raise ValueError("Reach-and-grab requires action='detect_object'")
+        target = str(payload.get("action_id") or "")
+        if not target:
+            raise ValueError("Reach-and-grab payload must include action_id")
+
+        wait_timeout = timeout if timeout is not None else self.config.timeout
+        result_event = threading.Event()
+        pending = {
+            "want": "reach_and_grab",
+            "request": dict(payload),
+            "response": None,
+            "result_event": result_event,
+            "photo_path": None,
+            "output_dir": Path(output_dir),
+            "progress": [],
+        }
+        with self._lock:
+            if target in self._pending:
+                raise RuntimeError(f"An MQTT request with action_id={target} is already pending")
+            self._pending[target] = pending
+            if target not in self._reach_and_grab_action_ids:
+                self._reach_and_grab_action_ids.append(target)
+                self._reach_and_grab_action_ids = self._reach_and_grab_action_ids[-20:]
+        self.state.active_reach_and_grab_action_id = target
+        self._emit("state", self.state)
+
+        keep_watching_for_late_result = False
+        try:
+            self.publish(payload)
+            if not result_event.wait(wait_timeout):
+                keep_watching_for_late_result = True
+                raise TimeoutError(
+                    "Timed out waiting for the terminal Visual AI reach-and-grab result "
+                    f"action_id={target}. Do not automatically resend; the robot may have moved."
+                )
+            response = pending["response"]
+            if not isinstance(response, dict):
+                raise RuntimeError(f"No Visual AI reach-and-grab result for action_id={target}")
+            photo_path = pending.get("photo_path")
+            return ReachAndGrabResult(
+                request=dict(payload),
+                response=response,
+                photo_path=Path(photo_path) if photo_path else None,
+                progress=list(pending["progress"]),
+            )
+        finally:
+            with self._lock:
+                self._pending.pop(target, None)
+                if not keep_watching_for_late_result and target in self._reach_and_grab_action_ids:
+                    self._reach_and_grab_action_ids.remove(target)
+            if (
+                not keep_watching_for_late_result
+                and self.state.active_reach_and_grab_action_id == target
+            ):
+                self.state.active_reach_and_grab_action_id = ""
+
     def refresh_calibrationvalues(self) -> Dict[str, Any]:
         if not self.config:
             raise RuntimeError("MQTT is not configured")
@@ -358,6 +563,10 @@ class MqttRobot:
             return
 
         self._emit("message", data)
+        if self._handle_reach_and_grab_message(data):
+            return
+        if self._handle_visual_calibration_result(data):
+            return
         if data.get("sender") != "firmware":
             return
 
@@ -388,6 +597,72 @@ class MqttRobot:
                 pending["result"] = data
                 pending["event"].set()
 
+    def _handle_visual_calibration_result(self, data: Dict[str, Any]) -> bool:
+        message_type = str(data.get("type") or data.get("action") or "").lower()
+        status = str(data.get("status") or "").lower()
+        if (
+            data.get("sender") != "visual_ai"
+            or message_type != "calibrate_depth"
+            or status not in ("completed", "failed")
+        ):
+            return False
+
+        self.state.last_visual_calibration = data
+        self._emit("visual_calibration_result", data)
+        self._emit("state", self.state)
+
+        target = str(data.get("action_id", ""))
+        with self._lock:
+            pending = self._pending.get(target)
+        if pending and pending.get("want") == "visual_calibration":
+            pending["response"] = data
+            pending["result_event"].set()
+        return True
+
+    def _handle_reach_and_grab_message(self, data: Dict[str, Any]) -> bool:
+        sender = str(data.get("sender") or "")
+        message_type = str(data.get("type") or data.get("action") or "")
+        status = str(data.get("status") or "").lower()
+        target = str(data.get("action_id") or "")
+        if (
+            not target
+            or message_type != "detect_object"
+            or status not in {"in_progress", "completed", "failed"}
+            or sender not in {"firmware", "visual_ai"}
+        ):
+            return False
+
+        with self._lock:
+            pending = self._pending.get(target)
+            is_tracked = target in self._reach_and_grab_action_ids
+        if not is_tracked and not (pending and pending.get("want") == "reach_and_grab"):
+            return False
+
+        # Firmware detect_object messages are camera progress only. Only the
+        # Visual AI terminal response may finish the overall operation.
+        if sender == "firmware" and status != "in_progress":
+            return False
+
+        terminal = sender == "visual_ai" and status in {"completed", "failed"}
+        if terminal:
+            if self.state.active_reach_and_grab_action_id == target:
+                self.state.active_reach_and_grab_action_id = ""
+            with self._lock:
+                if target in self._reach_and_grab_action_ids:
+                    self._reach_and_grab_action_ids.remove(target)
+
+        if pending and pending.get("want") == "reach_and_grab":
+            pending["progress"].append(data)
+        self.state.last_reach_and_grab = data
+        self._emit("reach_and_grab_progress", data)
+        self._emit("state", self.state)
+
+        if terminal:
+            if pending and pending.get("want") == "reach_and_grab":
+                pending["response"] = data
+                pending["result_event"].set()
+        return sender == "visual_ai"
+
     def _handle_photo(self, photo: DecodedPhoto) -> None:
         self._emit("photo", photo)
         with self._lock:
@@ -395,3 +670,22 @@ class MqttRobot:
         if pending and pending.get("want") == "photo":
             pending["result"] = photo
             pending["event"].set()
+        elif pending and pending.get("want") == "visual_calibration":
+            pending["photo"] = photo
+            pending["photo_event"].set()
+        elif pending and pending.get("want") == "reach_and_grab":
+            try:
+                path = save_photo(
+                    photo,
+                    Path(pending["output_dir"]),
+                    "reach_and_grab",
+                )
+            except OSError as exc:
+                self._emit("error", f"Could not save reach-and-grab photo: {exc}")
+                return
+            pending["photo_path"] = path
+            self.state.last_photo_path = str(path)
+            self.state.last_reach_and_grab_photo_path = str(path)
+            self._emit("photo_saved", str(path))
+            self._emit("reach_and_grab_photo_saved", str(path))
+            self._emit("state", self.state)

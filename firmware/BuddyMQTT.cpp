@@ -3,7 +3,6 @@
 #include "ActionController.h"
 #include "ActionOTA.h"
 #include "Heartbeat.h"
-#include "FactoryReset.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // secure TCP
 #include <PubSubClient.h>
@@ -12,6 +11,7 @@
 #include <time.h>
 #include <LED.h>
 #include <ArduinoJson.h>
+#include <cstring>
 
 namespace {
   // —— Default broker settings (TLS) - can be overridden via web config ————
@@ -39,7 +39,7 @@ namespace {
   WiFiClientSecure netClient;     // TLS client
   PubSubClient     mqttClient(netClient);
 
-  bool   inited = false;
+  bool inited = false;
   String receivedMessage;
 
   // Workflow context — persists until overwritten or cleared
@@ -52,6 +52,8 @@ namespace {
   }
 
   constexpr unsigned long PUBLISH_INTERVAL = 3000;
+  constexpr unsigned long RECONNECT_INTERVAL_MS = 5000;
+  constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 2;
   unsigned long lastPublish = 0;
   int publishCount = 0;
   constexpr unsigned long OTA_ENFORCE_INTERVAL_MS = 60000;
@@ -127,12 +129,12 @@ namespace {
 
     // TODO: load cert from Preferences/web UI for proper TLS verification
     netClient.setInsecure();
-    netClient.setTimeout(15);
+    netClient.setTimeout(2000);
     mqttClient.setKeepAlive(30);
 
     // MQTT setup
     mqttClient.setServer(SERVER.c_str(), PORT);
-    mqttClient.setSocketTimeout(15);
+    mqttClient.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SEC);
     // Increase buffer so larger JSON payloads (like calibrationvalues) can publish
     mqttClient.setBufferSize(6144);
 
@@ -149,6 +151,7 @@ namespace {
   }
 
   void messageCallback(char* topic, byte* payload, unsigned int length) {
+    (void)topic;
     String msg;
     msg.reserve(length);
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
@@ -157,9 +160,13 @@ namespace {
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, msg) == DeserializationError::Ok) {
-      const char* s = doc["sender"] | nullptr;
-      if (s && strcmp(s, "firmware") == 0) return;
+      const char* sender = doc["sender"] | nullptr;
+      if (sender && strcmp(sender, "firmware") == 0) return;
     }
+
+    // This is the last committed receive behavior that was known to work.
+    // Parsing failures are intentionally left for ActionController so this
+    // callback cannot silently discard an otherwise executable request.
     receivedMessage = msg;
   }
 } // namespace
@@ -171,8 +178,15 @@ void BuddyMQTT::maintain() {
   static bool sentReadyMessage = false;
   static bool otaBootMarked = false;
   static unsigned long lastOtaEnforceAttemptMs = 0;
+  static unsigned long nextReconnectAttemptMs = 0;
 
   if (!mqttClient.connected()) {
+    const unsigned long now = millis();
+    if (nextReconnectAttemptMs != 0 &&
+        static_cast<long>(now - nextReconnectAttemptMs) < 0) {
+      return;
+    }
+
     sentReadyMessage = false;  // Reset flag on disconnect
     Serial.print("Connecting MQTT (TLS)… ");
     LED::Blink(0.5);
@@ -180,19 +194,20 @@ void BuddyMQTT::maintain() {
     mqttClient.setCallback(messageCallback);
 
     if (mqttClient.connect(CLIENT_ID.c_str(), USER.c_str(), PASS.c_str())) {
+      nextReconnectAttemptMs = 0;
       LED::On();
       Serial.println("connected");
+      // Never carry a command captured on a dead MQTT session into a new one.
+      receivedMessage.clear();
       mqttClient.subscribe(STATUS_TOPIC.c_str());
       Heartbeat::send(true);
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());   // -4 timeout, 5 not authorized, etc.
-      Serial.println("; retrying next loop (hold BOOT 3s to factory reset)");
-
-      // Check if user is holding BOOT button to trigger factory reset
-      if (FactoryReset::checkButtonHeld()) {
-        FactoryReset::performReset();  // Never returns - reboots device
-      }
+      Serial.print("; retrying in ");
+      Serial.print(RECONNECT_INTERVAL_MS / 1000);
+      Serial.println("s (hold BOOT 3s to reset WiFi/MQTT)");
+      nextReconnectAttemptMs = millis() + RECONNECT_INTERVAL_MS;
 
       return;
     }
@@ -276,8 +291,6 @@ void BuddyMQTT::listen() {
 
   if (Heartbeat::isEnabled()) Serial.println("Start of Listen Loop");
 
-  receivedMessage.clear();
-
   if (Heartbeat::isEnabled()) {
     while (mqttClient.connected() && receivedMessage == "") {
       BuddyWifi::maintain();
@@ -293,9 +306,14 @@ void BuddyMQTT::listen() {
   }
 
   if (receivedMessage.length()) {
+    // maintain() may have already received the next command immediately after
+    // the previous command's terminal response was published. Copy and clear
+    // only when consuming it; clearing at listen() entry dropped that command.
+    String messageToDispatch = receivedMessage;
+    receivedMessage.clear();
     Serial.println("Received MQTT message:");
-    Serial.println(receivedMessage);
-    ActionController::dispatch(receivedMessage);
+    Serial.println(messageToDispatch);
+    ActionController::dispatch(messageToDispatch);
   }
   if (Heartbeat::isEnabled()) Serial.println("End of Listen Loop");
 }
@@ -504,6 +522,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
   } else {
     doc["st_map"] = nullptr;
   }
+
   bool stencilCalibrated = hasStencilMap && hasRotationOffset && hasIkOffset;
   doc["stencil_calibrated"] = stencilCalibrated;
   doc["stencil_runtime_mode"] = "average_offsets";
@@ -518,6 +537,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     long leftCountsPerRev = rotPrefs.getLong("left_cpr", 0);
     long rightCountsPerRev = rotPrefs.getLong("right_cpr", 0);
     bool lastValid = rotPrefs.getBool("last_valid", false);
+    bool verySlowValidated = rotPrefs.getBool("vs_valid", false);
 
     doc["base_rotation_calibrated"] = baseCalibrated;
     doc["base_rotation_profileCalibrated"] = baseProfileCalibrated;
@@ -525,6 +545,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     doc["base_rotation_rightCountsPerRev"] = rightCountsPerRev;
     doc["base_rotation_lastCounts"] = rotPrefs.getLong("last_counts", 0);
     doc["base_rotation_lastValid"] = lastValid;
+    doc["base_rotation_veryslowValidated"] = verySlowValidated;
     baseRotationReady = baseCalibrated && baseProfileCalibrated &&
                         leftCountsPerRev > 0 && rightCountsPerRev > 0 &&
                         lastValid;
@@ -537,6 +558,7 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
     doc["base_rotation_rightCountsPerRev"] = nullptr;
     doc["base_rotation_lastCounts"] = nullptr;
     doc["base_rotation_lastValid"] = nullptr;
+    doc["base_rotation_veryslowValidated"] = nullptr;
     doc["base_rotation_ready"] = false;
   }
 
@@ -685,6 +707,7 @@ void BuddyMQTT::sendDebug(const String& component, const String& message) {
   if (!mqttClient.connected()) return;
 
   StaticJsonDocument<256> doc;
+  doc["sender"] = "firmware";
   doc["debug"] = component;
   doc["msg"] = message;
 

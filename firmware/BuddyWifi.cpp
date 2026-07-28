@@ -1,68 +1,51 @@
 #include "BuddyWifi.h"
 #include "WebServerForStartup.h"
+#include "FactoryReset.h"
 #include <WiFi.h>
 #include <LED.h>
 #include <Preferences.h>
 
 namespace {
   const unsigned long TIMEOUT_MS = 10000;
+  const unsigned long CONFIG_RETRY_MS = 5000;
   const int MAX_RETRY_ATTEMPTS = 3;
-  const int BOOT_BUTTON = 0;
-  const unsigned long WIFI_CONFIG_HOLD_MS = 3000;
 
   int failedAttempts = 0;
   bool configModeActive = false;
+  unsigned long nextConfigAttemptMs = 0;
   Preferences prefs;
 
   String savedSSID;
   String savedPassword;
 
   void startConfigMode(const char* reason) {
+    unsigned long now = millis();
+    if (nextConfigAttemptMs != 0 &&
+        static_cast<long>(now - nextConfigAttemptMs) < 0) {
+      return;
+    }
+
     Serial.println(reason);
     WiFi.disconnect(true);
     delay(100);
     savedSSID = "";
     savedPassword = "";
     failedAttempts = 0;
-    configModeActive = true;
-    WebServerForStartup::begin();
-  }
-
-  bool wifiConfigButtonHeld() {
-    static unsigned long pressStartTime = 0;
-    static bool wasPressed = false;
-
-    pinMode(BOOT_BUTTON, INPUT_PULLUP);
-
-    if (digitalRead(BOOT_BUTTON) == LOW) {
-      if (!wasPressed) {
-        wasPressed = true;
-        pressStartTime = millis();
-        Serial.println("\n[BOOT] Button pressed. Hold for 3 seconds to change WiFi...");
-        LED::Blink(0.1);
-      } else if (millis() - pressStartTime >= WIFI_CONFIG_HOLD_MS) {
-        wasPressed = false;
-        pressStartTime = 0;
-        return true;
-      }
+    configModeActive = WebServerForStartup::begin();
+    if (configModeActive) {
+      nextConfigAttemptMs = 0;
     } else {
-      if (wasPressed) {
-        Serial.println("[BOOT] Released early. Continuing normal WiFi operation...");
-        if (WiFi.status() == WL_CONNECTED) {
-          LED::On();
-        } else {
-          LED::Off();
-        }
-      }
-      wasPressed = false;
-      pressStartTime = 0;
+      nextConfigAttemptMs = millis() + CONFIG_RETRY_MS;
+      Serial.println("Configuration AP startup failed; retrying in 5 seconds");
     }
-
-    return false;
   }
 }
 
 void BuddyWifi::maintain() {
+  // This is the single runtime owner of the BOOT gesture. It is deliberately
+  // serviced before every WiFi state so config mode cannot hide the button.
+  FactoryReset::maintain();
+
   // If config mode is active, handle web server
   if (configModeActive) {
     WebServerForStartup::maintain();
@@ -74,11 +57,6 @@ void BuddyWifi::maintain() {
       failedAttempts = 0;
       // Credentials will be loaded on next connection attempt
     }
-    return;
-  }
-
-  if (wifiConfigButtonHeld()) {
-    startConfigMode("\n[BOOT] WiFi change requested. Starting configuration mode...");
     return;
   }
 
@@ -112,9 +90,17 @@ void BuddyWifi::maintain() {
   WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
 
   unsigned long start = millis();
+  unsigned long lastProgress = start;
   while (WiFi.status() != WL_CONNECTED && millis() - start < TIMEOUT_MS) {
-    delay(500);
-    Serial.print('.');
+    // Keep the connection-reset gesture responsive while waiting for the station connection.
+    FactoryReset::maintain();
+    delay(10);
+
+    unsigned long now = millis();
+    if (now - lastProgress >= 500) {
+      Serial.print('.');
+      lastProgress = now;
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED) {

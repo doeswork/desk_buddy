@@ -79,14 +79,18 @@ namespace {
   }
 }
 
-void WebServerForStartup::begin() {
-  if (serverRunning) return;
+bool WebServerForStartup::begin() {
+  if (serverRunning) return true;
 
   Serial.println("\n=== Starting Configuration Web Server ===");
 
   // Start Access Point
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
+  if (!WiFi.softAP(AP_SSID, AP_PASS)) {
+    Serial.println("ERROR: Failed to start DeskBuddy access point");
+    LED::Off();
+    return false;
+  }
 
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -110,6 +114,7 @@ void WebServerForStartup::begin() {
   Serial.println("Web server ready at http://" + IP.toString());
 
   LED::Blink(2.0);  // Slow blink to indicate config mode
+  return true;
 }
 
 void WebServerForStartup::maintain() {
