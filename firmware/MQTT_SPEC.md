@@ -60,7 +60,6 @@ Commands are JSON objects published to `{mqtt_user}/test`.
 
 ### Dispatch filtering and malformed requests
 
-- A raw payload beginning exactly with `{"count":` is ignored by the MQTT callback.
 - The callback tries to parse a `128`-byte JSON document. When parsing succeeds, `sender:"firmware"` is ignored. Other payloads are copied into the single receive slot and parsed again by the dispatcher.
 - Valid shared-topic JSON without `action`, invalid JSON, a request too large for the dispatch document, or an unknown/case-mismatched action produces serial diagnostics only.
 - Extra fields are generally ignored.
@@ -243,8 +242,46 @@ The IK movement can still fail if the resulting elbow/wrist sequence is blocked 
 | `STATUS` | none | Updates encoder tracking, corrects position to zero if true north is pressed, and returns status |
 | `HOME` | `direction`; optional `speed` | Rotates until the true-north input is detected and makes position trusted |
 | `CALIBRATE` | `direction`; optional `speed` | Measures counts per revolution for one direction |
-| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Runs the complete left/right counts and neutral-balance calibration, learns a balanced `veryslow` profile, then verifies one final full revolution each way |
+| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Measures left and right counts-per-revolution by averaging several full revolutions each way. **Legacy:** prefer the dedicated `calibrate_base_rotation` action |
 | `CALIBRATE_BOTH` | optional `neutralServoAngle` | Alias for `CALIBRATE_PROFILE` |
+
+#### `calibrate_base_rotation` (preferred)
+
+Profiling is its own action rather than a `baseRotate` control type, so calibration is routed straight to `CalibrateRotation` instead of through the movement path. No `controlType` is sent — the action name is the intent.
+
+```json
+{"sender":"calibration_wizard","action_id":"base_profile_001","action":"calibrate_base_rotation","neutralServoAngle":90}
+```
+
+`neutralServoAngle` is optional. When supplied it is applied and saved as the new stored neutral immediately, before any measuring, so the requested angle takes effect even if the run later fails. Omit it to start from the default neutral of `90` rather than the stored value, which keeps each run independent of how the previous one ended. Calibration never *learns* a neutral of its own.
+
+The run homes to true north, then times `3` consecutive full revolutions in each direction and averages them into `leftCountsPerRev` / `rightCountsPerRev`. A direction is rejected with `revolution measurements inconsistent` when its revolutions disagree by more than `10%`, since averaging inconsistent readings would yield a confident-looking but wrong number.
+
+Those two counts are the entire output, and they are what make a `LEFT` and `RIGHT` move of the same magnitude travel the same distance. The two directions do **not** need to take equal time: each is divided by its own count. The reply carries the same `base_rotation` detail object as `baseRotate`.
+
+##### Progress telemetry
+
+A profile run blocks for minutes, so it publishes non-terminal `status:"progress"` messages while it works. These are diagnostic only: they never conclude an action, and clients that wait for `completed`/`failed` can ignore them.
+
+```json
+{"sender":"firmware","status":"progress","action_id":"base_profile_001","type":"calibrate_base_rotation",
+ "uptime_ms":91234,"free_heap":186692,
+ "progress":{"event":"true_north_hit_ignored","measure_phase":"LEFT","phase":"measuring_left_revolution",
+             "drive_angle":80,"resting":90,"encoder_unwrapped":1180,"encoder_raw":2044,"base_counts":1180,
+             "true_north_pressed":true,"true_north_hits":4,"pulse_accepted":false,"pulse_ms":900,
+             "pulse_counts":400,"pulse_min_counts":4096,"ignored_pulses":2,"pass":1,
+             "left_cpr":0,"right_cpr":0,"left_ms":0,"right_ms":0}}
+```
+
+One is published on every true-north hit — accepted **and** rejected — on each phase transition, on every failure exit, and every `3000 ms` while waiting so a stall is distinguishable from a slow revolution. `event` values include:
+
+- `calibration_start`, `revolution_measured`, `calibration_complete`, `calibration_failed`
+- `seek_true_north_start`, `seek_true_north_waiting`, `true_north_hit_initial`, `seek_true_north_timeout`, `seek_true_north_encoder_stuck`
+- `revolution_start`, `leaving_true_north`, `left_true_north`, `rotating`, `true_north_hit_accepted`, `true_north_hit_ignored`
+- `draining_ignored_pulse`, `drain_pulse_timeout`, `drain_pulse_encoder_stuck`
+- `revolution_timeout`, `revolution_encoder_stuck`, `revolution_too_small`
+
+Reading a stall: a rising `encoder_unwrapped` with no hits means the base turns but never reaches the switch; a static `encoder_unwrapped` means the servo is not moving; a climbing `ignored_pulses` with `pulse_counts` well below `pulse_min_counts` means the switch is retriggering before the minimum travel is met.
 | `ENCODER` | `direction`, positive `value`; optional `speed` | Moves a number of firmware base steps; despite the name, `value` is not raw encoder counts |
 | `STEPS` | `direction`, positive `value` or `steps`; optional `speed` | Same firmware-step movement as `ENCODER` |
 | `DEGREES` | `direction`, positive `value`; optional `speed` | Relative degree movement; requires rotation calibration |
@@ -254,7 +291,7 @@ Accepted `direction` values are `LEFT` and `RIGHT`.
 
 Accepted speed labels are `veryslow`, `slow`, `regular`, `fast`, and `superfast`. Missing speed defaults to `slow` for `ENCODER`/`STEPS`, and `veryslow` for the other controls. An unrecognized supplied speed also becomes `veryslow`.
 
-The initial speed-angle offsets are fixed defaults, but `CALIBRATE_PROFILE` independently learns the left and right `veryslow` angles. Learned speed-profile angles are saved in the `rot` Preferences namespace and are no longer overwritten by defaults when firmware reloads them.
+Speed-angle offsets are fixed defaults derived from the neutral angle. Calibration does not learn or persist per-speed angles: an earlier design searched for a neutral that equalised left/right revolution *times* and saved it, so a partially completed run could persist a badly off-centre neutral that weakened every later drive until calibration stalled outright.
 
 There are `216` firmware steps per base revolution. `ENCODER` and `STEPS` use calibrated directional counts when available; otherwise they use an estimated `24576` counts per revolution. These step modes can therefore operate before calibration, but estimated movement is not precision motion.
 
@@ -267,13 +304,11 @@ Every terminal response contains `base_rotation`. Its fields are:
 - State: `calibrated`, `profileCalibrated`, `positionTrusted`, `baseAngleDegrees`, `basePositionCounts`.
 - Counts/math: `leftCountsPerRev`, `rightCountsPerRev`, `driveGearTeeth`, `baseGearTeeth`, `baseStepsPerRev`, `encoderSign`, directional/average counts per step, estimated counts fields, and `usingEstimatedStepCounts`.
 - Stencil/runtime: `rotationOffsetDegrees`.
-- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, pass count, timing difference, balanced flag, phase, pulse diagnostics, full-revolution timings, nested `speedProfile` angles, and `verySlowValidation`.
+- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, measured-revolution count, timing difference, phase, pulse diagnostics, full-revolution timings, nested `speedProfile` angles, and `verySlowValidated`.
 - Hardware diagnostics: true-north pressed/level/hit count and `rawEncoder`.
 - Failure: optional `error` while the outer status is `failed`.
 
-`verySlowValidation` reports the learned-speed pass count, final full-revolution time/count measurements, balance result, and `validated`. Calibration succeeds only when the final left and right `veryslow` revolutions have balanced timing and each encoder count remains within 5% of the directional count learned by the primary calibration.
-
-Successful `veryslow` validation is persisted as `vs_valid` in the `rot` namespace and is exposed by `calibrationvalues` as `base_rotation_veryslowValidated`. Older saved profiles remain usable but report this new field as false until the updated profile calibration succeeds.
+`verySlowValidated` is retained for clients that read it and now simply mirrors whether usable counts exist; there is no separate veryslow measurement phase. It is persisted as `vs_valid` in the `rot` namespace and exposed by `calibrationvalues` as `base_rotation_veryslowValidated`.
 
 ## 5. Calibration API
 
@@ -567,17 +602,7 @@ Timestamps are generated after `configTime(0,0,...)` and therefore use UTC-style
 
 The code can optionally publish three additional hover snapshots to the status topic when `Heartbeat::send(false)` is called. Normal MQTT paths call `send(true)`, so those snapshot messages are not normally emitted.
 
-### 8.3 Count
-
-When heartbeat is enabled, the main MQTT maintenance path may publish this to `{mqtt_user}/test` after its three-second gate:
-
-```json
-{"count":1,"time":"YYYY-MM-DD HH:MM:SS"}
-```
-
-Because the listen loop blocks waiting for commands, count is not a reliable periodic liveness signal. Use the heartbeat topic for liveness. Count messages have no `sender` and are explicitly ignored by the firmware's own callback.
-
-### 8.4 Debug
+### 8.3 Debug
 
 Gripper and OTA code can publish to `{mqtt_user}/test`:
 
@@ -612,7 +637,6 @@ Holding the BOOT button for three seconds performs a connection reset outside MQ
 
 | Situation | MQTT-observable result |
 | --- | --- |
-| Raw payload begins with `{"count":` | Ignored |
 | Incoming `sender:"firmware"`, including large detail/photo payloads | Ignored before command allocation/dispatch |
 | Valid JSON without `action` | Ignored as shared-topic side traffic |
 | Command is too large for the `512`-byte dispatch document | Dispatcher JSON parse error; no MQTT response |

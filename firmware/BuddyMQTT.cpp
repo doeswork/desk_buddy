@@ -42,6 +42,9 @@ namespace {
   bool inited = false;
   String receivedMessage;
 
+  // Action id of the command currently executing; "" when idle.
+  String activeActionId;
+
   // Workflow context — persists until overwritten or cleared
   int currentWorkflowId      = -1;
   int currentWorkflowEventId = -1;
@@ -51,11 +54,8 @@ namespace {
     if (currentWorkflowEventId >= 0) doc["workflow_event_id"] = currentWorkflowEventId;
   }
 
-  constexpr unsigned long PUBLISH_INTERVAL = 3000;
   constexpr unsigned long RECONNECT_INTERVAL_MS = 5000;
   constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 2;
-  unsigned long lastPublish = 0;
-  int publishCount = 0;
   constexpr unsigned long OTA_ENFORCE_INTERVAL_MS = 60000;
 
   // Forward declarations
@@ -156,8 +156,6 @@ namespace {
     msg.reserve(length);
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
-    if (msg.startsWith("{\"count\":")) return;
-
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, msg) == DeserializationError::Ok) {
       const char* sender = doc["sender"] | nullptr;
@@ -232,21 +230,6 @@ void BuddyMQTT::maintain() {
   //     }
   //   }
   // }
-
-  if (Heartbeat::isEnabled()) {
-    unsigned long now = millis();
-    if (now - lastPublish >= PUBLISH_INTERVAL) {
-      lastPublish = now;
-      ++publishCount;
-      String payload = String("{\"count\":") + publishCount +
-                       ",\"time\":\"" + getTimestamp() + "\"}";
-      if (publishInternal(STATUS_TOPIC.c_str(), payload)) {
-        Serial.println("Published → " + payload);
-      } else {
-        Serial.println("Publish failed");
-      }
-    }
-  }
 
   // Send "ready to play" message once per connection session
   if (mqttClient.connected() && !sentReadyMessage) {
@@ -715,6 +698,37 @@ void BuddyMQTT::sendDebug(const String& component, const String& message) {
   serializeJson(doc, payload);
 
   publishInternal(STATUS_TOPIC.c_str(), payload);
+}
+
+void BuddyMQTT::sendProgress(const String& actionId, const String& type, const String& detailsJson) {
+  ensureInited();
+  if (!mqttClient.connected()) return;
+
+  DynamicJsonDocument doc(1024);
+  doc["sender"]    = "firmware";
+  doc["status"]    = "progress";
+  if (actionId.length()) doc["action_id"] = actionId;
+  if (type.length())     doc["type"] = type;
+  if (detailsJson.length()) doc["progress"] = serialized(detailsJson);
+  doc["uptime_ms"]  = millis();
+  doc["free_heap"]  = ESP.getFreeHeap();
+  injectWorkflow(doc);
+
+  String out;
+  serializeJson(doc, out);
+  publishInternal(STATUS_TOPIC.c_str(), out);
+
+  // The caller is inside a multi-minute blocking action, so listen() is not
+  // pumping the client. Service it here or the broker drops us mid-calibration.
+  mqttClient.loop();
+}
+
+const String& BuddyMQTT::currentActionId() {
+  return activeActionId;
+}
+
+void BuddyMQTT::setCurrentActionId(const String& actionId) {
+  activeActionId = actionId;
 }
 
 void BuddyMQTT::setResetReason(const char* reason, uint32_t freeHeap, uint32_t minFreeHeap) {

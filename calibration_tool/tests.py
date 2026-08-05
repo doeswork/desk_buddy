@@ -10,11 +10,11 @@ import tkinter as tk
 import unittest
 
 try:
-    from .app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event
+    from .app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event, is_heartbeat_event
     from .mqtt_robot import MqttRobot, ReachAndGrabResult, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, reach_and_grab_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
     from .photo_decode import DecodedPhoto, decode_photo_message
 except ImportError:  # pragma: no cover - direct execution from calibration_tool/
-    from app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event
+    from app import CalibrationWizard, build_calibration_status_rows, explain_reach_and_grab_failure, fit_image_to_width, format_topic_log_event, is_heartbeat_event
     from mqtt_robot import MqttRobot, ReachAndGrabResult, VisualCalibrationCapture, base_angle_payload, base_degrees_payload, base_profile_payload, base_steps_payload, calibrationvalues_payload, gripper_payload, ik_payload, photo_payload, reach_and_grab_payload, resolve_cert_path, save_hover_payload, save_perch_payload, servo_payload, stencil_payload, visual_calibration_payload
     from photo_decode import DecodedPhoto, decode_photo_message
 
@@ -35,9 +35,22 @@ class PayloadTests(unittest.TestCase):
 
     def test_base_profile_payload(self) -> None:
         payload = base_profile_payload("tester", 90)
-        self.assertEqual(payload["action"], "baseRotate")
-        self.assertEqual(payload["controlType"], "CALIBRATE_PROFILE")
+        self.assertEqual(payload["action"], "calibrate_base_rotation")
         self.assertEqual(payload["neutralServoAngle"], 90)
+        # The action itself carries the intent; no controlType is sent.
+        self.assertNotIn("controlType", payload)
+
+    def test_base_profile_payload_sends_operator_neutral_verbatim(self) -> None:
+        # The operator's entered angle must reach the firmware unchanged; it is
+        # an input, not something calibration derives or second-guesses.
+        for entered in (70, 84, 90, 110):
+            payload = base_profile_payload("tester", entered)
+            self.assertEqual(payload["neutralServoAngle"], entered)
+
+    def test_base_profile_payload_without_neutral(self) -> None:
+        payload = base_profile_payload("tester")
+        self.assertEqual(payload["action"], "calibrate_base_rotation")
+        self.assertNotIn("neutralServoAngle", payload)
 
     def test_base_angle_payload(self) -> None:
         payload = base_angle_payload("tester", 30)
@@ -166,7 +179,6 @@ class CalibrationStatusTests(unittest.TestCase):
         rows = build_calibration_status_rows(
             {
                 "base_rotation_profileCalibrated": True,
-                "base_rotation_veryslowValidated": True,
                 "base_rotation_calibrated": True,
                 "base_rotation_leftCountsPerRev": 24000,
                 "base_rotation_rightCountsPerRev": 24100,
@@ -186,7 +198,8 @@ class CalibrationStatusTests(unittest.TestCase):
         self.assertEqual(by_key["hover_over_mid"]["state"], "MISSING")
         self.assertEqual(by_key["hover_min_120"]["state"], "OPTIONAL")
         self.assertEqual(by_key["rot_off_deg"]["state"], "SAVED")
-        self.assertEqual(by_key["base_rotation_veryslowValidated"]["state"], "SAVED")
+        # Veryslow angles are fixed offsets now, so no validation row is shown.
+        self.assertNotIn("base_rotation_veryslowValidated", by_key)
 
 
 class PhotoDecodeTests(unittest.TestCase):
@@ -442,8 +455,26 @@ class ReachAndGrabMqttTests(unittest.TestCase):
 
 
 class TopicLogFormatTests(unittest.TestCase):
-    def test_heartbeat_message_is_ignored(self) -> None:
-        self.assertIsNone(format_topic_log_event("message", {"sender": "firmware", "log": "heartbeat"}))
+    def test_heartbeat_message_is_logged_but_flagged(self) -> None:
+        # Heartbeats are formatted like any other message; hiding them is the
+        # activity log's filter decision, not the formatter's.
+        payload = {"sender": "firmware", "log": "heartbeat"}
+        self.assertIsNotNone(format_topic_log_event("message", payload))
+        self.assertTrue(is_heartbeat_event("message", payload))
+
+    def test_non_heartbeat_message_is_not_flagged(self) -> None:
+        payload = {"sender": "firmware", "status": "completed", "action_id": "servo_1"}
+        self.assertFalse(is_heartbeat_event("message", payload))
+
+    def test_status_heartbeat_is_flagged(self) -> None:
+        self.assertTrue(is_heartbeat_event("message", {"sender": "firmware", "status": "heartbeat"}))
+
+    def test_non_json_payload_is_logged_raw(self) -> None:
+        line = format_topic_log_event("raw_message", {"topic": "esp32_5/test", "text": "not json"})
+        self.assertIsNotNone(line)
+        assert line is not None
+        self.assertIn("esp32_5/test", line)
+        self.assertIn("not json", line)
 
     def test_outgoing_command_is_logged(self) -> None:
         line = format_topic_log_event("sent", {"action": "servo", "action_id": "servo_1", "position": 120})
@@ -456,6 +487,43 @@ class TopicLogFormatTests(unittest.TestCase):
         self.assertIsNotNone(line)
         assert line is not None
         self.assertIn("IN completed servo_1", line)
+
+    def test_base_rotation_progress_is_summarized_not_dumped(self) -> None:
+        line = format_topic_log_event(
+            "message",
+            {
+                "sender": "firmware",
+                "status": "progress",
+                "action_id": "base_profile_1",
+                "type": "calibrate_base_rotation",
+                "progress": {
+                    "event": "true_north_hit_ignored",
+                    "measure_phase": "LEFT",
+                    "encoder_unwrapped": 1234,
+                    "true_north_hits": 3,
+                    "ignored_pulses": 2,
+                    "pulse_ms": 900,
+                    "pulse_counts": 400,
+                    "pulse_min_counts": 4096,
+                    "drive_angle": 80,
+                    "resting": 90,
+                },
+            },
+        )
+        self.assertIsNotNone(line)
+        assert line is not None
+        self.assertIn("IN PROGRESS true_north_hit_ignored", line)
+        self.assertIn("LEFT", line)
+        self.assertIn("ignored=2", line)
+        self.assertIn("min_counts=4096", line)
+
+    def test_progress_message_without_details_falls_back_to_raw_line(self) -> None:
+        line = format_topic_log_event(
+            "message", {"sender": "firmware", "status": "progress", "action_id": "base_profile_1"}
+        )
+        self.assertIsNotNone(line)
+        assert line is not None
+        self.assertIn("IN progress base_profile_1", line)
 
     def test_photo_event_is_summarized(self) -> None:
         class FakePhoto:
@@ -589,7 +657,6 @@ class GuiStateTests(unittest.TestCase):
             self.assertEqual(
                 tab_texts,
                 [
-                    "Setup",
                     "Status",
                     "Base + Perch",
                     "IK",
@@ -609,6 +676,102 @@ class GuiStateTests(unittest.TestCase):
             self.assertTrue(hasattr(app, "reach_and_grab_button"))
             self.assertTrue(hasattr(app, "stencil_status_box"))
             self.assertTrue(hasattr(app, "stencil_points_box"))
+        finally:
+            app.destroy()
+
+    def test_menu_bar_switches_between_connect_and_calibration_views(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Connect (former Setup) content is shown by default and lives
+            # outside the calibration notebook.
+            self.assertTrue(app.connect_view.winfo_ismapped())
+            self.assertFalse(app.notebook.winfo_ismapped())
+            self.assertNotEqual(app.connect_view.master, app.notebook)
+
+            app._show_calibration_tab("Base + Perch")
+            app.update()
+            self.assertTrue(app.notebook.winfo_ismapped())
+            self.assertFalse(app.connect_view.winfo_ismapped())
+            self.assertEqual(app.notebook.select(), str(app.base_perch_tab))
+
+            app._show_calibration_tab("Stencil")
+            app.update()
+            self.assertEqual(app.notebook.select(), str(app.stencil_tab))
+
+            app._show_connect_view()
+            app.update()
+            self.assertTrue(app.connect_view.winfo_ismapped())
+            self.assertFalse(app.notebook.winfo_ismapped())
+        finally:
+            app.destroy()
+
+    def test_tools_menu_toggles_controller_and_activity_log(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Both panels are on by default.
+            self.assertTrue(app.show_controller.get())
+            self.assertTrue(app.show_activity_log.get())
+            self.assertTrue(app.controller_shell.winfo_ismapped())
+            self.assertIn(str(app.activity_log_pane), app.main_pane.panes())
+
+            app.show_controller.set(False)
+            app._apply_controller_visibility()
+            app.update()
+            self.assertFalse(app.controller_shell.winfo_ismapped())
+
+            app.show_activity_log.set(False)
+            app._apply_activity_log_visibility()
+            app.update()
+            self.assertNotIn(str(app.activity_log_pane), app.main_pane.panes())
+
+            app.show_controller.set(True)
+            app._apply_controller_visibility()
+            app.show_activity_log.set(True)
+            app._apply_activity_log_visibility()
+            app.update()
+            self.assertTrue(app.controller_shell.winfo_ismapped())
+            self.assertIn(str(app.activity_log_pane), app.main_pane.panes())
+        finally:
+            app.destroy()
+
+    def test_view_menu_zoom_and_maximize_have_no_banner_widgets(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Zoom/maximize used to be banner buttons with their own textvariable;
+            # they now live only in the View menu, driven by the same methods.
+            self.assertFalse(hasattr(app, "maximize_text"))
+
+            app._zoom_in()
+            self.assertNotEqual(app.zoom_text.get(), "100%")
+            app._reset_zoom()
+            self.assertEqual(app.zoom_text.get(), "100%")
+
+            self.assertFalse(app._manual_maximized)
+            app._toggle_maximize()
+            self.assertTrue(app._manual_maximized)
+            app._toggle_maximize()
+            self.assertFalse(app._manual_maximized)
         finally:
             app.destroy()
 

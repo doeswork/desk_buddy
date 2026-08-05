@@ -101,8 +101,12 @@ def reach_and_grab_payload(
 
 
 def base_profile_payload(sender: str, neutral: Optional[int] = None) -> Payload:
-    payload = base_payload("baseRotate", "base_profile", sender)
-    payload["controlType"] = "CALIBRATE_PROFILE"
+    """Dedicated base rotation profiling action.
+
+    The action name is the intent, so no controlType is sent; the firmware routes
+    this straight to CalibrateRotation rather than through the movement path.
+    """
+    payload = base_payload("calibrate_base_rotation", "base_profile", sender)
     if neutral is not None:
         payload["neutralServoAngle"] = int(neutral)
     return payload
@@ -557,9 +561,17 @@ class MqttRobot:
             self._handle_photo(decoded_photo)
             return
 
+        text = raw.decode("utf-8", errors="replace")
         try:
-            data = json.loads(raw.decode("utf-8", errors="replace"))
+            data = json.loads(text)
         except json.JSONDecodeError:
+            # Not JSON, but it still arrived on a subscribed topic. Surface it in
+            # the activity log rather than dropping it silently.
+            self._emit("raw_message", {"topic": msg.topic, "text": text})
+            return
+
+        if not isinstance(data, dict):
+            self._emit("raw_message", {"topic": msg.topic, "text": text})
             return
 
         self._emit("message", data)
