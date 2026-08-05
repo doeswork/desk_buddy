@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -72,7 +74,33 @@ ACCENT_DARK = "#0f5369"
 GOOD = "#1f7a4d"
 WARN = "#9a6700"
 BAD = "#b42318"
-UI_ZOOM_LEVELS = (0.75, 0.85, 1.0, 1.1, 1.25, 1.4, 1.5)
+UI_ZOOM_LEVELS = (0.75, 0.85, 1.0, 1.1, 1.25, 1.4, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0)
+
+# Preferred families first, then cross-platform fallbacks. Anything that is not
+# installed is skipped: Tk silently falls back to the bitmap "fixed" font, which
+# ignores size changes entirely and would break zooming.
+UI_FONT_CANDIDATES = (
+    "Segoe UI",
+    "Adwaita Sans",
+    "Cantarell",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Ubuntu",
+    "Helvetica Neue",
+    "Arial",
+)
+MONO_FONT_CANDIDATES = (
+    "Consolas",
+    "Adwaita Mono",
+    "CaskaydiaMono Nerd Font",
+    "Noto Sans Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Ubuntu Mono",
+    "Menlo",
+    "Courier New",
+)
 
 
 def fit_image_to_width(source_width: int, source_height: int, available_width: int) -> tuple[int, int]:
@@ -107,9 +135,10 @@ def build_calibration_status_rows(values: Dict[str, Any]) -> list[Dict[str, str]
             }
         )
 
+    # Veryslow angles are fixed offsets from neutral rather than learned values,
+    # so there is no veryslow validation state left to report here.
     base_fields = (
         ("Profile calibrated", "base_rotation_profileCalibrated", "boolean"),
-        ("Veryslow motion validated", "base_rotation_veryslowValidated", "boolean"),
         ("Rotation calibrated", "base_rotation_calibrated", "boolean"),
         ("Left counts / revolution", "base_rotation_leftCountsPerRev", "positive"),
         ("Right counts / revolution", "base_rotation_rightCountsPerRev", "positive"),
@@ -226,14 +255,69 @@ def _format_preference_value(key: str, value: Any) -> str:
     return str(value)
 
 
+def is_heartbeat_event(kind: str, payload: Any) -> bool:
+    """True when an event is routine heartbeat traffic the operator may hide."""
+    if kind != "message" or not isinstance(payload, dict):
+        return False
+    return payload.get("log") == "heartbeat" or payload.get("status") == "heartbeat"
+
+
+def format_base_rotation_progress(payload: Dict[str, Any]) -> Optional[str]:
+    """Render a firmware base-rotation progress snapshot as one readable line.
+
+    These arrive every true-north hit and every few seconds in between, so a raw
+    JSON dump would bury the fields that actually show whether the run advanced.
+    """
+    progress = payload.get("progress")
+    if not isinstance(progress, dict):
+        return None
+
+    event = str(progress.get("event", "progress"))
+    parts = [f"PROGRESS {event}"]
+
+    phase = progress.get("measure_phase") or progress.get("phase")
+    if phase:
+        parts.append(str(phase))
+
+    for label, key in (
+        ("enc", "encoder_unwrapped"),
+        ("hits", "true_north_hits"),
+        ("ignored", "ignored_pulses"),
+        ("pulse_ms", "pulse_ms"),
+        ("pulse_counts", "pulse_counts"),
+        ("min_counts", "pulse_min_counts"),
+    ):
+        value = progress.get(key)
+        if value is not None:
+            parts.append(f"{label}={value}")
+
+    if progress.get("true_north_pressed"):
+        parts.append("TN=pressed")
+    if progress.get("drive_angle") is not None:
+        parts.append(f"angle={progress['drive_angle']}")
+    if progress.get("resting") is not None:
+        parts.append(f"rest={progress['resting']}")
+
+    return " ".join(parts)
+
+
 def format_topic_log_event(kind: str, payload: Any) -> Optional[str]:
     """Return a compact topic-log line body, or None when it should be hidden."""
     if kind == "message" and isinstance(payload, dict):
-        if payload.get("log") == "heartbeat":
-            return None
+        if payload.get("status") == "progress":
+            line = format_base_rotation_progress(payload)
+            if line:
+                return f"IN {line}"
         status = payload.get("status") or payload.get("photo") or payload.get("debug") or payload.get("log") or "message"
         action_id = payload.get("action_id", "")
         return _compact_log_line("IN", str(status), str(action_id), payload)
+
+    if kind == "raw_message" and isinstance(payload, dict):
+        topic = str(payload.get("topic", ""))
+        text = str(payload.get("text", ""))
+        if len(text) > MAX_TOPIC_LOG_PAYLOAD_CHARS:
+            text = text[: MAX_TOPIC_LOG_PAYLOAD_CHARS - 3] + "..."
+        return " ".join(part for part in ("IN", "raw", topic, text) if part)
 
     if kind == "sent" and isinstance(payload, dict):
         action = payload.get("action", "command")
@@ -374,7 +458,10 @@ class CalibrationWizard(tk.Tk):
         self.visual_calibration_photo_image: Any = None
         self.reach_and_grab_photo_image: Any = None
         self.reach_and_grab_photo_path: Optional[Path] = None
-        self.topic_log_lines: list[str] = []
+        # (line, is_heartbeat) so the heartbeat filter can re-render history
+        # rather than only affecting messages that arrive after it is toggled.
+        self.topic_log_entries: list[tuple[str, bool]] = []
+        self.show_heartbeats = tk.BooleanVar(value=False)
         self._last_ik_sync_signature = ""
         self._last_perch_sync_signature = ""
         self.session: Dict[str, Any] = {"started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "captures": [], "ik_validation": {}}
@@ -423,6 +510,33 @@ class CalibrationWizard(tk.Tk):
         self._set_zoom(1.0)
         return "break"
 
+    def _pick_font_family(self, candidates: tuple[str, ...], fallback: str) -> str:
+        """Return the first installed scalable family, else Tk's named default.
+
+        A family that renders as a bitmap font reports identical metrics at
+        every size, so zooming would leave the text unchanged. Those are
+        rejected in favour of the named default, which is always scalable.
+        """
+        available = {name.lower() for name in tkfont.families(self)}
+        for family in candidates:
+            if family.lower() in available and self._is_scalable(family):
+                return family
+        resolved = tkfont.nametofont(fallback).actual("family")
+        if not self._is_scalable(resolved):
+            print(
+                f"warning: no scalable font found (using {resolved!r}); "
+                "zoom will not resize text. Install a TrueType font such as "
+                "DejaVu Sans.",
+                file=sys.stderr,
+            )
+        return resolved
+
+    def _is_scalable(self, family: str) -> bool:
+        probe = tkfont.Font(self, family=family, size=10)
+        small = probe.measure("Calibration")
+        probe.configure(size=30)
+        return probe.measure("Calibration") != small
+
     def _set_zoom(self, zoom: float) -> None:
         zoom = min(UI_ZOOM_LEVELS, key=lambda level: abs(level - zoom))
         self.ui_zoom = zoom
@@ -431,6 +545,11 @@ class CalibrationWizard(tk.Tk):
         for name, font in self.ui_fonts.items():
             _family, base_size, _weight = self._font_specs[name]
             font.configure(size=max(6, round(base_size * zoom)))
+
+        # Tk's built-in named fonts back plain tk widgets and the standard
+        # dialogs, which would otherwise stay at their original size.
+        for name, base_size in self._named_font_sizes.items():
+            tkfont.nametofont(name).configure(size=max(6, round(base_size * zoom)))
 
         def scaled_pair(x: int, y: int) -> tuple[int, int]:
             return max(2, round(x * zoom)), max(2, round(y * zoom))
@@ -444,7 +563,7 @@ class CalibrationWizard(tk.Tk):
         style.configure("Treeview", rowheight=max(20, round(28 * zoom)))
 
         if hasattr(self, "controller_shell"):
-            controller_width = max(300, min(500, round(375 * zoom)))
+            controller_width = max(300, min(1125, round(375 * zoom)))
             self.controller_shell.configure(width=controller_width)
         self.update_idletasks()
         if hasattr(self, "controller_photo_panel"):
@@ -486,22 +605,33 @@ class CalibrationWizard(tk.Tk):
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
+        ui_family = self._pick_font_family(UI_FONT_CANDIDATES, "TkDefaultFont")
+        mono_family = self._pick_font_family(MONO_FONT_CANDIDATES, "TkFixedFont")
         self._font_specs = {
-            "body": ("Segoe UI", 10, "normal"),
-            "body_bold": ("Segoe UI", 10, "bold"),
-            "title": ("Segoe UI", 18, "bold"),
-            "page_title": ("Segoe UI", 15, "bold"),
-            "section": ("Segoe UI", 12, "bold"),
-            "metric": ("Segoe UI", 11, "bold"),
-            "small": ("Segoe UI", 9, "normal"),
-            "small_bold": ("Segoe UI", 9, "bold"),
-            "tiny_bold": ("Segoe UI", 8, "bold"),
-            "mono": ("Consolas", 9, "normal"),
+            "body": (ui_family, 10, "normal"),
+            "body_bold": (ui_family, 10, "bold"),
+            "title": (ui_family, 18, "bold"),
+            "page_title": (ui_family, 15, "bold"),
+            "section": (ui_family, 12, "bold"),
+            "metric": (ui_family, 11, "bold"),
+            "small": (ui_family, 9, "normal"),
+            "small_bold": (ui_family, 9, "bold"),
+            "tiny_bold": (ui_family, 8, "bold"),
+            "mono": (mono_family, 9, "normal"),
         }
         self.ui_fonts = {
             name: tkfont.Font(self, family=family, size=size, weight=weight)
             for name, (family, size, weight) in self._font_specs.items()
         }
+        self._named_font_sizes = {}
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            try:
+                named = tkfont.nametofont(name)
+            except tk.TclError:
+                continue
+            named.configure(family=ui_family)
+            size = abs(int(named.cget("size"))) or 10
+            self._named_font_sizes[name] = size
         self.option_add("*Font", self.ui_fonts["body"])
         style.configure(".", background=SURFACE, foreground=INK, font=self.ui_fonts["body"])
         style.configure("TFrame", background=SURFACE)
@@ -691,9 +821,15 @@ class CalibrationWizard(tk.Tk):
 
         toolbar = ttk.Frame(log_frame)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        ttk.Label(toolbar, text="Recent commands and replies · heartbeat hidden", foreground=MUTED).pack(side="left")
+        ttk.Label(toolbar, text="All traffic on the command and heartbeat topics", foreground=MUTED).pack(side="left")
         ttk.Button(toolbar, text="Clear", command=self._clear_log).pack(side="right", padx=(6, 0))
         ttk.Button(toolbar, text="Copy", command=self._copy_log).pack(side="right")
+        ttk.Checkbutton(
+            toolbar,
+            text="Show heartbeats",
+            variable=self.show_heartbeats,
+            command=self._render_topic_log,
+        ).pack(side="right", padx=(0, 12))
 
         body = ttk.Frame(log_frame)
         body.grid(row=1, column=0, sticky="nsew")
@@ -1010,7 +1146,9 @@ class CalibrationWizard(tk.Tk):
             wraplength=720,
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
         ttk.Label(base, text="Neutral servo angle").grid(row=1, column=0, sticky="w")
-        neutral_entry = ttk.Spinbox(base, from_=0, to=180, textvariable=self.base_neutral, width=6)
+        # Firmware rejects anything outside 70..110, so bound the entry there
+        # rather than letting a run start and fail minutes later.
+        neutral_entry = ttk.Spinbox(base, from_=70, to=110, textvariable=self.base_neutral, width=6)
         neutral_entry.grid(row=1, column=1, sticky="w", padx=(8, 16))
         self._bind_edit_guard(neutral_entry)
         ttk.Button(base, text="Run profile calibration", style="Accent.TButton", command=self.run_base_profile).grid(
@@ -1666,21 +1804,33 @@ class CalibrationWizard(tk.Tk):
         )
 
     def _show_base_profile_result(self, response: Dict[str, Any]) -> None:
+        # Calibration telemetry is flat on base_rotation; there is no longer a
+        # separate veryslow measurement phase, so verySlowValidated just mirrors
+        # whether usable counts exist.
         base = response.get("base_rotation")
-        validation = base.get("verySlowValidation") if isinstance(base, dict) else None
-        if not isinstance(validation, dict):
-            self._info("Base profile completed, but the firmware did not return veryslow validation telemetry.")
+        if not isinstance(base, dict):
+            self._info("Base profile completed, but the firmware did not return base rotation telemetry.")
             return
 
-        summary = (
-            "Base profile and automatic veryslow verification passed.\n\n"
-            f"Veryslow learning passes: {validation.get('calibrationPasses', '-')}\n"
-            f"Full revolution left: {validation.get('leftFullRevMs', '-')} ms, "
-            f"{validation.get('leftCountsPerRev', '-')} counts\n"
-            f"Full revolution right: {validation.get('rightFullRevMs', '-')} ms, "
-            f"{validation.get('rightCountsPerRev', '-')} counts"
+        validated = bool(base.get("verySlowValidated"))
+        headline = (
+            "Base profile and automatic veryslow verification passed."
+            if validated
+            else "Base profile completed, but veryslow verification did not pass."
         )
-        self.last_result_text.set("Base profile and veryslow verification passed")
+        summary = (
+            f"{headline}\n\n"
+            f"Veryslow learning passes: {base.get('calibrationPasses', '-')}\n"
+            f"Full revolution left: {base.get('leftFullRevMs', '-')} ms, "
+            f"{base.get('leftCountsPerRev', '-')} counts\n"
+            f"Full revolution right: {base.get('rightFullRevMs', '-')} ms, "
+            f"{base.get('rightCountsPerRev', '-')} counts"
+        )
+        self.last_result_text.set(
+            "Base profile and veryslow verification passed"
+            if validated
+            else "Base profile completed, veryslow verification failed"
+        )
         messagebox.showinfo("Base Profile Result", summary)
 
     def base_status(self) -> None:
@@ -2541,35 +2691,66 @@ class CalibrationWizard(tk.Tk):
                 self._render_reach_and_grab_progress(payload)
         self.after(150, self._process_events)
 
+    def _visible_topic_log_lines(self) -> list[str]:
+        show_heartbeats = self.show_heartbeats.get()
+        return [line for line, heartbeat in self.topic_log_entries if show_heartbeats or not heartbeat]
+
+    def _render_topic_log(self, follow: bool = True) -> None:
+        lines = self._visible_topic_log_lines()
+        self.topic_log.configure(state="normal")
+        self.topic_log.delete("1.0", tk.END)
+        self.topic_log.insert(tk.END, "\n".join(lines))
+        if lines:
+            self.topic_log.insert(tk.END, "\n")
+        if follow:
+            self.topic_log.see(tk.END)
+        self.topic_log.configure(state="disabled")
+
     def _append_log(self, kind: str, payload: Any) -> None:
         line_body = format_topic_log_event(kind, payload)
         if not line_body:
             return
         should_follow = self.topic_log.yview()[1] >= 0.98
         line = f"[{time.strftime('%H:%M:%S')}] {line_body}"
-        self.topic_log_lines.append(line)
-        if len(self.topic_log_lines) > MAX_TOPIC_LOG_LINES:
-            self.topic_log_lines = self.topic_log_lines[-MAX_TOPIC_LOG_LINES:]
-
-        self.topic_log.configure(state="normal")
-        self.topic_log.delete("1.0", tk.END)
-        self.topic_log.insert(tk.END, "\n".join(self.topic_log_lines))
-        if self.topic_log_lines:
-            self.topic_log.insert(tk.END, "\n")
-        if should_follow:
-            self.topic_log.see(tk.END)
-        self.topic_log.configure(state="disabled")
+        self.topic_log_entries.append((line, is_heartbeat_event(kind, payload)))
+        if len(self.topic_log_entries) > MAX_TOPIC_LOG_LINES:
+            self.topic_log_entries = self.topic_log_entries[-MAX_TOPIC_LOG_LINES:]
+        self._render_topic_log(follow=should_follow)
 
     def _clear_log(self) -> None:
-        self.topic_log_lines.clear()
-        self.topic_log.configure(state="normal")
-        self.topic_log.delete("1.0", tk.END)
-        self.topic_log.configure(state="disabled")
+        self.topic_log_entries.clear()
+        self._render_topic_log(follow=False)
+
+    def _copy_to_system_clipboard(self, text: str) -> bool:
+        """Hand the text to a clipboard manager so it survives this app exiting.
+
+        Tk owns its selection only while the process lives and its event loop is
+        pumping, so a copy made during a long worker call pastes as nothing.
+        Returns False when no helper is available and Tk must be used instead.
+        """
+        for command in (["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+            if not shutil.which(command[0]):
+                continue
+            try:
+                subprocess.run(command, input=text, text=True, timeout=5, check=True)
+                return True
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return False
 
     def _copy_log(self) -> None:
+        lines = self._visible_topic_log_lines()
+        if not lines:
+            self.last_result_text.set("Nothing to copy")
+            return
+        text = "\n".join(lines)
+        if self._copy_to_system_clipboard(text):
+            self.last_result_text.set(f"Copied {len(lines)} log lines to clipboard")
+            return
         self.clipboard_clear()
-        self.clipboard_append("\n".join(self.topic_log_lines))
-        self.last_result_text.set("Topic log copied to clipboard")
+        self.clipboard_append(text)
+        self.update()  # Serve the selection now instead of at the next idle moment.
+        self.last_result_text.set(f"Copied {len(lines)} log lines (keep this app open to paste)")
 
     def _tick_connection_status(self) -> None:
         age = self.robot.state.heartbeat_age()

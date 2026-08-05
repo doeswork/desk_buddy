@@ -1,5 +1,11 @@
 // ActionBaseRotate.cpp
+//
+// Base rotation motion and MQTT command dispatch. The calibration routines that
+// used to live here now sit in CalibrateRotation.cpp and are built on the
+// primitives and shared state published via ActionBaseRotate_Internal.h.
 #include "ActionBaseRotate.h"
+#include "ActionBaseRotate_Internal.h"
+#include "CalibrateRotation.h"
 #include "BuddyMQTT.h"
 #include <ESP32Servo.h>
 #include <ArduinoJson.h>
@@ -14,13 +20,6 @@ namespace {
   constexpr uint8_t SERVO_PIN = 21;
   constexpr uint8_t AS5600_OUT_PIN = 1;
   constexpr uint8_t TRUE_NORTH_PIN = 14;
-  constexpr int ENCODER_SIGN = -1;
-  constexpr int AS5600_COUNTS_PER_REV = 4096;
-  constexpr int DRIVE_GEAR_TEETH = 18;
-  constexpr int BASE_GEAR_TEETH = 108;
-  constexpr int BASE_STEPS_PER_REV = BASE_GEAR_TEETH * 2;
-  constexpr long ESTIMATED_COUNTS_PER_BASE_REV =
-      static_cast<long>(AS5600_COUNTS_PER_REV) * BASE_GEAR_TEETH / DRIVE_GEAR_TEETH;
   constexpr const char CONFIG_NAMESPACE[] = "config";
   constexpr const char KEY_ROTATION_OFFSET_DEGREES[] = "rot_off_deg";
 
@@ -38,62 +37,49 @@ namespace {
   constexpr const char KEY_VERY_SLOW_VALIDATED[] = "vs_valid";
 
   constexpr unsigned long MOVE_TIMEOUT_MS = 15000;
-  constexpr unsigned long HOME_TIMEOUT_MS = 20000;
-  constexpr unsigned long CALIBRATION_TIMEOUT_MS = 45000;
-  constexpr unsigned long PROFILE_CALIBRATION_TIMEOUT_MS = 180000;
-  constexpr long ENCODER_STUCK_THRESHOLD = 3;
+  // Minimum encoder travel that counts as progress within STUCK_TIMEOUT_MS.
+  // Sized from measured hardware: real rotation covers several thousand counts
+  // per second even at a weak near-deadband drive, while a base stalled on the
+  // home switch managed 2 counts in 3 seconds. A per-sample threshold (the old
+  // value of 3) could not tell those apart, because a stalled base still
+  // jitters past 3 counts and reset the stall timer indefinitely.
+  constexpr long ENCODER_PROGRESS_MIN_COUNTS = 100;
   constexpr unsigned long STUCK_TIMEOUT_MS = 1000;
-  constexpr long TARGET_TOLERANCE_COUNTS = 10;
   constexpr unsigned long POSITION_SAVE_INTERVAL_MS = 5000;
   constexpr unsigned long TRUE_NORTH_CORRECTION_INTERVAL_MS = 1000;
-  constexpr unsigned long TRUE_NORTH_POLL_DELAY_MS = 1;
-  constexpr unsigned long TRUE_NORTH_BOUNCE_IGNORE_MS = 75;
-  constexpr long TRUE_NORTH_MIN_COUNTS_AFTER_RELEASE = 50;
-  constexpr long CALIBRATION_UNKNOWN_MIN_TRAVEL_COUNTS = 4096;
-  constexpr int CALIBRATION_MIN_TRAVEL_PERCENT = 50;
-  constexpr int CALIBRATION_DRIVE_OFFSET = 10;
-  constexpr int CALIBRATION_NEUTRAL_MIN = 70;
-  constexpr int CALIBRATION_NEUTRAL_MAX = 110;
-  constexpr int CALIBRATION_MIN_PASSES = 2;
-  constexpr int CALIBRATION_MAX_PASSES = 8;
-  constexpr unsigned long CALIBRATION_BALANCE_TOLERANCE_MS = 2000;
-  constexpr int VERY_SLOW_CALIBRATION_MAX_PASSES = 4;
-  constexpr unsigned long VERY_SLOW_BALANCE_TOLERANCE_MS = 1500;
-  constexpr int VERY_SLOW_MIN_SLOWDOWN_PERCENT = 10;
-  constexpr int VERY_SLOW_MIN_OFFSET = 2;
-  constexpr long NO_NEUTRAL_OVERRIDE = -1;
-  constexpr size_t SPEED_PROFILE_COUNT = 5;
 
+  const char* const KEY_LEFT_SPEED_ANGLES[BaseRotateInternal::SPEED_PROFILE_COUNT] = {
+    "l_vslow", "l_slow", "l_reg", "l_fast", "l_sfast"
+  };
+  const char* const KEY_RIGHT_SPEED_ANGLES[BaseRotateInternal::SPEED_PROFILE_COUNT] = {
+    "r_vslow", "r_slow", "r_reg", "r_fast", "r_sfast"
+  };
+
+  Servo baseServo;
+  Preferences prefs;
+  bool inited = false;
+
+  int encoderRaw = 0;
+  int lastEncoderRaw = 0;
+  unsigned long lastTrueNorthCorrectionMs = 0;
+  volatile uint32_t trueNorthHitCount = 0;
+  bool usingEstimatedStepCounts = false;
+}
+
+using namespace BaseRotateInternal;
+
+// ---- Shared state definitions (declared in ActionBaseRotate_Internal.h) -----
+namespace BaseRotateInternal {
   const char* const SPEED_PROFILE_NAMES[SPEED_PROFILE_COUNT] = {
     "veryslow", "slow", "regular", "fast", "superfast"
   };
   const int SPEED_PROFILE_OFFSETS[SPEED_PROFILE_COUNT] = {
     8, 12, 18, 20, 30
   };
-  const char* const KEY_LEFT_SPEED_ANGLES[SPEED_PROFILE_COUNT] = {
-    "l_vslow", "l_slow", "l_reg", "l_fast", "l_sfast"
-  };
-  const char* const KEY_RIGHT_SPEED_ANGLES[SPEED_PROFILE_COUNT] = {
-    "r_vslow", "r_slow", "r_reg", "r_fast", "r_sfast"
-  };
-
-  static Servo baseServo;
-  static Preferences prefs;
-  static bool inited = false;
 
   int restingValue = 90;
-  enum BaseSpeed {
-    BASE_VERY_SLOW = 5,
-    BASE_SLOW = 10,
-    BASE_REGULAR = 20,
-    BASE_FAST = 30,
-    BASE_SUPERFAST = 40
-  };
-
-  int encoderRaw = 0;
-  int lastEncoderRaw = 0;
-  long encoderUnwrapped = 0;
   long basePositionCounts = 0;
+  long encoderUnwrapped = 0;
   long leftCountsPerRev = 0;
   long rightCountsPerRev = 0;
   bool calibrated = false;
@@ -103,8 +89,7 @@ namespace {
   unsigned long rightFullRevMs = 0;
   int leftSpeedAngles[SPEED_PROFILE_COUNT] = {0};
   int rightSpeedAngles[SPEED_PROFILE_COUNT] = {0};
-  unsigned long lastTrueNorthCorrectionMs = 0;
-  volatile uint32_t trueNorthHitCount = 0;
+
   int calibrationPasses = 0;
   long calibrationLastDiffMs = 0;
   bool calibrationBalanced = false;
@@ -114,59 +99,42 @@ namespace {
   long calibrationLastPulseCounts = 0;
   long calibrationLastPulseMinCounts = 0;
   uint32_t calibrationIgnoredPulseCount = 0;
-  bool usingEstimatedStepCounts = false;
-  int verySlowCalibrationPasses = 0;
-  bool verySlowCalibrationBalanced = false;
-  unsigned long verySlowLeftFullRevMs = 0;
-  unsigned long verySlowRightFullRevMs = 0;
-  long verySlowLeftCountsPerRev = 0;
-  long verySlowRightCountsPerRev = 0;
   bool verySlowValidationPassed = false;
+}
 
-  struct RotationProfileBackup {
-    int resting;
-    long leftCpr;
-    long rightCpr;
-    bool calibratedFlag;
-    bool profileCalibratedFlag;
-    bool verySlowValidationFlag;
-    unsigned long leftMs;
-    unsigned long rightMs;
-    int leftAngles[SPEED_PROFILE_COUNT];
-    int rightAngles[SPEED_PROFILE_COUNT];
-  };
-
-  void saveLastPosition();
-  long signedCalibrationDiffMs(unsigned long leftMs, unsigned long rightMs);
-
+namespace {
   void IRAM_ATTR onTrueNorthFalling() {
     ++trueNorthHitCount;
   }
+}
 
-  int readEncoderRaw() {
-    encoderRaw = analogRead(AS5600_OUT_PIN);
-    return encoderRaw;
-  }
+// ---- Encoder / true north primitives ---------------------------------------
 
-  bool readTrueNorthPin() {
-    return digitalRead(TRUE_NORTH_PIN) == LOW;
-  }
+int BaseRotateInternal::readEncoderRaw() {
+  encoderRaw = analogRead(AS5600_OUT_PIN);
+  return encoderRaw;
+}
 
-  bool isTrueNorthPressed() {
-    return readTrueNorthPin();
-  }
+bool BaseRotateInternal::readTrueNorthPin() {
+  return digitalRead(TRUE_NORTH_PIN) == LOW;
+}
 
-  uint32_t getTrueNorthHitCount() {
-    noInterrupts();
-    uint32_t count = trueNorthHitCount;
-    interrupts();
-    return count;
-  }
+bool BaseRotateInternal::isTrueNorthPressed() {
+  return readTrueNorthPin();
+}
 
-  bool trueNorthHitDetected(uint32_t baselineCount) {
-    return readTrueNorthPin() || getTrueNorthHitCount() != baselineCount;
-  }
+uint32_t BaseRotateInternal::getTrueNorthHitCount() {
+  noInterrupts();
+  uint32_t count = trueNorthHitCount;
+  interrupts();
+  return count;
+}
 
+bool BaseRotateInternal::trueNorthHitDetected(uint32_t baselineCount) {
+  return readTrueNorthPin() || getTrueNorthHitCount() != baselineCount;
+}
+
+namespace {
   long unwrapDelta(int currentRaw, int previousRaw) {
     int delta = currentRaw - previousRaw;
     if (delta > 2048) {
@@ -176,55 +144,84 @@ namespace {
     }
     return static_cast<long>(delta) * ENCODER_SIGN;
   }
+}
 
-  void resetEncoderTracking() {
-    encoderRaw = readEncoderRaw();
-    lastEncoderRaw = encoderRaw;
-    encoderUnwrapped = 0;
+void BaseRotateInternal::resetEncoderTracking() {
+  encoderRaw = readEncoderRaw();
+  lastEncoderRaw = encoderRaw;
+  encoderUnwrapped = 0;
+}
+
+long BaseRotateInternal::updateEncoderTracking() {
+  int currentRaw = readEncoderRaw();
+  long delta = unwrapDelta(currentRaw, lastEncoderRaw);
+  encoderUnwrapped += delta;
+  basePositionCounts += delta;
+  lastEncoderRaw = currentRaw;
+  return delta;
+}
+
+// Progress is a *rate*: enough travel within a fixed window, not merely some
+// travel at some point.
+//
+// The prior version asked only whether the encoder had moved
+// ENCODER_STUCK_THRESHOLD (3) counts since the last check, re-anchoring and
+// resetting the stall timer whenever it had. A base stalled against its home
+// switch still creeps and jitters by a few counts, so it cleared that bar
+// indefinitely, reset the timer forever, and the watchdog could never fire:
+// a stall became an unbounded hang rather than an "encoder stuck" error.
+//
+// Measured against the real failure: healthy rotation runs ~4 counts/ms, while
+// the stalled base managed 2 counts in 3 seconds. Demanding
+// ENCODER_PROGRESS_MIN_COUNTS within STUCK_TIMEOUT_MS sits far below the
+// former and far above the latter, so genuine motion (including the slowest
+// "veryslow" speed) always passes and a creep is correctly judged stuck.
+bool BaseRotateInternal::encoderIsStuck(long& windowStartCounts,
+                                        unsigned long& windowStartMs) {
+  if (labs(encoderUnwrapped - windowStartCounts) >= ENCODER_PROGRESS_MIN_COUNTS) {
+    // Enough ground covered: this window counts as progress, open the next.
+    windowStartCounts = encoderUnwrapped;
+    windowStartMs = millis();
+    return false;
   }
 
-  long updateEncoderTracking() {
-    int currentRaw = readEncoderRaw();
-    long delta = unwrapDelta(currentRaw, lastEncoderRaw);
-    encoderUnwrapped += delta;
-    basePositionCounts += delta;
-    lastEncoderRaw = currentRaw;
-    return delta;
-  }
+  // Too little travel so far. Only a fault once the full window has elapsed
+  // without meeting the bar, so a brief slow patch is never punished.
+  return millis() - windowStartMs > STUCK_TIMEOUT_MS;
+}
 
-  void stopServo() {
-    baseServo.write(restingValue);
-    Serial.println("[Rotate] stop");
-    // Long profile calibration is synchronous. Service/reconnect MQTT only
-    // after motion stops so network delays can never extend a powered move.
-    BuddyMQTT::maintain();
-  }
+// ---- Servo primitives -------------------------------------------------------
 
-  int clampServoAngle(int angle) {
-    if (angle < 0) return 0;
-    if (angle > 180) return 180;
-    return angle;
-  }
+int BaseRotateInternal::clampServoAngle(int angle) {
+  if (angle < 0) return 0;
+  if (angle > 180) return 180;
+  return angle;
+}
 
-  int calibrationLeftAngle() {
-    return clampServoAngle(restingValue - CALIBRATION_DRIVE_OFFSET);
-  }
+void BaseRotateInternal::writeServo(int angle) {
+  baseServo.write(angle);
+}
 
-  int calibrationRightAngle() {
-    return clampServoAngle(restingValue + CALIBRATION_DRIVE_OFFSET);
-  }
+void BaseRotateInternal::stopServo() {
+  baseServo.write(restingValue);
+  Serial.println("[Rotate] stop");
+  // Long profile calibration is synchronous. Service/reconnect MQTT only
+  // after motion stops so network delays can never extend a powered move.
+  BuddyMQTT::maintain();
+}
 
-  int speedIndex(BaseSpeed speed) {
-    switch (speed) {
-      case BASE_VERY_SLOW: return 0;
-      case BASE_SLOW: return 1;
-      case BASE_REGULAR: return 2;
-      case BASE_FAST: return 3;
-      case BASE_SUPERFAST: return 4;
-    }
-    return 2;
+int BaseRotateInternal::speedIndex(BaseSpeed speed) {
+  switch (speed) {
+    case BASE_VERY_SLOW: return 0;
+    case BASE_SLOW: return 1;
+    case BASE_REGULAR: return 2;
+    case BASE_FAST: return 3;
+    case BASE_SUPERFAST: return 4;
   }
+  return 2;
+}
 
+namespace {
   int fallbackDriveAngle(bool rotateLeft, BaseSpeed speed) {
     int offsetAngle = SPEED_PROFILE_OFFSETS[speedIndex(speed)];
     return clampServoAngle(rotateLeft ? (restingValue - offsetAngle) : (restingValue + offsetAngle));
@@ -238,48 +235,218 @@ namespace {
     }
     return fallbackDriveAngle(rotateLeft, speed);
   }
+}
 
-  void initFixedSpeedProfileAngles() {
+void BaseRotateInternal::initFixedSpeedProfileAngles() {
+  for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
+    leftSpeedAngles[i] = clampServoAngle(restingValue - SPEED_PROFILE_OFFSETS[i]);
+    rightSpeedAngles[i] = clampServoAngle(restingValue + SPEED_PROFILE_OFFSETS[i]);
+  }
+}
+
+int BaseRotateInternal::calibrationLeftAngle() {
+  return clampServoAngle(restingValue - CALIBRATION_DRIVE_OFFSET);
+}
+
+int BaseRotateInternal::calibrationRightAngle() {
+  return clampServoAngle(restingValue + CALIBRATION_DRIVE_OFFSET);
+}
+
+void BaseRotateInternal::driveServo(bool rotateLeft, BaseSpeed speed) {
+  int driveAngle = profileDriveAngle(rotateLeft, speed);
+  baseServo.write(driveAngle);
+  Serial.printf("[Rotate] drive dir=%s speed=%d angle=%d profile=%d\n",
+                rotateLeft ? "LEFT" : "RIGHT", speed, driveAngle, profileCalibrated);
+}
+
+void BaseRotateInternal::driveServoAngle(bool rotateLeft, int driveAngle) {
+  baseServo.write(clampServoAngle(driveAngle));
+  Serial.printf("[Rotate] drive raw dir=%s angle=%d\n",
+                rotateLeft ? "LEFT" : "RIGHT", clampServoAngle(driveAngle));
+}
+
+// ---- Persistence -------------------------------------------------------------
+
+// Persists only the neutral servo angle. Calibration writes this as soon as the
+// operator's value is applied, so the entered angle survives a run that fails
+// partway rather than reverting to the previously saved one.
+void BaseRotateInternal::saveNeutralValue() {
+  prefs.begin(PREF_NAMESPACE, false);
+  prefs.putInt(KEY_RESTING_VALUE, restingValue);
+  prefs.end();
+  Serial.printf("[Rotate] saved neutral=%d\n", restingValue);
+}
+
+void BaseRotateInternal::saveLastPosition() {
+  prefs.begin(PREF_NAMESPACE, false);
+  prefs.putLong(KEY_LAST_BASE_COUNTS, basePositionCounts);
+  prefs.putBool(KEY_LAST_KNOWN_VALID, positionTrusted);
+  prefs.putInt(KEY_ENCODER_SIGN, ENCODER_SIGN);
+  prefs.putBool(KEY_VERY_SLOW_VALIDATED, verySlowValidationPassed);
+  prefs.end();
+}
+
+void BaseRotateInternal::saveCalibration() {
+  prefs.begin(PREF_NAMESPACE, false);
+  prefs.putBool(KEY_CALIBRATED, calibrated);
+  prefs.putLong(KEY_LEFT_COUNTS_PER_REV, leftCountsPerRev);
+  prefs.putLong(KEY_RIGHT_COUNTS_PER_REV, rightCountsPerRev);
+  prefs.putBool(KEY_PROFILE_CALIBRATED, profileCalibrated);
+  prefs.putInt(KEY_RESTING_VALUE, restingValue);
+  prefs.putULong(KEY_LEFT_FULL_REV_MS, leftFullRevMs);
+  prefs.putULong(KEY_RIGHT_FULL_REV_MS, rightFullRevMs);
+  prefs.putInt(KEY_ENCODER_SIGN, ENCODER_SIGN);
+  for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
+    prefs.putInt(KEY_LEFT_SPEED_ANGLES[i], leftSpeedAngles[i]);
+    prefs.putInt(KEY_RIGHT_SPEED_ANGLES[i], rightSpeedAngles[i]);
+  }
+  prefs.end();
+}
+
+// ---- Shared math -------------------------------------------------------------
+
+long BaseRotateInternal::getAverageCountsPerRev() {
+  if (leftCountsPerRev > 0 && rightCountsPerRev > 0) {
+    return (leftCountsPerRev + rightCountsPerRev) / 2;
+  }
+  if (rightCountsPerRev > 0) return rightCountsPerRev;
+  if (leftCountsPerRev > 0) return leftCountsPerRev;
+  return 0;
+}
+
+long BaseRotateInternal::signedCalibrationDiffMs(unsigned long leftMs, unsigned long rightMs) {
+  if (leftMs > static_cast<unsigned long>(LONG_MAX)) leftMs = LONG_MAX;
+  if (rightMs > static_cast<unsigned long>(LONG_MAX)) rightMs = LONG_MAX;
+  return static_cast<long>(leftMs) - static_cast<long>(rightMs);
+}
+
+namespace {
+
+  void loadRotationPrefs() {
+    initFixedSpeedProfileAngles();
+    prefs.begin(PREF_NAMESPACE, true);
+    calibrated = prefs.getBool(KEY_CALIBRATED, false);
+    leftCountsPerRev = prefs.getLong(KEY_LEFT_COUNTS_PER_REV, 0);
+    rightCountsPerRev = prefs.getLong(KEY_RIGHT_COUNTS_PER_REV, 0);
+    basePositionCounts = prefs.getLong(KEY_LAST_BASE_COUNTS, 0);
+    positionTrusted = prefs.getBool(KEY_LAST_KNOWN_VALID, false);
+    int savedEncoderSign = prefs.getInt(KEY_ENCODER_SIGN, 0);
+    profileCalibrated = prefs.getBool(KEY_PROFILE_CALIBRATED, false);
+    verySlowValidationPassed = prefs.getBool(KEY_VERY_SLOW_VALIDATED, false);
+    restingValue = prefs.getInt(KEY_RESTING_VALUE, restingValue);
+    leftFullRevMs = prefs.getULong(KEY_LEFT_FULL_REV_MS, 0);
+    rightFullRevMs = prefs.getULong(KEY_RIGHT_FULL_REV_MS, 0);
     for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      leftSpeedAngles[i] = clampServoAngle(restingValue - SPEED_PROFILE_OFFSETS[i]);
-      rightSpeedAngles[i] = clampServoAngle(restingValue + SPEED_PROFILE_OFFSETS[i]);
+      leftSpeedAngles[i] = prefs.getInt(KEY_LEFT_SPEED_ANGLES[i], leftSpeedAngles[i]);
+      rightSpeedAngles[i] = prefs.getInt(KEY_RIGHT_SPEED_ANGLES[i], rightSpeedAngles[i]);
+    }
+    prefs.end();
+
+    if (savedEncoderSign != ENCODER_SIGN) {
+      positionTrusted = false;
+      basePositionCounts = 0;
+      Serial.printf("[Rotate] saved position sign mismatch saved=%d current=%d; position marked untrusted\n",
+                    savedEncoderSign, ENCODER_SIGN);
+    }
+
+    // A stored position is only meaningful alongside a counts-per-rev to
+    // interpret it with. These were persisted independently, so a robot could
+    // boot claiming a trusted position while calibrated=false and both counts
+    // were zero -- every angle derived from it came out of a divide by an
+    // unknown circle size.
+    if (!calibrated || getAverageCountsPerRev() <= 0) {
+      if (positionTrusted) {
+        Serial.println("[Rotate] no usable counts per revolution; stored position marked untrusted");
+      }
+      positionTrusted = false;
+      basePositionCounts = 0;
+    }
+
+    if (isTrueNorthPressed()) {
+      basePositionCounts = 0;
+      positionTrusted = true;
+      saveLastPosition();
+      Serial.println("[Rotate] true north pressed at boot: position set to 0");
     }
   }
 
-  RotationProfileBackup makeProfileBackup() {
-    RotationProfileBackup backup;
-    backup.resting = restingValue;
-    backup.leftCpr = leftCountsPerRev;
-    backup.rightCpr = rightCountsPerRev;
-    backup.calibratedFlag = calibrated;
-    backup.profileCalibratedFlag = profileCalibrated;
-    backup.verySlowValidationFlag = verySlowValidationPassed;
-    backup.leftMs = leftFullRevMs;
-    backup.rightMs = rightFullRevMs;
-    for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      backup.leftAngles[i] = leftSpeedAngles[i];
-      backup.rightAngles[i] = rightSpeedAngles[i];
-    }
-    return backup;
-  }
+  void initAll() {
+    if (inited) return;
 
-  void restoreProfileBackup(const RotationProfileBackup& backup) {
-    restingValue = backup.resting;
-    leftCountsPerRev = backup.leftCpr;
-    rightCountsPerRev = backup.rightCpr;
-    calibrated = backup.calibratedFlag;
-    profileCalibrated = backup.profileCalibratedFlag;
-    verySlowValidationPassed = backup.verySlowValidationFlag;
-    leftFullRevMs = backup.leftMs;
-    rightFullRevMs = backup.rightMs;
-    for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      leftSpeedAngles[i] = backup.leftAngles[i];
-      rightSpeedAngles[i] = backup.rightAngles[i];
-    }
-    positionTrusted = false;
+    baseServo.attach(SERVO_PIN);
     baseServo.write(restingValue);
-    saveLastPosition();
+    pinMode(TRUE_NORTH_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(TRUE_NORTH_PIN), onTrueNorthFalling, FALLING);
+    analogReadResolution(12);
+    resetEncoderTracking();
+    loadRotationPrefs();
+    baseServo.write(restingValue);
+
+    inited = true;
+    Serial.printf("[Rotate] initialized servo=%u as5600=%u true_north=%u resting=%d raw=%d calibrated=%d profile=%d trusted=%d counts=%ld left_cpr=%ld right_cpr=%ld sign=%d\n",
+                  SERVO_PIN, AS5600_OUT_PIN, TRUE_NORTH_PIN, restingValue, encoderRaw,
+                  calibrated, profileCalibrated, positionTrusted, basePositionCounts, leftCountsPerRev,
+                  rightCountsPerRev, ENCODER_SIGN);
   }
+
+  float getBaseAngleDegrees() {
+    long cpr = getAverageCountsPerRev();
+    if (cpr <= 0) return 0.0f;
+
+    float angle = fmod((float(basePositionCounts) / float(cpr)) * 360.0f, 360.0f);
+    if (angle < 0) angle += 360.0f;
+    return angle;
+  }
+
+  float normalizeDegrees(float angle) {
+    float normalized = fmod(angle, 360.0f);
+    if (normalized < 0.0f) normalized += 360.0f;
+    return normalized;
+  }
+
+  float loadStencilRotationOffsetDegrees() {
+    Preferences configPrefs;
+    float offset = 0.0f;
+    if (configPrefs.begin(CONFIG_NAMESPACE, true)) {
+      offset = configPrefs.getFloat(KEY_ROTATION_OFFSET_DEGREES, 0.0f);
+      configPrefs.end();
+    }
+    return offset;
+  }
+
+  long degreesToCounts(float degrees, bool rotateLeft) {
+    long cpr = rotateLeft && leftCountsPerRev > 0 ? leftCountsPerRev : rightCountsPerRev;
+    if (cpr <= 0) cpr = getAverageCountsPerRev();
+    if (cpr <= 0) return 0;
+    return labs(lround((degrees / 360.0f) * float(cpr)));
+  }
+
+  long countsPerStep(long countsPerRev) {
+    if (countsPerRev <= 0) return 0;
+    return lround(float(countsPerRev) / float(BASE_STEPS_PER_REV));
+  }
+
+  long stepsToCounts(long steps, bool rotateLeft) {
+    long cpr = rotateLeft && leftCountsPerRev > 0 ? leftCountsPerRev : rightCountsPerRev;
+    if (cpr <= 0) cpr = getAverageCountsPerRev();
+    if (cpr <= 0) return 0;
+    return labs(lround((float(steps) / float(BASE_STEPS_PER_REV)) * float(cpr)));
+  }
+
+  long estimatedStepsToCounts(long steps) {
+    return labs(lround((float(steps) / float(BASE_STEPS_PER_REV)) * float(ESTIMATED_COUNTS_PER_BASE_REV)));
+  }
+
+  long stepsToCountsWithEstimate(long steps, bool rotateLeft, bool& usedEstimate) {
+    usedEstimate = false;
+    long counts = stepsToCounts(steps, rotateLeft);
+    if (counts > 0) return counts;
+
+    usedEstimate = true;
+    return estimatedStepsToCounts(steps);
+  }
+
+  // ---- Command parsing -------------------------------------------------------
 
   BaseSpeed parseSpeed(const char* s) {
     if (!s) return BASE_VERY_SLOW;
@@ -355,174 +522,21 @@ namespace {
     return false;
   }
 
-  void driveServo(bool rotateLeft, BaseSpeed speed) {
-    int driveAngle = profileDriveAngle(rotateLeft, speed);
-    baseServo.write(driveAngle);
-    Serial.printf("[Rotate] drive dir=%s speed=%d angle=%d profile=%d\n",
-                  rotateLeft ? "LEFT" : "RIGHT", speed, driveAngle, profileCalibrated);
-  }
+  bool parseNeutralOverride(JsonVariantConst var, long& neutralOverride, const char*& error) {
+    neutralOverride = NO_NEUTRAL_OVERRIDE;
+    if (var.isNull()) return true;
 
-  void driveServoAngle(bool rotateLeft, int driveAngle) {
-    baseServo.write(clampServoAngle(driveAngle));
-    Serial.printf("[Rotate] drive raw dir=%s angle=%d\n",
-                  rotateLeft ? "LEFT" : "RIGHT", clampServoAngle(driveAngle));
-  }
-
-  void saveLastPosition() {
-    prefs.begin(PREF_NAMESPACE, false);
-    prefs.putLong(KEY_LAST_BASE_COUNTS, basePositionCounts);
-    prefs.putBool(KEY_LAST_KNOWN_VALID, positionTrusted);
-    prefs.putInt(KEY_ENCODER_SIGN, ENCODER_SIGN);
-    prefs.putBool(KEY_VERY_SLOW_VALIDATED, verySlowValidationPassed);
-    prefs.end();
-  }
-
-  void saveCalibration() {
-    prefs.begin(PREF_NAMESPACE, false);
-    prefs.putBool(KEY_CALIBRATED, calibrated);
-    prefs.putLong(KEY_LEFT_COUNTS_PER_REV, leftCountsPerRev);
-    prefs.putLong(KEY_RIGHT_COUNTS_PER_REV, rightCountsPerRev);
-    prefs.putBool(KEY_PROFILE_CALIBRATED, profileCalibrated);
-    prefs.putInt(KEY_RESTING_VALUE, restingValue);
-    prefs.putULong(KEY_LEFT_FULL_REV_MS, leftFullRevMs);
-    prefs.putULong(KEY_RIGHT_FULL_REV_MS, rightFullRevMs);
-    prefs.putInt(KEY_ENCODER_SIGN, ENCODER_SIGN);
-    for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      prefs.putInt(KEY_LEFT_SPEED_ANGLES[i], leftSpeedAngles[i]);
-      prefs.putInt(KEY_RIGHT_SPEED_ANGLES[i], rightSpeedAngles[i]);
-    }
-    prefs.end();
-  }
-
-  void loadRotationPrefs() {
-    initFixedSpeedProfileAngles();
-    prefs.begin(PREF_NAMESPACE, true);
-    calibrated = prefs.getBool(KEY_CALIBRATED, false);
-    leftCountsPerRev = prefs.getLong(KEY_LEFT_COUNTS_PER_REV, 0);
-    rightCountsPerRev = prefs.getLong(KEY_RIGHT_COUNTS_PER_REV, 0);
-    basePositionCounts = prefs.getLong(KEY_LAST_BASE_COUNTS, 0);
-    positionTrusted = prefs.getBool(KEY_LAST_KNOWN_VALID, false);
-    int savedEncoderSign = prefs.getInt(KEY_ENCODER_SIGN, 0);
-    profileCalibrated = prefs.getBool(KEY_PROFILE_CALIBRATED, false);
-    verySlowValidationPassed = prefs.getBool(KEY_VERY_SLOW_VALIDATED, false);
-    restingValue = prefs.getInt(KEY_RESTING_VALUE, restingValue);
-    leftFullRevMs = prefs.getULong(KEY_LEFT_FULL_REV_MS, 0);
-    rightFullRevMs = prefs.getULong(KEY_RIGHT_FULL_REV_MS, 0);
-    for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      leftSpeedAngles[i] = prefs.getInt(KEY_LEFT_SPEED_ANGLES[i], leftSpeedAngles[i]);
-      rightSpeedAngles[i] = prefs.getInt(KEY_RIGHT_SPEED_ANGLES[i], rightSpeedAngles[i]);
-    }
-    prefs.end();
-
-    if (savedEncoderSign != ENCODER_SIGN) {
-      positionTrusted = false;
-      basePositionCounts = 0;
-      Serial.printf("[Rotate] saved position sign mismatch saved=%d current=%d; position marked untrusted\n",
-                    savedEncoderSign, ENCODER_SIGN);
-    }
-
-    if (isTrueNorthPressed()) {
-      basePositionCounts = 0;
-      positionTrusted = true;
-      saveLastPosition();
-      Serial.println("[Rotate] true north pressed at boot: position set to 0");
-    }
-  }
-
-  void initAll() {
-    if (inited) return;
-
-    baseServo.attach(SERVO_PIN);
-    baseServo.write(restingValue);
-    pinMode(TRUE_NORTH_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(TRUE_NORTH_PIN), onTrueNorthFalling, FALLING);
-    analogReadResolution(12);
-    resetEncoderTracking();
-    loadRotationPrefs();
-    baseServo.write(restingValue);
-
-    inited = true;
-    Serial.printf("[Rotate] initialized servo=%u as5600=%u true_north=%u resting=%d raw=%d calibrated=%d profile=%d trusted=%d counts=%ld left_cpr=%ld right_cpr=%ld sign=%d\n",
-                  SERVO_PIN, AS5600_OUT_PIN, TRUE_NORTH_PIN, restingValue, encoderRaw,
-                  calibrated, profileCalibrated, positionTrusted, basePositionCounts, leftCountsPerRev,
-                  rightCountsPerRev, ENCODER_SIGN);
-  }
-
-  long getAverageCountsPerRev() {
-    if (leftCountsPerRev > 0 && rightCountsPerRev > 0) {
-      return (leftCountsPerRev + rightCountsPerRev) / 2;
-    }
-    if (rightCountsPerRev > 0) return rightCountsPerRev;
-    if (leftCountsPerRev > 0) return leftCountsPerRev;
-    return 0;
-  }
-
-  float getBaseAngleDegrees() {
-    long cpr = getAverageCountsPerRev();
-    if (cpr <= 0) return 0.0f;
-
-    float angle = fmod((float(basePositionCounts) / float(cpr)) * 360.0f, 360.0f);
-    if (angle < 0) angle += 360.0f;
-    return angle;
-  }
-
-  float normalizeDegrees(float angle) {
-    float normalized = fmod(angle, 360.0f);
-    if (normalized < 0.0f) normalized += 360.0f;
-    return normalized;
-  }
-
-  float loadStencilRotationOffsetDegrees() {
-    Preferences configPrefs;
-    float offset = 0.0f;
-    if (configPrefs.begin(CONFIG_NAMESPACE, true)) {
-      offset = configPrefs.getFloat(KEY_ROTATION_OFFSET_DEGREES, 0.0f);
-      configPrefs.end();
-    }
-    return offset;
-  }
-
-  long degreesToCounts(float degrees, bool rotateLeft) {
-    long cpr = rotateLeft && leftCountsPerRev > 0 ? leftCountsPerRev : rightCountsPerRev;
-    if (cpr <= 0) cpr = getAverageCountsPerRev();
-    if (cpr <= 0) return 0;
-    return labs(lround((degrees / 360.0f) * float(cpr)));
-  }
-
-  long countsPerStep(long countsPerRev) {
-    if (countsPerRev <= 0) return 0;
-    return lround(float(countsPerRev) / float(BASE_STEPS_PER_REV));
-  }
-
-  long stepsToCounts(long steps, bool rotateLeft) {
-    long cpr = rotateLeft && leftCountsPerRev > 0 ? leftCountsPerRev : rightCountsPerRev;
-    if (cpr <= 0) cpr = getAverageCountsPerRev();
-    if (cpr <= 0) return 0;
-    return labs(lround((float(steps) / float(BASE_STEPS_PER_REV)) * float(cpr)));
-  }
-
-  long estimatedStepsToCounts(long steps) {
-    return labs(lround((float(steps) / float(BASE_STEPS_PER_REV)) * float(ESTIMATED_COUNTS_PER_BASE_REV)));
-  }
-
-  long stepsToCountsWithEstimate(long steps, bool rotateLeft, bool& usedEstimate) {
-    usedEstimate = false;
-    long counts = stepsToCounts(steps, rotateLeft);
-    if (counts > 0) return counts;
-
-    usedEstimate = true;
-    return estimatedStepsToCounts(steps);
-  }
-
-  bool encoderIsStuck(long& lastObservedEncoderCounts, unsigned long& lastMovementMs) {
-    long moved = labs(encoderUnwrapped - lastObservedEncoderCounts);
-    if (moved >= ENCODER_STUCK_THRESHOLD) {
-      lastObservedEncoderCounts = encoderUnwrapped;
-      lastMovementMs = millis();
+    long parsed = 0;
+    if (!extractLong(var, parsed) || parsed < 0 || parsed > 180) {
+      error = "invalid neutralServoAngle";
       return false;
     }
-    return millis() - lastMovementMs > STUCK_TIMEOUT_MS;
+
+    neutralOverride = parsed;
+    return true;
   }
+
+  // ---- Motion ----------------------------------------------------------------
 
   void correctIfAtTrueNorth() {
     if (!isTrueNorthPressed()) return;
@@ -605,674 +619,47 @@ namespace {
                   rotateLeft ? "LEFT" : "RIGHT", moveDegrees);
     return moveByCounts(degreesToCounts(moveDegrees, rotateLeft), rotateLeft, speed, error);
   }
-
-  bool rotateUntilTrueNorth(bool rotateLeft, BaseSpeed speed, unsigned long timeoutMs, const char*& error) {
-    long lastObservedCounts = encoderUnwrapped;
-    unsigned long startMs = millis();
-    unsigned long lastMovementMs = startMs;
-    uint32_t startHits = getTrueNorthHitCount();
-
-    driveServo(rotateLeft, speed);
-    while (!trueNorthHitDetected(startHits)) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > timeoutMs) {
-        error = "true north timeout";
-        Serial.println("[Rotate] true north timeout");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck while homing");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-
-    stopServo();
-    basePositionCounts = 0;
-    positionTrusted = true;
-    saveLastPosition();
-    Serial.println("[Rotate] true north reached: position set to 0");
-    return true;
-  }
-
-  bool seekTrueNorthRaw(bool rotateLeft, int driveAngle, unsigned long timeoutMs, const char*& error) {
-    long lastObservedCounts = encoderUnwrapped;
-    unsigned long startMs = millis();
-    unsigned long lastMovementMs = startMs;
-    uint32_t startHits = getTrueNorthHitCount();
-
-    calibrationPhase = "seeking_initial_true_north";
-    calibrationLastPulseAccepted = false;
-    Serial.println("[Rotate] seeking initial true north");
-    driveServoAngle(rotateLeft, driveAngle);
-    while (!trueNorthHitDetected(startHits)) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > timeoutMs) {
-        error = "true north timeout";
-        Serial.println("[Rotate] true north timeout");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck while raw homing");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-
-    basePositionCounts = 0;
-    positionTrusted = true;
-    calibrationLastPulseAccepted = true;
-    calibrationLastPulseMs = millis() - startMs;
-    calibrationLastPulseCounts = labs(encoderUnwrapped);
-    calibrationLastPulseMinCounts = 0;
-    Serial.println("[Rotate] initial true north pulse detected");
-    return true;
-  }
-
-  long calibrationMinimumTravelCounts(bool rotateLeft) {
-    long expectedCountsPerRev = rotateLeft ? leftCountsPerRev : rightCountsPerRev;
-    if (expectedCountsPerRev <= 0 && leftCountsPerRev > 0 && rightCountsPerRev > 0) {
-      expectedCountsPerRev = (leftCountsPerRev + rightCountsPerRev) / 2;
-    }
-    if (expectedCountsPerRev <= 0) {
-      expectedCountsPerRev = rotateLeft ? rightCountsPerRev : leftCountsPerRev;
-    }
-
-    long minCounts = CALIBRATION_UNKNOWN_MIN_TRAVEL_COUNTS;
-    if (TRUE_NORTH_MIN_COUNTS_AFTER_RELEASE > minCounts) {
-      minCounts = TRUE_NORTH_MIN_COUNTS_AFTER_RELEASE;
-    }
-    if (expectedCountsPerRev > 0) {
-      long fractionCounts = lround(float(expectedCountsPerRev) * (float(CALIBRATION_MIN_TRAVEL_PERCENT) / 100.0f));
-      if (fractionCounts > minCounts) minCounts = fractionCounts;
-    }
-    return minCounts;
-  }
-
-  bool measureFullRevolution(bool rotateLeft, int driveAngle, const char* phaseName,
-                             unsigned long& revMs, long& countsPerRev, const char*& error) {
-    if (!isTrueNorthPressed()) {
-      Serial.printf("[Rotate] %s re-acquiring true north before revolution measurement\n", phaseName);
-      if (!seekTrueNorthRaw(rotateLeft, driveAngle, PROFILE_CALIBRATION_TIMEOUT_MS, error)) {
-        return false;
-      }
-    }
-
-    basePositionCounts = 0;
-    positionTrusted = true;
-    calibrationPhase = rotateLeft ? "measuring_left_revolution" : "measuring_right_revolution";
-    calibrationLastPulseAccepted = false;
-
-    long lastObservedCounts = encoderUnwrapped;
-    unsigned long startMs = millis();
-    unsigned long lastMovementMs = startMs;
-
-    Serial.printf("[Rotate] measuring %s revolution\n", phaseName);
-    driveServoAngle(rotateLeft, driveAngle);
-    while (isTrueNorthPressed()) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > PROFILE_CALIBRATION_TIMEOUT_MS) {
-        error = "profile timeout while leaving true north";
-        Serial.println("[Rotate] profile timeout while leaving true north");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck while leaving true north");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-
-    resetEncoderTracking();
-    long startCounts = encoderUnwrapped;
-    unsigned long timingStartMs = millis();
-    uint32_t baselineHits = getTrueNorthHitCount();
-    long minTravelCounts = calibrationMinimumTravelCounts(rotateLeft);
-    lastObservedCounts = encoderUnwrapped;
-    lastMovementMs = timingStartMs;
-    Serial.printf("[Rotate] %s min travel before next pulse=%ld counts\n", phaseName, minTravelCounts);
-
-    while (true) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > PROFILE_CALIBRATION_TIMEOUT_MS) {
-        error = "profile full revolution timeout";
-        Serial.println("[Rotate] profile full revolution timeout");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck during profile revolution");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      uint32_t currentHits = getTrueNorthHitCount();
-      bool pulseSeen = readTrueNorthPin() || currentHits != baselineHits;
-      if (pulseSeen) {
-        unsigned long elapsedMs = millis() - timingStartMs;
-        long movedCounts = labs(encoderUnwrapped - startCounts);
-        if (elapsedMs >= TRUE_NORTH_BOUNCE_IGNORE_MS &&
-            movedCounts >= minTravelCounts) {
-          stopServo();
-          revMs = elapsedMs;
-          countsPerRev = movedCounts;
-          if (countsPerRev <= TARGET_TOLERANCE_COUNTS) {
-            error = "profile revolution too small";
-            Serial.printf("[Rotate] profile revolution invalid ms=%lu counts=%ld\n", revMs, countsPerRev);
-            saveLastPosition();
-            return false;
-          }
-
-          basePositionCounts = 0;
-          positionTrusted = true;
-          saveLastPosition();
-          calibrationLastPulseAccepted = true;
-          calibrationLastPulseMs = elapsedMs;
-          calibrationLastPulseCounts = movedCounts;
-          calibrationLastPulseMinCounts = minTravelCounts;
-          Serial.printf("[Rotate] %s pulse detected ms=%lu counts=%ld angle=%d\n",
-                        phaseName, revMs, countsPerRev, driveAngle);
-          return true;
-        }
-
-        baselineHits = currentHits;
-        calibrationLastPulseAccepted = false;
-        calibrationLastPulseMs = elapsedMs;
-        calibrationLastPulseCounts = movedCounts;
-        calibrationLastPulseMinCounts = minTravelCounts;
-        ++calibrationIgnoredPulseCount;
-        Serial.printf("[Rotate] ignored %s pulse before full travel ms=%lu counts=%ld minCounts=%ld\n",
-                      phaseName, elapsedMs, movedCounts, minTravelCounts);
-        while (isTrueNorthPressed()) {
-          updateEncoderTracking();
-          delay(TRUE_NORTH_POLL_DELAY_MS);
-        }
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-  }
-
-  unsigned long allowedVerySlowTimeDifference(unsigned long leftMs, unsigned long rightMs) {
-    unsigned long averageMs = (leftMs + rightMs) / 2;
-    unsigned long percentTolerance = averageMs * 15UL / 100UL;
-    return percentTolerance > VERY_SLOW_BALANCE_TOLERANCE_MS
-        ? percentTolerance
-        : VERY_SLOW_BALANCE_TOLERANCE_MS;
-  }
-
-  bool verySlowTimesBalanced(unsigned long leftMs, unsigned long rightMs) {
-    long differenceMs = signedCalibrationDiffMs(leftMs, rightMs);
-    return labs(differenceMs) <= static_cast<long>(allowedVerySlowTimeDifference(leftMs, rightMs));
-  }
-
-  bool verySlowIsActuallySlower(unsigned long measuredMs, unsigned long calibrationMs) {
-    if (calibrationMs == 0) return true;
-    return measuredMs * 100UL >= calibrationMs * (100UL + VERY_SLOW_MIN_SLOWDOWN_PERCENT);
-  }
-
-  bool adjustVerySlowTowardNeutral(bool rotateLeft) {
-    int& angle = rotateLeft ? leftSpeedAngles[0] : rightSpeedAngles[0];
-    int offset = rotateLeft ? restingValue - angle : angle - restingValue;
-    if (offset <= VERY_SLOW_MIN_OFFSET) return false;
-    angle += rotateLeft ? 1 : -1;
-    Serial.printf("[Rotate] veryslow slow-down dir=%s newAngle=%d offset=%d\n",
-                  rotateLeft ? "LEFT" : "RIGHT", angle, offset - 1);
-    return true;
-  }
-
-  bool calibrateVerySlowSpeed(const char*& error) {
-    verySlowCalibrationPasses = 0;
-    verySlowCalibrationBalanced = false;
-    calibrationPhase = "calibrating_veryslow";
-
-    for (int pass = 1; pass <= VERY_SLOW_CALIBRATION_MAX_PASSES; ++pass) {
-      unsigned long measuredLeftMs = 0;
-      unsigned long measuredRightMs = 0;
-      long measuredLeftCounts = 0;
-      long measuredRightCounts = 0;
-      int leftAngle = leftSpeedAngles[0];
-      int rightAngle = rightSpeedAngles[0];
-
-      Serial.printf("[Rotate] veryslow calibration pass=%d leftAngle=%d rightAngle=%d\n",
-                    pass, leftAngle, rightAngle);
-      if (!measureFullRevolution(true, leftAngle, "VERYSLOW_CAL_LEFT",
-                                 measuredLeftMs, measuredLeftCounts, error)) {
-        return false;
-      }
-      if (!measureFullRevolution(false, rightAngle, "VERYSLOW_CAL_RIGHT",
-                                 measuredRightMs, measuredRightCounts, error)) {
-        return false;
-      }
-
-      verySlowCalibrationPasses = pass;
-      verySlowLeftFullRevMs = measuredLeftMs;
-      verySlowRightFullRevMs = measuredRightMs;
-      verySlowLeftCountsPerRev = measuredLeftCounts;
-      verySlowRightCountsPerRev = measuredRightCounts;
-      bool leftSlowEnough = verySlowIsActuallySlower(measuredLeftMs, leftFullRevMs);
-      bool rightSlowEnough = verySlowIsActuallySlower(measuredRightMs, rightFullRevMs);
-      bool balanced = verySlowTimesBalanced(measuredLeftMs, measuredRightMs);
-
-      Serial.printf("[Rotate] veryslow calibration pass=%d leftMs=%lu rightMs=%lu diff=%ld balanced=%d leftSlowEnough=%d rightSlowEnough=%d leftCounts=%ld rightCounts=%ld\n",
-                    pass, measuredLeftMs, measuredRightMs,
-                    signedCalibrationDiffMs(measuredLeftMs, measuredRightMs), balanced,
-                    leftSlowEnough, rightSlowEnough, measuredLeftCounts, measuredRightCounts);
-
-      if (balanced && leftSlowEnough && rightSlowEnough) {
-        verySlowCalibrationBalanced = true;
-        return true;
-      }
-
-      bool adjusted = false;
-      if (!leftSlowEnough) adjusted = adjustVerySlowTowardNeutral(true) || adjusted;
-      if (!rightSlowEnough) adjusted = adjustVerySlowTowardNeutral(false) || adjusted;
-      if (leftSlowEnough && rightSlowEnough && !balanced) {
-        if (measuredLeftMs > measuredRightMs) {
-          adjusted = adjustVerySlowTowardNeutral(false) || adjusted;
-        } else {
-          adjusted = adjustVerySlowTowardNeutral(true) || adjusted;
-        }
-      }
-      if (!adjusted) break;
-    }
-
-    error = "veryslow speed calibration did not balance";
-    return false;
-  }
-
-  bool countsWithinPercent(long actual, long expected, int tolerancePercent) {
-    if (actual <= 0 || expected <= 0) return false;
-    long difference = labs(actual - expected);
-    return difference * 100L <= expected * tolerancePercent;
-  }
-
-  bool verifyVerySlowFullRevolutions(const char*& error) {
-    calibrationPhase = "verifying_veryslow_full_revolutions";
-    unsigned long leftMs = 0;
-    unsigned long rightMs = 0;
-    long leftCounts = 0;
-    long rightCounts = 0;
-
-    if (!measureFullRevolution(true, leftSpeedAngles[0], "VERYSLOW_VERIFY_LEFT",
-                               leftMs, leftCounts, error)) {
-      return false;
-    }
-    if (!measureFullRevolution(false, rightSpeedAngles[0], "VERYSLOW_VERIFY_RIGHT",
-                               rightMs, rightCounts, error)) {
-      return false;
-    }
-
-    verySlowLeftFullRevMs = leftMs;
-    verySlowRightFullRevMs = rightMs;
-    verySlowLeftCountsPerRev = leftCounts;
-    verySlowRightCountsPerRev = rightCounts;
-    verySlowCalibrationBalanced = verySlowTimesBalanced(leftMs, rightMs);
-    bool countsValid = countsWithinPercent(leftCounts, leftCountsPerRev, 5) &&
-                       countsWithinPercent(rightCounts, rightCountsPerRev, 5);
-    Serial.printf("[Rotate] veryslow final full-rev verify leftMs=%lu rightMs=%lu diff=%ld balanced=%d leftCounts=%ld rightCounts=%ld countsValid=%d\n",
-                  leftMs, rightMs, signedCalibrationDiffMs(leftMs, rightMs),
-                  verySlowCalibrationBalanced, leftCounts, rightCounts, countsValid);
-    if (!verySlowCalibrationBalanced) {
-      error = "veryslow full revolution timing mismatch";
-      return false;
-    }
-    if (!countsValid) {
-      error = "veryslow full revolution encoder mismatch";
-      return false;
-    }
-    return true;
-  }
-
-  void deriveSpeedProfile() {
-    initFixedSpeedProfileAngles();
-    for (size_t i = 0; i < SPEED_PROFILE_COUNT; ++i) {
-      Serial.printf("[Rotate] profile speed=%s offset=%d leftAngle=%d rightAngle=%d\n",
-                    SPEED_PROFILE_NAMES[i], SPEED_PROFILE_OFFSETS[i],
-                    leftSpeedAngles[i], rightSpeedAngles[i]);
-    }
-  }
-
-  bool parseNeutralOverride(JsonVariantConst var, long& neutralOverride, const char*& error) {
-    neutralOverride = NO_NEUTRAL_OVERRIDE;
-    if (var.isNull()) return true;
-
-    long parsed = 0;
-    if (!extractLong(var, parsed) || parsed < 0 || parsed > 180) {
-      error = "invalid neutralServoAngle";
-      return false;
-    }
-
-    neutralOverride = parsed;
-    return true;
-  }
-
-  bool applyCalibrationNeutralOverride(long neutralOverride, const char*& error) {
-    if (neutralOverride == NO_NEUTRAL_OVERRIDE) return true;
-    if (neutralOverride < CALIBRATION_NEUTRAL_MIN || neutralOverride > CALIBRATION_NEUTRAL_MAX) {
-      error = "invalid neutralServoAngle";
-      return false;
-    }
-
-    restingValue = static_cast<int>(neutralOverride);
-    baseServo.write(restingValue);
-    Serial.printf("[Rotate] calibration neutral override=%d\n", restingValue);
-    return true;
-  }
-
-  void clampCalibrationNeutral() {
-    int previousRestingValue = restingValue;
-    if (restingValue < CALIBRATION_NEUTRAL_MIN) restingValue = CALIBRATION_NEUTRAL_MIN;
-    if (restingValue > CALIBRATION_NEUTRAL_MAX) restingValue = CALIBRATION_NEUTRAL_MAX;
-    if (previousRestingValue != restingValue) {
-      Serial.printf("[Rotate] calibration neutral clamped from=%d to=%d\n",
-                    previousRestingValue, restingValue);
-    }
-    baseServo.write(restingValue);
-    initFixedSpeedProfileAngles();
-  }
-
-  long signedCalibrationDiffMs(unsigned long leftMs, unsigned long rightMs) {
-    if (leftMs > static_cast<unsigned long>(LONG_MAX)) leftMs = LONG_MAX;
-    if (rightMs > static_cast<unsigned long>(LONG_MAX)) rightMs = LONG_MAX;
-    return static_cast<long>(leftMs) - static_cast<long>(rightMs);
-  }
-
-  bool calibrationIsBalanced(long diffMs) {
-    return labs(diffMs) <= static_cast<long>(CALIBRATION_BALANCE_TOLERANCE_MS);
-  }
-
-  int calibrationAdjustmentForDiff(long diffMs) {
-    unsigned long absDiff = labs(diffMs);
-    int adjustment = static_cast<int>((absDiff + 3999) / 4000);
-    if (adjustment < 1) adjustment = 1;
-    if (adjustment > 3) adjustment = 3;
-    return adjustment;
-  }
-
-  void adjustCalibrationNeutral(long diffMs) {
-    int adjustment = calibrationAdjustmentForDiff(diffMs);
-    int previousRestingValue = restingValue;
-
-    if (diffMs > 0) {
-      restingValue -= adjustment;
-    } else if (diffMs < 0) {
-      restingValue += adjustment;
-    }
-
-    if (restingValue < CALIBRATION_NEUTRAL_MIN) restingValue = CALIBRATION_NEUTRAL_MIN;
-    if (restingValue > CALIBRATION_NEUTRAL_MAX) restingValue = CALIBRATION_NEUTRAL_MAX;
-
-    baseServo.write(restingValue);
-    initFixedSpeedProfileAngles();
-    Serial.printf("[Rotate] calibration neutral adjust diff=%ld adjustment=%d from=%d to=%d\n",
-                  diffMs, adjustment, previousRestingValue, restingValue);
-  }
-
-  bool calibrateRotationProfile(long neutralOverride, const char*& error) {
-    Serial.printf("[Rotate] profile calibration start raw=%d sign=%d\n", readEncoderRaw(), ENCODER_SIGN);
-
-    RotationProfileBackup backup = makeProfileBackup();
-    calibrationPasses = 0;
-    calibrationLastDiffMs = 0;
-    calibrationBalanced = false;
-    calibrationPhase = "starting";
-    calibrationLastPulseAccepted = false;
-    calibrationLastPulseMs = 0;
-    calibrationLastPulseCounts = 0;
-    calibrationLastPulseMinCounts = 0;
-    calibrationIgnoredPulseCount = 0;
-    verySlowCalibrationPasses = 0;
-    verySlowCalibrationBalanced = false;
-    verySlowLeftFullRevMs = 0;
-    verySlowRightFullRevMs = 0;
-    verySlowLeftCountsPerRev = 0;
-    verySlowRightCountsPerRev = 0;
-    verySlowValidationPassed = false;
-
-    if (!applyCalibrationNeutralOverride(neutralOverride, error)) {
-      restoreProfileBackup(backup);
-      return false;
-    }
-    clampCalibrationNeutral();
-
-    int leftCalibrationAngle = calibrationLeftAngle();
-    int rightCalibrationAngle = calibrationRightAngle();
-    if (leftCalibrationAngle == restingValue || rightCalibrationAngle == restingValue) {
-      error = "neutralServoAngle too close to limit";
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    baseServo.write(restingValue);
-    resetEncoderTracking();
-    Serial.printf("[Rotate] profile calibration fixed speed resting=%d offset=%d leftAngle=%d rightAngle=%d\n",
-                  restingValue, CALIBRATION_DRIVE_OFFSET, leftCalibrationAngle, rightCalibrationAngle);
-
-    if (!seekTrueNorthRaw(false, rightCalibrationAngle, PROFILE_CALIBRATION_TIMEOUT_MS, error)) {
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    for (int pass = 1; pass <= CALIBRATION_MAX_PASSES; ++pass) {
-      leftCalibrationAngle = calibrationLeftAngle();
-      rightCalibrationAngle = calibrationRightAngle();
-      if (leftCalibrationAngle == restingValue || rightCalibrationAngle == restingValue) {
-        error = "neutralServoAngle too close to limit";
-        restoreProfileBackup(backup);
-        return false;
-      }
-
-      Serial.printf("[Rotate] profile calibration pass=%d resting=%d offset=%d leftAngle=%d rightAngle=%d\n",
-                    pass, restingValue, CALIBRATION_DRIVE_OFFSET, leftCalibrationAngle, rightCalibrationAngle);
-
-      unsigned long measuredLeftMs = 0;
-      unsigned long measuredRightMs = 0;
-      long measuredLeftCpr = 0;
-      long measuredRightCpr = 0;
-
-      if (!measureFullRevolution(true, leftCalibrationAngle, "LEFT", measuredLeftMs, measuredLeftCpr, error)) {
-        restoreProfileBackup(backup);
-        return false;
-      }
-
-      if (!measureFullRevolution(false, rightCalibrationAngle, "RIGHT", measuredRightMs, measuredRightCpr, error)) {
-        restoreProfileBackup(backup);
-        return false;
-      }
-
-      leftFullRevMs = measuredLeftMs;
-      rightFullRevMs = measuredRightMs;
-      leftCountsPerRev = measuredLeftCpr;
-      rightCountsPerRev = measuredRightCpr;
-      calibrationPasses = pass;
-      calibrationLastDiffMs = signedCalibrationDiffMs(leftFullRevMs, rightFullRevMs);
-      calibrationBalanced = calibrationIsBalanced(calibrationLastDiffMs);
-
-      Serial.printf("[Rotate] profile calibration pass=%d leftMs=%lu rightMs=%lu diff=%ld balanced=%d leftCpr=%ld rightCpr=%ld\n",
-                    pass, leftFullRevMs, rightFullRevMs, calibrationLastDiffMs,
-                    calibrationBalanced, leftCountsPerRev, rightCountsPerRev);
-
-      if (pass >= CALIBRATION_MIN_PASSES && calibrationBalanced) {
-        break;
-      }
-
-      if (pass < CALIBRATION_MAX_PASSES) {
-        adjustCalibrationNeutral(calibrationLastDiffMs);
-      }
-    }
-
-    if (calibrationPasses < CALIBRATION_MIN_PASSES || !calibrationBalanced) {
-      error = "profile calibration did not balance";
-      calibrationPhase = "failed";
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    deriveSpeedProfile();
-
-    calibrated = leftCountsPerRev > 0 && rightCountsPerRev > 0;
-    if (!calibrated) {
-      error = "profile calibration incomplete";
-      calibrationPhase = "failed";
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    if (!calibrateVerySlowSpeed(error)) {
-      calibrationPhase = "failed";
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    if (!verifyVerySlowFullRevolutions(error)) {
-      calibrationPhase = "failed";
-      restoreProfileBackup(backup);
-      return false;
-    }
-
-    verySlowValidationPassed = true;
-
-    profileCalibrated = calibrated;
-    basePositionCounts = 0;
-    positionTrusted = true;
-    saveCalibration();
-    saveLastPosition();
-
-    Serial.printf("[Rotate] profile calibration complete resting=%d leftMs=%lu rightMs=%lu leftCpr=%ld rightCpr=%ld\n",
-                  restingValue, leftFullRevMs, rightFullRevMs, leftCountsPerRev, rightCountsPerRev);
-    calibrationPhase = "complete";
-    return true;
-  }
-
-  bool calibrateBase(bool rotateLeft, BaseSpeed speed, const char*& error) {
-    Serial.printf("[Rotate] calibration start dir=%s raw=%d sign=%d\n",
-                  rotateLeft ? "LEFT" : "RIGHT", readEncoderRaw(), ENCODER_SIGN);
-
-    if (!rotateUntilTrueNorth(rotateLeft, speed, HOME_TIMEOUT_MS, error)) {
-      return false;
-    }
-
-    delay(250);
-    basePositionCounts = 0;
-    positionTrusted = true;
-    resetEncoderTracking();
-
-    long lastObservedCounts = encoderUnwrapped;
-    unsigned long startMs = millis();
-    unsigned long lastMovementMs = startMs;
-
-    driveServo(rotateLeft, speed);
-    while (isTrueNorthPressed()) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > CALIBRATION_TIMEOUT_MS) {
-        error = "calibration timeout while leaving true north";
-        Serial.println("[Rotate] calibration timeout while leaving true north");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck while leaving true north");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-
-    long startCounts = encoderUnwrapped;
-    Serial.printf("[Rotate] calibration off button raw=%d start=%ld\n", encoderRaw, startCounts);
-
-    lastObservedCounts = encoderUnwrapped;
-    lastMovementMs = millis();
-    uint32_t baselineHits = getTrueNorthHitCount();
-    while (!trueNorthHitDetected(baselineHits)) {
-      updateEncoderTracking();
-
-      if (millis() - startMs > CALIBRATION_TIMEOUT_MS) {
-        error = "calibration timeout";
-        Serial.println("[Rotate] calibration timeout");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
-        error = "encoder stuck";
-        Serial.println("[Rotate] encoder stuck during calibration");
-        stopServo();
-        saveLastPosition();
-        return false;
-      }
-
-      delay(TRUE_NORTH_POLL_DELAY_MS);
-    }
-
-    stopServo();
-
-    long countsPerBaseRev = labs(encoderUnwrapped - startCounts);
-    if (countsPerBaseRev <= TARGET_TOLERANCE_COUNTS) {
-      error = "calibration count too small";
-      Serial.printf("[Rotate] calibration count too small: %ld\n", countsPerBaseRev);
+}
+
+bool BaseRotateInternal::rotateUntilTrueNorth(bool rotateLeft, BaseSpeed speed,
+                                              unsigned long timeoutMs, const char*& error) {
+  long lastObservedCounts = encoderUnwrapped;
+  unsigned long startMs = millis();
+  unsigned long lastMovementMs = startMs;
+  uint32_t startHits = getTrueNorthHitCount();
+
+  driveServo(rotateLeft, speed);
+  while (!trueNorthHitDetected(startHits)) {
+    updateEncoderTracking();
+
+    if (millis() - startMs > timeoutMs) {
+      error = "true north timeout";
+      Serial.println("[Rotate] true north timeout");
+      stopServo();
       saveLastPosition();
       return false;
     }
 
-    if (rotateLeft) {
-      leftCountsPerRev = countsPerBaseRev;
-    } else {
-      rightCountsPerRev = countsPerBaseRev;
+    if (encoderIsStuck(lastObservedCounts, lastMovementMs)) {
+      error = "encoder stuck";
+      Serial.println("[Rotate] encoder stuck while homing");
+      stopServo();
+      saveLastPosition();
+      return false;
     }
 
-    calibrated = leftCountsPerRev > 0 || rightCountsPerRev > 0;
-    basePositionCounts = 0;
-    positionTrusted = true;
-    saveCalibration();
-    saveLastPosition();
-
-    Serial.printf("[Rotate] calibration complete dir=%s countsPerRev=%ld raw=%d unwrapped=%ld\n",
-                  rotateLeft ? "LEFT" : "RIGHT", countsPerBaseRev, encoderRaw, encoderUnwrapped);
-    return true;
+    delay(TRUE_NORTH_POLL_DELAY_MS);
   }
 
-  bool calibrateBoth(long neutralOverride, const char*& error) {
-    return calibrateRotationProfile(neutralOverride, error);
-  }
+  stopServo();
+  basePositionCounts = 0;
+  positionTrusted = true;
+  saveLastPosition();
+  Serial.println("[Rotate] true north reached: position set to 0");
+  return true;
+}
 
+namespace {
   void buildStatusJson(String& out, const char* error = nullptr) {
     StaticJsonDocument<2304> doc;
     doc["calibrated"] = calibrated;
@@ -1308,14 +695,11 @@ namespace {
     doc["calibrationIgnoredPulseCount"] = calibrationIgnoredPulseCount;
     doc["leftFullRevMs"] = leftFullRevMs;
     doc["rightFullRevMs"] = rightFullRevMs;
-    JsonObject verySlowValidation = doc.createNestedObject("verySlowValidation");
-    verySlowValidation["calibrationPasses"] = verySlowCalibrationPasses;
-    verySlowValidation["balanced"] = verySlowCalibrationBalanced;
-    verySlowValidation["leftFullRevMs"] = verySlowLeftFullRevMs;
-    verySlowValidation["rightFullRevMs"] = verySlowRightFullRevMs;
-    verySlowValidation["leftCountsPerRev"] = verySlowLeftCountsPerRev;
-    verySlowValidation["rightCountsPerRev"] = verySlowRightCountsPerRev;
-    verySlowValidation["validated"] = verySlowValidationPassed;
+    // Calibration measures counts-per-rev only; veryslow angles are fixed
+    // offsets from neutral, so there are no separate veryslow measurements to
+    // report. "validated" is kept because clients read it, and now simply
+    // mirrors whether usable counts exist.
+    doc["verySlowValidated"] = verySlowValidationPassed;
     doc["trueNorthPressed"] = readTrueNorthPin();
     doc["trueNorthPinLevel"] = digitalRead(TRUE_NORTH_PIN);
     doc["trueNorthHitCount"] = getTrueNorthHitCount();
@@ -1330,6 +714,8 @@ namespace {
     serializeJson(doc, out);
   }
 }
+
+// ---- Public API --------------------------------------------------------------
 
 bool ActionBaseRotate::run(const String& message, String& statusJson) {
   initAll();
@@ -1370,34 +756,15 @@ bool ActionBaseRotate::run(const String& message, String& statusJson) {
     if (!parseDirection(doc["direction"].as<const char*>(), rotateLeft)) {
       error = "invalid direction";
     } else {
-      ok = calibrateBase(rotateLeft, speed, error);
+      ok = CalibrateRotation::calibrateBase(rotateLeft, speed, error);
     }
-  } else if (strcasecmp(ctl, "CALIBRATE_PROFILE") == 0) {
+  } else if (strcasecmp(ctl, "CALIBRATE_PROFILE") == 0 ||
+             strcasecmp(ctl, "CALIBRATE_BOTH") == 0) {
     long neutralOverride = NO_NEUTRAL_OVERRIDE;
     if (parseNeutralOverride(doc["neutralServoAngle"], neutralOverride, error)) {
-      ok = calibrateRotationProfile(neutralOverride, error);
+      ok = CalibrateRotation::calibrateRotationProfile(neutralOverride, error);
     }
-  } else if (strcasecmp(ctl, "CALIBRATE_BOTH") == 0) {
-    long neutralOverride = NO_NEUTRAL_OVERRIDE;
-    if (parseNeutralOverride(doc["neutralServoAngle"], neutralOverride, error)) {
-      ok = calibrateBoth(neutralOverride, error);
-    }
-  } else if (strcasecmp(ctl, "ENCODER") == 0) {
-    bool rotateLeft = false;
-    long value = 0;
-    usingEstimatedStepCounts = false;
-    if (!parseDirection(doc["direction"].as<const char*>(), rotateLeft)) {
-      error = "invalid direction";
-    } else if (!extractLong(doc["value"], value) || value <= 0) {
-      error = "invalid value";
-    } else {
-      BaseSpeed moveSpeed = stepMovementSpeed(doc["speed"], speed);
-      long targetCounts = stepsToCountsWithEstimate(value, rotateLeft, usingEstimatedStepCounts);
-      Serial.printf("[Rotate] ENCODER steps=%ld counts=%ld estimated=%d calibrated=%d speed=%d omittedSpeed=%d\n",
-                    value, targetCounts, usingEstimatedStepCounts, calibrated, moveSpeed, doc["speed"].isNull());
-      ok = moveByCounts(targetCounts, rotateLeft, moveSpeed, error);
-    }
-  } else if (strcasecmp(ctl, "STEPS") == 0) {
+  } else if (strcasecmp(ctl, "ENCODER") == 0 || strcasecmp(ctl, "STEPS") == 0) {
     bool rotateLeft = false;
     long value = 0;
     usingEstimatedStepCounts = false;
@@ -1408,8 +775,9 @@ bool ActionBaseRotate::run(const String& message, String& statusJson) {
     } else {
       BaseSpeed moveSpeed = stepMovementSpeed(doc["speed"], speed);
       long targetCounts = stepsToCountsWithEstimate(value, rotateLeft, usingEstimatedStepCounts);
-      Serial.printf("[Rotate] STEPS steps=%ld counts=%ld estimated=%d calibrated=%d speed=%d omittedSpeed=%d\n",
-                    value, targetCounts, usingEstimatedStepCounts, calibrated, moveSpeed, doc["speed"].isNull());
+      Serial.printf("[Rotate] %s steps=%ld counts=%ld estimated=%d calibrated=%d speed=%d omittedSpeed=%d\n",
+                    ctl, value, targetCounts, usingEstimatedStepCounts, calibrated, moveSpeed,
+                    doc["speed"].isNull());
       ok = moveByCounts(targetCounts, rotateLeft, moveSpeed, error);
     }
   } else if (strcasecmp(ctl, "DEGREES") == 0) {
@@ -1452,7 +820,7 @@ bool ActionBaseRotate::calibrateProfile(String& statusJson, long neutralServoAng
   statusJson = "";
 
   const char* error = nullptr;
-  bool ok = calibrateRotationProfile(neutralServoAngle, error);
+  bool ok = CalibrateRotation::calibrateRotationProfile(neutralServoAngle, error);
   if (!ok && error) {
     stopServo();
     Serial.print("[Rotate] failed: ");
