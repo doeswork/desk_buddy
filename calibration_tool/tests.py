@@ -657,7 +657,6 @@ class GuiStateTests(unittest.TestCase):
             self.assertEqual(
                 tab_texts,
                 [
-                    "Setup",
                     "Status",
                     "Base + Perch",
                     "IK",
@@ -677,6 +676,102 @@ class GuiStateTests(unittest.TestCase):
             self.assertTrue(hasattr(app, "reach_and_grab_button"))
             self.assertTrue(hasattr(app, "stencil_status_box"))
             self.assertTrue(hasattr(app, "stencil_points_box"))
+        finally:
+            app.destroy()
+
+    def test_menu_bar_switches_between_connect_and_calibration_views(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Connect (former Setup) content is shown by default and lives
+            # outside the calibration notebook.
+            self.assertTrue(app.connect_view.winfo_ismapped())
+            self.assertFalse(app.notebook.winfo_ismapped())
+            self.assertNotEqual(app.connect_view.master, app.notebook)
+
+            app._show_calibration_tab("Base + Perch")
+            app.update()
+            self.assertTrue(app.notebook.winfo_ismapped())
+            self.assertFalse(app.connect_view.winfo_ismapped())
+            self.assertEqual(app.notebook.select(), str(app.base_perch_tab))
+
+            app._show_calibration_tab("Stencil")
+            app.update()
+            self.assertEqual(app.notebook.select(), str(app.stencil_tab))
+
+            app._show_connect_view()
+            app.update()
+            self.assertTrue(app.connect_view.winfo_ismapped())
+            self.assertFalse(app.notebook.winfo_ismapped())
+        finally:
+            app.destroy()
+
+    def test_tools_menu_toggles_controller_and_activity_log(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Both panels are on by default.
+            self.assertTrue(app.show_controller.get())
+            self.assertTrue(app.show_activity_log.get())
+            self.assertTrue(app.controller_shell.winfo_ismapped())
+            self.assertIn(str(app.activity_log_pane), app.main_pane.panes())
+
+            app.show_controller.set(False)
+            app._apply_controller_visibility()
+            app.update()
+            self.assertFalse(app.controller_shell.winfo_ismapped())
+
+            app.show_activity_log.set(False)
+            app._apply_activity_log_visibility()
+            app.update()
+            self.assertNotIn(str(app.activity_log_pane), app.main_pane.panes())
+
+            app.show_controller.set(True)
+            app._apply_controller_visibility()
+            app.show_activity_log.set(True)
+            app._apply_activity_log_visibility()
+            app.update()
+            self.assertTrue(app.controller_shell.winfo_ismapped())
+            self.assertIn(str(app.activity_log_pane), app.main_pane.panes())
+        finally:
+            app.destroy()
+
+    def test_view_menu_zoom_and_maximize_have_no_banner_widgets(self) -> None:
+        if not os.environ.get("DISPLAY"):
+            self.skipTest("Tk display is not available")
+        try:
+            app = CalibrationWizard()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display is not available: {exc}")
+
+        try:
+            app.update()
+            # Zoom/maximize used to be banner buttons with their own textvariable;
+            # they now live only in the View menu, driven by the same methods.
+            self.assertFalse(hasattr(app, "maximize_text"))
+
+            app._zoom_in()
+            self.assertNotEqual(app.zoom_text.get(), "100%")
+            app._reset_zoom()
+            self.assertEqual(app.zoom_text.get(), "100%")
+
+            self.assertFalse(app._manual_maximized)
+            app._toggle_maximize()
+            self.assertTrue(app._manual_maximized)
+            app._toggle_maximize()
+            self.assertFalse(app._manual_maximized)
         finally:
             app.destroy()
 
