@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desk-buddy-vision-planner-training"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "desk-buddy-vision-protocol==0.1.0",
+  "numpy>=1.26,<3",
+  "paho-mqtt>=2.1,<3",
+]
+
+[project.scripts]
+desk-buddy-planner-training = "desk_buddy_planner_training.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desk_buddy_planner_training*"]
+

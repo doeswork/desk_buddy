@@ -1,0 +1,17 @@
+[Unit]
+Description=Desk Buddy Vision Depth MQTT Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jeffy4080
+WorkingDirectory=/home/jeffy4080/robots/desk_buddy/vision
+EnvironmentFile=-/home/jeffy4080/robots/desk_buddy/vision/.env
+ExecStart=/home/jeffy4080/robots/desk_buddy/vision/deploy/run_depth_huggingface.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

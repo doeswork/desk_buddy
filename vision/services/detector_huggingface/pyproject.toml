@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desk-buddy-vision-detector-huggingface"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "desk-buddy-vision-protocol==0.1.0",
+  "numpy>=1.26,<3",
+  "paho-mqtt>=2.1,<3",
+  "Pillow>=10,<12",
+  "torch>=2.3",
+  "transformers>=4.46,<5",
+]
+
+[project.scripts]
+desk-buddy-detector-hf = "desk_buddy_detector_hf.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desk_buddy_detector_hf*"]
+

@@ -1,0 +1,19 @@
+[mqtt]
+host = "mqtt.example.net"
+port = 8883
+topic_root = "desk_buddy"
+username_env = "DESK_BUDDY_PLANNER_MQTT_USERNAME"
+password_env = "DESK_BUDDY_PLANNER_MQTT_PASSWORD"
+tls = true
+ca_file = "../../certs/mqtt-ca.crt"
+
+[service]
+service_id = "planner-training-default"
+service_kind = "planner_training"
+client_id = "desk-buddy-planner-training"
+compute_device = "cpu"
+artifact_timeout_seconds = 120
+artifact_chunk_size = 4096
+
+[models.ik-residual-v1]
+version = "unloaded"

@@ -1,0 +1,21 @@
+[mqtt]
+host = "mqtt.example.net"
+port = 8883
+topic_root = "desk_buddy"
+username_env = "DESK_BUDDY_DETECTOR_MQTT_USERNAME"
+password_env = "DESK_BUDDY_DETECTOR_MQTT_PASSWORD"
+tls = true
+ca_file = "../../certs/mqtt-ca.crt"
+
+[service]
+service_id = "detector-owlv2"
+service_kind = "detector"
+client_id = "desk-buddy-detector-owlv2"
+compute_device = "auto"
+artifact_timeout_seconds = 120
+artifact_chunk_size = 4096
+
+[models.owlv2-base]
+source = "google/owlv2-base-patch16"
+version = "transformers-4.46"
+local_files_only = true

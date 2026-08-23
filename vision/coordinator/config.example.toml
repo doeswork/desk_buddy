@@ -1,0 +1,45 @@
+[mqtt]
+host = "mqtt.example.net"
+port = 8883
+keepalive = 60
+topic_root = "desk_buddy"
+client_id = "desk-buddy-vision-coordinator"
+username_env = "DESK_BUDDY_COORDINATOR_MQTT_USERNAME"
+password_env = "DESK_BUDDY_COORDINATOR_MQTT_PASSWORD"
+tls = true
+ca_file = "../certs/mqtt-ca.crt"
+
+[coordinator]
+service_id = "vision-coordinator"
+data_dir = "../data"
+command_timeout_seconds = 30
+worker_timeout_seconds = 120
+artifact_chunk_size = 4096
+allow_extrapolated_motion = false
+max_rotation_deg = 45
+min_distance_mm = 0
+max_distance_mm = 180
+min_z_height_mm = -30
+max_z_height_mm = 120
+max_rotation_correction_deg = 10
+max_distance_correction_mm = 20
+max_z_correction_mm = 20
+
+[[robots]]
+robot_id = "esp32_5"
+topic = "esp32_5"
+
+[models.owlv2-base]
+kind = "detector"
+service_id = "detector-owlv2"
+default = true
+
+[models.depth-anything-v2-small]
+kind = "depth"
+service_id = "depth-anything-v2"
+default = true
+
+[models.ik-residual-v1]
+kind = "planner"
+service_id = "planner-training-default"
+default = true

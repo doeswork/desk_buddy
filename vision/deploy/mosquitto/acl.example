@@ -1,0 +1,54 @@
+# Replace the example usernames and robot topic with deployment values. This
+# file uses Mosquitto ACL syntax; each process must authenticate separately.
+
+user desk-buddy-gui
+topic write desk_buddy/+/vision/request
+topic write desk_buddy/+/vision/artifact/request
+topic read desk_buddy/+/vision/event
+topic read desk_buddy/+/vision/artifact/chunk
+topic read desk_buddy/+/vision/status
+topic read desk_buddy/vision/coordinator/status
+
+user desk-buddy-vision-coordinator
+topic read desk_buddy/+/vision/request
+topic read desk_buddy/+/vision/artifact/request
+topic write desk_buddy/+/vision/event
+topic write desk_buddy/+/vision/artifact/chunk
+topic write desk_buddy/+/vision/status
+topic write desk_buddy/vision/coordinator/status
+topic read desk_buddy/vision/service/+/status
+topic read desk_buddy/vision/service/+/event
+topic write desk_buddy/vision/service/+/request
+topic read desk_buddy/vision/artifact/request
+topic write desk_buddy/vision/artifact/metadata/+
+topic write desk_buddy/vision/artifact/download/+
+topic read desk_buddy/vision/artifact/upload/+
+topic readwrite esp32_5/test
+topic read esp32_5/HEARTBEAT
+
+user desk-buddy-detector
+topic read desk_buddy/vision/service/detector-owlv2/request
+topic write desk_buddy/vision/service/detector-owlv2/event
+topic write desk_buddy/vision/service/detector-owlv2/status
+topic write desk_buddy/vision/artifact/request
+topic read desk_buddy/vision/artifact/metadata/detector-owlv2
+topic read desk_buddy/vision/artifact/download/detector-owlv2
+topic write desk_buddy/vision/artifact/upload/detector-owlv2
+
+user desk-buddy-depth
+topic read desk_buddy/vision/service/depth-anything-v2/request
+topic write desk_buddy/vision/service/depth-anything-v2/event
+topic write desk_buddy/vision/service/depth-anything-v2/status
+topic write desk_buddy/vision/artifact/request
+topic read desk_buddy/vision/artifact/metadata/depth-anything-v2
+topic read desk_buddy/vision/artifact/download/depth-anything-v2
+topic write desk_buddy/vision/artifact/upload/depth-anything-v2
+
+user desk-buddy-planner
+topic read desk_buddy/vision/service/planner-training-default/request
+topic write desk_buddy/vision/service/planner-training-default/event
+topic write desk_buddy/vision/service/planner-training-default/status
+topic write desk_buddy/vision/artifact/request
+topic read desk_buddy/vision/artifact/metadata/planner-training-default
+topic read desk_buddy/vision/artifact/download/planner-training-default
+topic write desk_buddy/vision/artifact/upload/planner-training-default

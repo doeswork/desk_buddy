@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desk-buddy-vision-protocol"
+version = "0.1.0"
+description = "Lightweight MQTT contracts shared by Desk Buddy vision services"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desk_buddy_vision_protocol*"]
+
