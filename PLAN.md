@@ -12,11 +12,11 @@ Draft. **[OPEN]** = needs your call.
 
 - desk_buddy_plan   - ESP32-S3-CAM    - 3D printed hobby robot arm
 - desk_buddy_studio - PySide6 (Qt)    - Place to self host manage all services and control deskbuddy
-- messages_plan     - Mosquitto Mqtt  - sends messages to all things on the stack
+- network_plan      - Mosquitto Mqtt  - sends messages to all things on the stack
 
 # desk_buddy_studio_services
 
-- mosquitto_plan    - messages
+- mosquitto_plan    - the network hub
 - image_interpreter - YOLO, google one shot, or other systems we vet. connected to mqtt user
 - workflow_manager  - code editor and studio tools to make workflows
 - calibration_tool
@@ -54,7 +54,7 @@ Runs on Windows / Mac / Linux. Nothing else in it. No Pi, no server.
 | Flutter / Kivy | Dart, or non-native look. Backend stays Python → IPC anyway. |
 | .NET MAUI | C#. Separate Windows app. Only if PySide6 fails. |
 
-### messages_plan — the bus
+### network_plan — the hub
 - everything talks MQTT. robot, models, workflows, Studio.
 - contract is `firmware/MQTT_SPEC.md` — 665 lines, already written, good
 - **[OPEN] Mosquitto vs embedded broker.** You named Mosquitto. Real tradeoff:
@@ -74,7 +74,7 @@ Runs on Windows / Mac / Linux. Nothing else in it. No Pi, no server.
 Six. Each = start / stop / health / log / config. All managed from one place.
 
 ### mosquitto_plan
-- the bus. everything else connects to it.
+- the communication hub. everything else connects to it.
 - Studio starts it, holds creds, shows connection state
 - offline-first: no `deskbuddy.ai` account required to use your own robot
 - **[OPEN]** does cloud broker stay the default, or local? Changes first-run.

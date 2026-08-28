@@ -44,7 +44,10 @@ def card(title: str, body: str) -> QFrame:
 
 
 def inert_list(items: list[str], width: int = 218) -> QListWidget:
-    """Side-panel list whose rows are not selectable until the thing behind them exists."""
+    """Side-panel list whose rows are not selectable until the thing behind them exists.
+
+    `width` is a design-size value; callers pass it already scaled for zoom.
+    """
     widget = QListWidget()
     widget.setFixedWidth(width)
     for text in items:

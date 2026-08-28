@@ -10,12 +10,12 @@ from .base import SEPARATOR, Page
 from .calibration import CalibrationPage
 from .logs import LogsPage
 from .manual import ManualPage
-from .messages import MessagesPage
+from .network import NetworkPage
 from .vision import VisionPage
 from .workflows import WorkflowsPage
 
 PAGE_CLASSES = [
-    MessagesPage,
+    NetworkPage,
     VisionPage,
     WorkflowsPage,
     CalibrationPage,
