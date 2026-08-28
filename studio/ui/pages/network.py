@@ -5,11 +5,11 @@ from __future__ import annotations
 from PySide6.QtWidgets import QWidget
 
 try:
-    from ..widgets import card
-    from .base import SEPARATOR, Page, stack
+    from ..components import ActionSpec, Card, Column, Separator, SidePanel
+    from .base import Page
 except ImportError:
-    from widgets import card
-    from base import SEPARATOR, Page, stack
+    from components import ActionSpec, Card, Column, Separator, SidePanel
+    from base import Page
 
 
 class NetworkPage(Page):
@@ -20,14 +20,31 @@ class NetworkPage(Page):
     subtitle = "The MQTT hub. Robot, models, and workflows all talk through it."
     status = "Broker stopped"
 
-    actions = ["Start", "Stop", "Restart", SEPARATOR, "Config", "Topics"]
+    def build_actions(self) -> list:
+        return [
+            ActionSpec("Start", primary=True),
+            ActionSpec("Stop"),
+            ActionSpec("Restart"),
+            Separator(),
+            ActionSpec("Config"),
+            ActionSpec("Topics"),
+        ]
 
-    side_title = "Brokers"
-    side_items = ["Local broker", "mqtt.deskbuddy.ai", "Custom…"]
+    def build_side(self) -> QWidget:
+        return SidePanel("Brokers", ["Local broker", "mqtt.deskbuddy.ai", "Custom…"])
 
     def build_page(self) -> QWidget:
-        return stack(
-            card("Broker", "Not running. No broker configured yet."),
-            card("Connected", "Nothing connected."),
-            card("Traffic", "No messages seen."),
+        return Column(
+            self.build_broker(),
+            self.build_clients(),
+            self.build_traffic(),
         )
+
+    def build_broker(self) -> QWidget:
+        return Card("Broker", "Not running. No broker configured yet.")
+
+    def build_clients(self) -> QWidget:
+        return Card("Connected", "Nothing connected.")
+
+    def build_traffic(self) -> QWidget:
+        return Card("Traffic", "No messages seen.")

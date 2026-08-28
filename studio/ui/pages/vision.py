@@ -5,11 +5,11 @@ from __future__ import annotations
 from PySide6.QtWidgets import QWidget
 
 try:
-    from ..widgets import card
-    from .base import SEPARATOR, Page, stack
+    from ..components import ActionSpec, Card, Column, Separator, SidePanel
+    from .base import Page
 except ImportError:
-    from widgets import card
-    from base import SEPARATOR, Page, stack
+    from components import ActionSpec, Card, Column, Separator, SidePanel
+    from base import Page
 
 
 class VisionPage(Page):
@@ -20,17 +20,33 @@ class VisionPage(Page):
     subtitle = "Install and run vetted models. Studio installs them, never bundles them."
     status = "No model running"
 
-    actions = [
-        "Install Model", "Remove", SEPARATOR,
-        "Start", "Stop", SEPARATOR,
-        "Test Photo",
-    ]
+    def build_actions(self) -> list:
+        return [
+            ActionSpec("Install Model", primary=True),
+            ActionSpec("Remove"),
+            Separator(),
+            ActionSpec("Start"),
+            ActionSpec("Stop"),
+            Separator(),
+            ActionSpec("Test Photo"),
+        ]
 
-    side_title = "Models"
-    side_items = ["YOLO — detect", "Google one-shot", "Depth — mono", "Browse catalog…"]
+    def build_side(self) -> QWidget:
+        return SidePanel("Models", [
+            "YOLO — detect",
+            "Google one-shot",
+            "Depth — mono",
+            "Browse catalog…",
+        ])
 
     def build_page(self) -> QWidget:
-        return stack(
-            card("No models installed", "Pick one from the catalog to get started."),
-            card("Last detection", "Nothing yet."),
+        return Column(
+            self.build_installed(),
+            self.build_last_detection(),
         )
+
+    def build_installed(self) -> QWidget:
+        return Card("No models installed", "Pick one from the catalog to get started.")
+
+    def build_last_detection(self) -> QWidget:
+        return Card("Last detection", "Nothing yet.")

@@ -1,19 +1,26 @@
 """Base class every page inherits.
 
-A Page is one screen: its BAR 1 label, its BAR 2 actions, its side panel, and
-its body. Adding a page means adding one file and one line in
-`pages/__init__.py` — nothing else in the app changes.
+A Page owns its whole vertical slice and builds it top-down: the page invokes
+its own contents, and those contents invoke theirs. Nothing about a page is
+assembled behind its back.
+
+Four things a page builds:
+
+    build_actions()   the BAR 2 buttons
+    build_side()      the side panel
+    build_header()    title + subtitle  (rarely overridden)
+    build_page()      the main body
+
+`label` and `key` stay as attributes because the window needs them before the
+page is built — that is the page's identity, not its content.
 
 Not to be confused with a Service (PLAN.md), which is a background process
 Studio starts and stops. Some pages drive a service; Logs and Manual do not.
-
-Subclasses set the class attributes and override `build_page()`.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -23,94 +30,93 @@ from PySide6.QtWidgets import (
 )
 
 try:
+    from ..components import ActionSpec, Separator, SidePanel
     from ..widgets import not_built_badge
 except ImportError:
+    from components import ActionSpec, Separator, SidePanel
     from widgets import not_built_badge
-
-# Put this in an actions list to get a divider on the context bar.
-SEPARATOR = "---"
 
 
 class Page:
-    # --- BAR 1 ---
+    """One screen. Subclasses build their own contents."""
+
+    # Identity. The window needs these before anything is built.
     key: str = ""
     label: str = ""
 
-    # --- BAR 2. Strings become disabled buttons; SEPARATOR becomes a divider. ---
-    actions: list[str] = []
-
-    # --- side dock ---
-    side_title: str = ""
-    side_items: list[str] = []
-
-    # --- main page ---
+    # Shown in the header and the status strip.
     title: str = ""
     subtitle: str = ""
     status: str = ""
 
     def __init__(self) -> None:
-        self._page: QWidget | None = None
+        self._widget: QWidget | None = None
+        self._side: QWidget | None = None
 
     # ---- BAR 2 -----------------------------------------------------------
-    def build_actions(self, parent: QWidget) -> list[QAction | None]:
-        """None marks a separator. Everything is disabled until it works."""
-        built: list[QAction | None] = []
-        for label in self.actions:
-            if label == SEPARATOR:
-                built.append(None)
-                continue
-            action = QAction(label, parent)
-            action.setEnabled(False)
-            built.append(action)
-        return built
+    def build_actions(self) -> list:
+        """The context-bar buttons for this page.
 
-    # ---- main page -------------------------------------------------------
-    def page(self) -> QWidget:
-        if self._page is None:
-            self._page = self._wrap(self.build_page())
-        return self._page
+        Return ActionSpec(...) and Separator(). Override in every page.
+        """
+        return []
 
+    # ---- side panel ------------------------------------------------------
+    def build_side(self) -> QWidget | None:
+        """The side panel. Return None for a page that has no side panel."""
+        return None
+
+    def side(self) -> QWidget | None:
+        if self._side is None:
+            self._side = self.build_side()
+        return self._side
+
+    # ---- main body -------------------------------------------------------
     def build_page(self) -> QWidget:
-        """Override. Return the body that sits under the headline."""
+        """The body under the header. Override in every page."""
         raise NotImplementedError
 
-    def _wrap(self, body: QWidget) -> QWidget:
-        """Headline + subtitle + the subclass's body, in a scroll area."""
+    def build_header(self) -> QWidget:
+        """Title + not-built badge + subtitle. Rarely overridden."""
+        holder = QWidget()
+        layout = QVBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        title = QLabel(self.title)
+        title.setObjectName("Title")
+        row.addWidget(title)
+        row.addWidget(not_built_badge(), 0, Qt.AlignTop)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        if self.subtitle:
+            subtitle = QLabel(self.subtitle)
+            subtitle.setObjectName("Subtitle")
+            subtitle.setWordWrap(True)
+            layout.addSpacing(10)
+            layout.addWidget(subtitle)
+
+        return holder
+
+    # ---- assembly --------------------------------------------------------
+    def widget(self) -> QWidget:
+        """Header + body, scrollable. Built once, on first use."""
+        if self._widget is not None:
+            return self._widget
+
         inner = QWidget()
         layout = QVBoxLayout(inner)
         layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(20)
-
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        title = QLabel(self.title)
-        title.setObjectName("Title")
-        header.addWidget(title)
-        header.addWidget(not_built_badge(), 0, Qt.AlignTop)
-        header.addStretch(1)
-        layout.addLayout(header)
-
-        subtitle = QLabel(self.subtitle)
-        subtitle.setObjectName("Subtitle")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
-        layout.addSpacing(4)
-
-        layout.addWidget(body)
+        layout.setSpacing(24)
+        layout.addWidget(self.build_header())
+        layout.addWidget(self.build_page())
         layout.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidget(inner)
         scroll.setWidgetResizable(True)
+        self._widget = scroll
         return scroll
-
-
-def stack(*widgets: QWidget) -> QWidget:
-    """Vertical stack of cards. What most build_page() bodies are."""
-    holder = QWidget()
-    layout = QVBoxLayout(holder)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(16)
-    for widget in widgets:
-        layout.addWidget(widget)
-    return holder

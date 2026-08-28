@@ -1,7 +1,7 @@
 """Main window. Assembly only — the pieces live in their own files.
 
     menus/             one file per menu, each owns its actions
-    toolbars.py        BAR 1 and BAR 2
+    components/        reusable widgets, incl. BAR 1 and BAR 2
     pages/             one file per screen, each owns its whole slice
     widgets.py         shared card / list builders
     theme.py           palette and stylesheet
@@ -24,15 +24,13 @@ try:
     from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
     from .pages import build_pages
     from .theme import stylesheet
-    from .toolbars import ContextBar, NavBar
-    from .widgets import inert_list
+    from .components import ContextBar, NavBar
 except ImportError:  # direct script execution
     from menus import build_menu_bar
     from menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
     from pages import build_pages
     from theme import stylesheet
-    from toolbars import ContextBar, NavBar
-    from widgets import inert_list
+    from components import ContextBar, NavBar
 
 
 class MainWindow(QMainWindow):
@@ -85,7 +83,7 @@ class MainWindow(QMainWindow):
     def _build_pages(self) -> None:
         self.pages = QStackedWidget()
         for page in self.pages_list:
-            self.pages.addWidget(page.page())
+            self.pages.addWidget(page.widget())
         self.setCentralWidget(self.pages)
 
     def _build_status_bar(self) -> None:
@@ -129,10 +127,10 @@ class MainWindow(QMainWindow):
         # new scale or the app font alone changes nothing.
         self.setStyleSheet(stylesheet(scale))
 
-        # Rebuild the side panel at the new width.
-        self.side_dock.setWidget(
-            inert_list(self.pages_list[self.pages.currentIndex()].side_items, self._side_width())
-        )
+        # Re-width the current page's side panel.
+        side = self.pages_list[self.pages.currentIndex()].side()
+        if side is not None:
+            side.setFixedWidth(self._side_width())
         self.statusBar().showMessage(f"Zoom {int(scale * 100)}%", 1500)
 
     @property
@@ -149,7 +147,12 @@ class MainWindow(QMainWindow):
         self.nav_bar.check(index)
         self.pages.setCurrentIndex(index)
         self.context_bar.show_page(page)
-        self.side_dock.setWindowTitle(page.side_title or "Browser")
+        # The page builds its own side panel; the dock just hosts it.
+        side = page.side()
+        self.side_dock.setVisible(side is not None)
+        if side is not None:
+            side.setFixedWidth(self._side_width())
+            self.side_dock.setWindowTitle(getattr(side, "title", "") or "Browser")
+            self.side_dock.setWidget(side)
         self.panel_toggle.setText("Side Panel")
-        self.side_dock.setWidget(inert_list(page.side_items, self._side_width()))
         self.status_label.setText(page.status)

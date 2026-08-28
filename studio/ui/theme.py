@@ -85,17 +85,35 @@ QToolBar#ContextBar {{
     padding: {px(6)} {px(12)};
     spacing: 3px;
 }}
-QToolBar#ContextBar QToolButton {{
-    background: {PANEL};
-    border: 1px solid {SAND};
+/* Context-bar buttons. One may be primary (filled); the rest are outlined.
+   Not built yet: visible, sized, obviously inert.                          */
+QPushButton#ContextAction, QPushButton#ContextPrimary {{
     border-radius: {px(7)};
     padding: {px(6)} {px(13)};
-    margin-right: 3px;
+    margin-right: {px(3)};
+}}
+QPushButton#ContextAction {{
+    background: {PANEL};
+    border: 1px solid {SAND};
     color: {CHARCOAL};
 }}
-QToolBar#ContextBar QToolButton:hover:!disabled {{ border-color: {MATCHA}; }}
-/* Not built yet: visible, sized, obviously inert. */
-QToolBar#ContextBar QToolButton:disabled {{
+QPushButton#ContextAction:hover:!disabled {{ border-color: {MATCHA}; color: {MATCHA_DARK}; }}
+QPushButton#ContextAction:pressed {{ background: {MUTED_BG}; }}
+QPushButton#ContextAction:disabled {{
+    background: {MUTED_BG};
+    border: 1px dashed {SAND};
+    color: {MUTED};
+}}
+
+QPushButton#ContextPrimary {{
+    background: {MATCHA};
+    border: 1px solid {MATCHA};
+    color: #ffffff;
+    font-weight: 600;
+}}
+QPushButton#ContextPrimary:hover:!disabled {{ background: {MATCHA_DARK}; border-color: {MATCHA_DARK}; }}
+QPushButton#ContextPrimary:pressed {{ background: {MATCHA_DARK}; }}
+QPushButton#ContextPrimary:disabled {{
     background: {MUTED_BG};
     border: 1px dashed {SAND};
     color: {MUTED};
@@ -116,7 +134,7 @@ QDockWidget::title {{
 }}
 QDockWidget > QWidget {{ background: {PANEL}; border-right: 1px solid {SAND}; }}
 
-QListWidget {{ background: {PANEL}; border: none; padding: {px(7)}; outline: none; }}
+QListWidget, QListWidget#SidePanel {{ background: {PANEL}; border: none; padding: {px(7)}; outline: none; }}
 QListWidget::item {{ padding: {px(9)} {px(11)}; border-radius: {px(7)}; color: {CHARCOAL}; }}
 QListWidget::item:hover {{ background: {MUTED_BG}; }}
 QListWidget::item:selected {{ background: {SAND}; color: {CHARCOAL}; }}
@@ -171,6 +189,11 @@ QPushButton#EStop {{
 }}
 QPushButton#EStop:hover {{ background: #9c463d; }}
 
+/* ---- Buttons ----
+   PrimaryButton   filled matcha, at most one per view
+   SecondaryButton outlined, use for everything else
+   bare QPushButton inherits the secondary look                            */
+
 QPushButton {{
     background: {PANEL};
     border: 1px solid {SAND};
@@ -180,6 +203,43 @@ QPushButton {{
 }}
 QPushButton:hover:!disabled {{ border-color: {MATCHA}; }}
 QPushButton:disabled {{ background: {MUTED_BG}; border: 1px dashed {SAND}; color: {MUTED}; }}
+
+QPushButton#PrimaryButton {{
+    background: {MATCHA};
+    border: 1px solid {MATCHA};
+    border-radius: {px(7)};
+    padding: {px(8)} {px(19)};
+    color: #ffffff;
+    font-weight: 600;
+}}
+QPushButton#PrimaryButton:hover:!disabled {{
+    background: {MATCHA_DARK};
+    border-color: {MATCHA_DARK};
+}}
+QPushButton#PrimaryButton:pressed {{ background: {MATCHA_DARK}; }}
+QPushButton#PrimaryButton:disabled {{
+    background: {MUTED_BG};
+    border: 1px dashed {SAND};
+    color: {MUTED};
+}}
+
+QPushButton#SecondaryButton {{
+    background: {PANEL};
+    border: 1px solid {SAND};
+    border-radius: {px(7)};
+    padding: {px(8)} {px(19)};
+    color: {CHARCOAL};
+}}
+QPushButton#SecondaryButton:hover:!disabled {{
+    border-color: {MATCHA};
+    color: {MATCHA_DARK};
+}}
+QPushButton#SecondaryButton:pressed {{ background: {MUTED_BG}; }}
+QPushButton#SecondaryButton:disabled {{
+    background: {MUTED_BG};
+    border: 1px dashed {SAND};
+    color: {MUTED};
+}}
 
 QScrollArea {{ border: none; background: {CLOUD}; }}
 QScrollBar:vertical {{ background: transparent; width: {px(11)}; margin: 0; }}

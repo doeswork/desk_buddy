@@ -6,7 +6,7 @@ in the app needs to change.
 
 from __future__ import annotations
 
-from .base import SEPARATOR, Page
+from .base import Page
 from .calibration import CalibrationPage
 from .logs import LogsPage
 from .manual import ManualPage
@@ -28,4 +28,4 @@ def build_pages() -> list[Page]:
     return [cls() for cls in PAGE_CLASSES]
 
 
-__all__ = ["SEPARATOR", "Page", "PAGE_CLASSES", "build_pages"]
+__all__ = ["Page", "PAGE_CLASSES", "build_pages"]
