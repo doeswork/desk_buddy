@@ -5,10 +5,7 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMenu
 
-try:
-    from .base import SEPARATOR, Menu
-except ImportError:
-    from base import SEPARATOR, Menu
+from .base import SEPARATOR, Menu
 
 
 class FileMenu(Menu):

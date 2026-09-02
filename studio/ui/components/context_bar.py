@@ -13,19 +13,15 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QMainWindow, QPushButton, QToolBar
 
-try:
-    from .action_spec import Separator
-    from .spacer import spacer
-except ImportError:
-    from action_spec import Separator
-    from spacer import spacer
+from .action_spec import Separator
+from .spacer import spacer
 
 
 class ContextButton(QPushButton):
     """One action on the context bar.
 
     `primary=True` gives the filled treatment — at most one per page, or none.
-    Styling lives in theme.py under QPushButton#ContextPrimary / #ContextAction.
+    Styling lives in theme/qss.py under QPushButton#ContextPrimary / #ContextAction.
     """
 
     def __init__(self, text: str, *, primary: bool = False, enabled: bool = False) -> None:
@@ -41,6 +37,10 @@ class ContextBar(QToolBar):
         super().__init__("Actions", window)
         self.setObjectName("ContextBar")
         self.setMovable(False)
+        # QSS margins cannot pull back the spacing the toolbar's own layout
+        # inserts, so the strip has to be closed here.
+        self.layout().setSpacing(0)
+        self.layout().setContentsMargins(0, 0, 0, 0)
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._window = window
         self.buttons: dict[str, ContextButton] = {}
@@ -58,8 +58,10 @@ class ContextBar(QToolBar):
             button = ContextButton(
                 spec.label,
                 primary=spec.primary,
-                enabled=spec.enabled,
+                enabled=spec.clickable,
             )
+            if spec.on_click is not None:
+                button.clicked.connect(spec.on_click)
             self.addWidget(button)
             self.buttons[spec.label] = button
 

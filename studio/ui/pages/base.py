@@ -29,12 +29,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-try:
-    from ..components import ActionSpec, Separator, SidePanel
-    from ..widgets import not_built_badge
-except ImportError:
-    from components import ActionSpec, Separator, SidePanel
-    from widgets import not_built_badge
+from ..components import ActionSpec, Separator, SidePanel
+from ..theme.metrics import (
+    HEADER_GAP,
+    HEADER_SPACING,
+    PAGE_MARGIN_H,
+    PAGE_MARGIN_V,
+    PAGE_SPACING,
+)
+from ..widgets import not_built_badge
 
 
 class Page:
@@ -52,6 +55,9 @@ class Page:
     def __init__(self) -> None:
         self._widget: QWidget | None = None
         self._side: QWidget | None = None
+        # Set by the window: lets a page whose state changed ask for the
+        # context bar and status strip to catch up with it.
+        self.on_rebuilt = None
 
     # ---- BAR 2 -----------------------------------------------------------
     def build_actions(self) -> list:
@@ -84,7 +90,7 @@ class Page:
         layout.setSpacing(0)
 
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(HEADER_GAP)
         title = QLabel(self.title)
         title.setObjectName("Title")
         row.addWidget(title)
@@ -96,7 +102,7 @@ class Page:
             subtitle = QLabel(self.subtitle)
             subtitle.setObjectName("Subtitle")
             subtitle.setWordWrap(True)
-            layout.addSpacing(10)
+            layout.addSpacing(HEADER_SPACING)
             layout.addWidget(subtitle)
 
         return holder
@@ -109,8 +115,10 @@ class Page:
 
         inner = QWidget()
         layout = QVBoxLayout(inner)
-        layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(24)
+        layout.setContentsMargins(
+            PAGE_MARGIN_H, PAGE_MARGIN_V, PAGE_MARGIN_H, PAGE_MARGIN_V
+        )
+        layout.setSpacing(PAGE_SPACING)
         layout.addWidget(self.build_header())
         layout.addWidget(self.build_page())
         layout.addStretch(1)
@@ -120,3 +128,25 @@ class Page:
         scroll.setWidgetResizable(True)
         self._widget = scroll
         return scroll
+
+    def rebuild(self) -> None:
+        """Rebuild the body in place, after this page's state changed.
+
+        The header and the scroll area stay; only the section stack is
+        replaced, so the page does not flicker or lose its scroll position.
+        A page that never changes never calls this.
+        """
+        if self._widget is None:
+            return  # Never built; the next widget() call is already current.
+
+        inner = self._widget.widget()
+        layout = inner.layout()
+
+        # The body sits between the header and the trailing stretch.
+        item = layout.takeAt(1)
+        if item is not None and item.widget() is not None:
+            item.widget().deleteLater()
+        layout.insertWidget(1, self.build_page())
+
+        if self.on_rebuilt is not None:
+            self.on_rebuilt()

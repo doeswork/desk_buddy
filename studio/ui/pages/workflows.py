@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
 
-try:
-    from ..components import ActionSpec, Card, Column, Separator, SidePanel
-    from .base import Page
-except ImportError:
-    from components import ActionSpec, Card, Column, Separator, SidePanel
-    from base import Page
+from ..components import ActionSpec, Card, Column, Separator, SidePanel
+from .base import Page
 
 
 class WorkflowsPage(Page):

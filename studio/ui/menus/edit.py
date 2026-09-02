@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-try:
-    from .base import SEPARATOR, Menu
-except ImportError:
-    from base import SEPARATOR, Menu
+from .base import SEPARATOR, Menu
 
 
 class EditMenu(Menu):

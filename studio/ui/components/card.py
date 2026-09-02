@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
+from ..theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
+
 
 class Card(QFrame):
     def __init__(self, title: str, body: str = "", parent: QWidget | None = None,
@@ -15,8 +17,10 @@ class Card(QFrame):
         self.setObjectName("CardMuted" if muted else "Card")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(6)
+        layout.setContentsMargins(
+            CARD_MARGIN_H, CARD_MARGIN_V, CARD_MARGIN_H, CARD_MARGIN_V
+        )
+        layout.setSpacing(CARD_SPACING)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("CardTitle")
