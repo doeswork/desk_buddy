@@ -51,6 +51,7 @@ class Page:
     title: str = ""
     subtitle: str = ""
     status: str = ""
+    built: bool = False
 
     def __init__(self) -> None:
         self._widget: QWidget | None = None
@@ -94,7 +95,8 @@ class Page:
         title = QLabel(self.title)
         title.setObjectName("Title")
         row.addWidget(title)
-        row.addWidget(not_built_badge(), 0, Qt.AlignTop)
+        if not self.built:
+            row.addWidget(not_built_badge(), 0, Qt.AlignTop)
         row.addStretch(1)
         layout.addLayout(row)
 

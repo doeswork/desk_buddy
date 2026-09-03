@@ -12,7 +12,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from .user_config.settings import APP, ORG
+from .storage.user_config.settings import APP, ORG
 from .ui.main_window import MainWindow
 
 

@@ -1,6 +1,6 @@
 """The Broker card: is Mosquitto here, and is it running?
 
-View only. Every question it asks is answered by `studio.network` — this file
+View only. Every question it asks is answered by `studio.services.network` — this file
 picks which card to build and nothing else. If a decision shows up here that is
 about *brokers* rather than about *widgets*, it belongs in the service.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
 
-from ....network import BrokerReport, CommandResult
+from ....services.network import BrokerReport, CommandResult
 from ...components import Card, CommandCard
 
 

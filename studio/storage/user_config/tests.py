@@ -1,6 +1,6 @@
 """User-config tests. Mostly about surviving a bad file.
 
-    QT_QPA_PLATFORM=offscreen python -m studio.user_config.tests
+    QT_QPA_PLATFORM=offscreen python -m studio.storage.user_config.tests
 
 Preferences are read at startup before any window exists, so a settings file
 that cannot be parsed must degrade to defaults rather than stop the app from
@@ -34,6 +34,10 @@ def test_defaults_when_absent() -> None:
     assert s.get(keys.THEME) == "light"
     assert s.get(keys.ZOOM_INDEX) == 2
     assert s.get(keys.LAST_PAGE) == 0
+    assert s.get(keys.VISION_DETECTOR_MODEL) == "owlv2-base"
+    assert s.get(keys.VISION_DETECTOR_WORKER) == "zero-shot-hf-1"
+    assert s.get(keys.VISION_DEPTH_MODEL) == "depth-anything-v2-small"
+    assert s.get(keys.VISION_DEPTH_WORKER) == "depth-hf-1"
 
 
 def test_round_trip() -> None:
@@ -43,6 +47,19 @@ def test_round_trip() -> None:
     s.sync()
     assert s.get(keys.THEME) == "dark"
     assert s.get(keys.ZOOM_INDEX) == 5
+
+
+def test_vision_provider_round_trip() -> None:
+    s = config_file("")
+    s.set(keys.VISION_DETECTOR_MODEL, "owlv2-base-ensemble")
+    s.set(keys.VISION_DETECTOR_WORKER, "ensemble-worker")
+    s.set(keys.VISION_DEPTH_MODEL, "another-depth")
+    s.set(keys.VISION_DEPTH_WORKER, "depth-worker")
+    s.sync()
+    assert s.get(keys.VISION_DETECTOR_MODEL) == "owlv2-base-ensemble"
+    assert s.get(keys.VISION_DETECTOR_WORKER) == "ensemble-worker"
+    assert s.get(keys.VISION_DEPTH_MODEL) == "another-depth"
+    assert s.get(keys.VISION_DEPTH_WORKER) == "depth-worker"
 
 
 def test_types_survive_a_write_read_cycle() -> None:

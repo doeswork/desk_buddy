@@ -34,9 +34,9 @@ def _environment() -> list[str]:
 
 
 def _broker() -> list[str]:
-    from .network import broker_commands as commands
-    from .network import detect, report
-    from .network.broker_finder import DEFAULT_PORT, SYSTEM_PORT, port_open
+    from .services.network import broker_commands as commands
+    from .services.network import detect, report
+    from .services.network.broker_finder import DEFAULT_PORT, SYSTEM_PORT, port_open
 
     status = detect()
     live = report()
@@ -67,7 +67,7 @@ def _broker() -> list[str]:
 
 
 def _paths() -> list[str]:
-    from .user_config.settings import settings
+    from .storage.user_config.settings import settings
 
     lines = []
     try:
@@ -80,7 +80,7 @@ def _paths() -> list[str]:
         lines.append(f"preferences  unavailable: {error}")
 
     try:
-        from .network.broker_commands import broker_dir
+        from .services.network.broker_commands import broker_dir
 
         directory = broker_dir()
         lines.append(f"broker dir   {directory}")

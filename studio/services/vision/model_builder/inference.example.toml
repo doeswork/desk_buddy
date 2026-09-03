@@ -1,0 +1,15 @@
+[mqtt]
+host = "127.0.0.1"
+port = 18830
+topic_root = "desk_buddy"
+username_env = "DESK_BUDDY_INFERENCE_MQTT_USERNAME"
+password_env = "DESK_BUDDY_INFERENCE_MQTT_PASSWORD"
+
+[worker]
+worker_id = "ik-inference-1"
+worker_kind = "ik-inference"
+device = "cpu"
+artifact_timeout_seconds = 120
+max_frame_bytes = 8388608
+
+[models]

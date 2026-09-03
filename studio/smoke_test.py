@@ -13,8 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from .user_config import keys
-from .user_config.settings import Settings
+from .storage.user_config import keys
+from .storage.user_config.settings import Settings
 from .ui.components import ActionSpec
 from .ui.main_window import MainWindow
 

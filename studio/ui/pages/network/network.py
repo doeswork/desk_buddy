@@ -15,11 +15,17 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QMessageBox, QWidget
 
-from ....network import accounts as account_service
-from ....network import broker_commands as commands
-from ....network import report
+from ....services.network import accounts as account_service
+from ....services.network import broker_commands as commands
+from ....services.network import report
+from ....services.vision.access import (
+    VisionAccessIdentity,
+    VisionAccessManager,
+    default_vision_access,
+)
 from ...components import ActionSpec, Column, Separator, SidePanel
 from ..base import Page
+from ..vision.access_widgets import AccessCallbacks, vision_access_card
 from .accounts import CredentialsDialog, accounts_card, ask_for_name
 from .broker import broker_card
 
@@ -30,9 +36,12 @@ class NetworkPage(Page):
 
     title = "Network"
     subtitle = "The MQTT hub. Robot, models, and workflows all talk through it."
+    built = True
 
-    def __init__(self) -> None:
+    def __init__(self, *, vision_access: VisionAccessManager | None = None) -> None:
         super().__init__()
+        self.vision_access = vision_access or default_vision_access()
+        self.vision_access.changed.connect(self._vision_access_changed)
         self._report = None
         self.last_result = None
         self.selected_account = ""
@@ -89,14 +98,15 @@ class NetworkPage(Page):
         # These need a row selected. They stay visible either way so the
         # toolbar does not change shape as you click around the list.
         selected = bool(self.selected_account)
+        managed = self.vision_access.is_managed_account(self.selected_account) if selected else False
         actions += [
             ActionSpec(
                 "Reset Password",
-                on_click=self.reset_password if selected else None,
+                on_click=self.reset_password if selected and not managed else None,
             ),
             ActionSpec(
                 "Remove Account",
-                on_click=self.remove_account if selected else None,
+                on_click=self.remove_account if selected and not managed else None,
             ),
         ]
         return actions
@@ -120,10 +130,96 @@ class NetworkPage(Page):
 
     # ---- the sections, in order -----------------------------------------
     def build_page(self) -> QWidget:
-        sections = [broker_card(self.broker(), self.last_result)]
+        plan = self.vision_access.known_plan()
+        errors = self.vision_access.last_result.errors if self.vision_access.last_result else ()
+        detail = "Studio manages these localhost credentials. Passwords are stored privately and remain visible here."
+        if errors:
+            detail += "\n" + "\n".join(errors)
+        callbacks = AccessCallbacks(
+            setup_all=self.setup_vision_access,
+            ensure=self.ensure_vision_access,
+            rotate=self.rotate_vision_access,
+            revoke=self.revoke_vision_access,
+            copy_setup=self.copy_vision_setup,
+        )
+        access = vision_access_card(
+            plan.identities,
+            self.vision_access.states(plan),
+            callbacks,
+            setup_label="Set Up/Repair All" if commands.is_ours() else "Start Broker & Set Up Vision Access",
+            setup_enabled=self.vision_access.can_manage_broker,
+            detail=detail,
+        )
+        sections = [broker_card(self.broker(), self.last_result), access]
         if commands.is_ours():
             sections.append(accounts_card(self.accounts()))
         return Column(*sections)
+
+    # ---- managed Vision access -----------------------------------------
+    def setup_vision_access(self) -> None:
+        if not self.vision_access.can_manage_broker:
+            QMessageBox.information(
+                self.widget(), "External MQTT broker",
+                "Studio only provisions its own broker at 127.0.0.1:18830. "
+                "Supply external broker credentials through environment variables.",
+            )
+            return
+        if not commands.is_ours():
+            self.last_result = commands.start()
+            if not self.last_result:
+                self.refresh_all()
+                return
+        result = self.vision_access.ensure_all()
+        if not result.ok:
+            QMessageBox.warning(
+                self.widget(), "Some Vision accounts need attention", "\n".join(result.errors)
+            )
+        self.refresh_all()
+
+    def ensure_vision_access(self, identity: VisionAccessIdentity) -> None:
+        self._vision_access_action(
+            "Could not create Vision access", lambda: self.vision_access.ensure(identity)
+        )
+
+    def rotate_vision_access(self, identity: VisionAccessIdentity) -> None:
+        if QMessageBox.question(
+            self.widget(), f"Rotate {identity.role} access?",
+            "The current password will stop working immediately. Continue?",
+        ) == QMessageBox.Yes:
+            self._vision_access_action(
+                "Could not rotate Vision access", lambda: self.vision_access.rotate(identity)
+            )
+
+    def revoke_vision_access(self, identity: VisionAccessIdentity) -> None:
+        if QMessageBox.question(
+            self.widget(), f"Revoke {identity.role} access?",
+            "This service will be disconnected and cannot reconnect until access is created again.",
+        ) == QMessageBox.Yes:
+            self._vision_access_action(
+                "Could not revoke Vision access", lambda: self.vision_access.revoke(identity)
+            )
+
+    def copy_vision_setup(self, identity: VisionAccessIdentity) -> None:
+        from PySide6.QtGui import QGuiApplication
+
+        try:
+            QGuiApplication.clipboard().setText(self.vision_access.setup_bundle(identity))
+            self.status = f"Copied MQTT setup for {identity.role}"
+            if self.on_rebuilt is not None:
+                self.on_rebuilt()
+        except Exception as exc:
+            QMessageBox.warning(self.widget(), "Could not copy Vision setup", str(exc))
+
+    def _vision_access_action(self, title: str, callback) -> None:
+        try:
+            callback()
+        except Exception as exc:
+            QMessageBox.warning(self.widget(), title, str(exc))
+        self.refresh_all()
+
+    def _vision_access_changed(self) -> None:
+        self._side = None
+        self.refresh()
 
     # ---- broker actions --------------------------------------------------
     def start_broker(self) -> None:

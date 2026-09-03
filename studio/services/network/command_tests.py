@@ -1,6 +1,6 @@
 """Broker start / stop / restart tests.
 
-    python -m studio.network.command_tests
+    python -m studio.services.network.command_tests
 
 These run a real Mosquitto on an unused high port. They are skipped when it is
 not installed, so the suite still passes on a machine without it — and they

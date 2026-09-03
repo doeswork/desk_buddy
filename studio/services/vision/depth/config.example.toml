@@ -1,0 +1,23 @@
+[mqtt]
+host = "127.0.0.1"
+port = 18830
+topic_root = "desk_buddy"
+tls = false
+username_env = "DESK_BUDDY_DEPTH_MQTT_USERNAME"
+password_env = "DESK_BUDDY_DEPTH_MQTT_PASSWORD"
+
+[worker]
+worker_id = "depth-hf-1"
+worker_kind = "depth"
+client_id = "desk-buddy-depth-hf-1"
+device = "auto"
+max_frame_bytes = 8388608
+
+[models.depth-anything-v2-small]
+source = "depth-anything/Depth-Anything-V2-Small-hf"
+revision = "5426e4f0f36572d16453bbda7a8389317b1bef99"
+local_files_only = true
+native_near_is_high = true
+license = "Apache-2.0"
+size_mb = 100
+devices = ["cpu", "cuda"]

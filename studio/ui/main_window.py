@@ -19,9 +19,9 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
-from ..network import chip_text, shutdown_broker
-from ..user_config import keys
-from ..user_config.settings import settings
+from ..services.network import chip_text, shutdown_broker
+from ..storage.user_config import keys
+from ..storage.user_config.settings import settings
 from .menus import build_menu_bar
 from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
 from .pages import build_pages
@@ -192,6 +192,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Save preferences and stop our broker on the way out."""
+        for page in self.pages_list:
+            service = getattr(page, "service", None)
+            if service is not None and hasattr(service, "close"):
+                service.close()
         # A broker Studio started belongs to this session; leaving it running
         # would orphan a process holding a port nothing will ever reclaim.
         shutdown_broker()

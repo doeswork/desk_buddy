@@ -1,6 +1,6 @@
 """Broker account tests.
 
-    python -m studio.network.account_tests
+    python -m studio.services.network.account_tests
 
 Runs a real broker on an unused port and creates real accounts, because the
 thing worth proving is that a generated credential actually connects — and that

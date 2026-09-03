@@ -1,0 +1,23 @@
+[mqtt]
+host = "127.0.0.1"
+port = 18830
+topic_root = "desk_buddy"
+tls = false
+username_env = "DESK_BUDDY_ZERO_SHOT_ENSEMBLE_MQTT_USERNAME"
+password_env = "DESK_BUDDY_ZERO_SHOT_ENSEMBLE_MQTT_PASSWORD"
+
+[worker]
+worker_id = "zero-shot-owlv2-ensemble-1"
+worker_kind = "zero_shot"
+client_id = "desk-buddy-zero-shot-owlv2-ensemble-1"
+device = "auto"
+max_frame_bytes = 8388608
+
+[models.owlv2-base-ensemble]
+source = "google/owlv2-base-patch16-ensemble"
+revision = "cfd3195ba4ea9592eec887ded089f4c08eff231d"
+local_files_only = true
+prompt_style = "auto"
+license = "Apache-2.0"
+size_mb = 620
+devices = ["cpu", "cuda"]

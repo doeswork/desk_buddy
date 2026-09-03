@@ -1,0 +1,27 @@
+[[workers]]
+worker_id = "zero-shot-hf-1"
+command = ["/absolute/path/to/zero-shot-venv/bin/python", "-m", "studio.services.vision.zero_shot.worker_app", "--config", "/absolute/path/to/zero-shot.toml"]
+cwd = "/absolute/path/to/desk_buddy"
+install_command = ["/absolute/path/to/zero-shot-venv/bin/python", "-m", "studio.services.vision.install_model", "--config", "/absolute/path/to/zero-shot.toml", "--model-id", "owlv2-base", "--install", "--accept-license"]
+
+[[workers]]
+worker_id = "zero-shot-owlv2-ensemble-1"
+command = ["/absolute/path/to/zero-shot-ensemble-venv/bin/python", "-m", "studio.services.vision.zero_shot.worker_app", "--config", "/absolute/path/to/zero-shot-ensemble.toml"]
+cwd = "/absolute/path/to/desk_buddy"
+install_command = ["/absolute/path/to/zero-shot-ensemble-venv/bin/python", "-m", "studio.services.vision.install_model", "--config", "/absolute/path/to/zero-shot-ensemble.toml", "--model-id", "owlv2-base-ensemble", "--install", "--accept-license"]
+
+[[workers]]
+worker_id = "depth-hf-1"
+command = ["/absolute/path/to/depth-venv/bin/python", "-m", "studio.services.vision.depth.worker_app", "--config", "/absolute/path/to/depth.toml"]
+cwd = "/absolute/path/to/desk_buddy"
+install_command = ["/absolute/path/to/depth-venv/bin/python", "-m", "studio.services.vision.install_model", "--config", "/absolute/path/to/depth.toml", "--model-id", "depth-anything-v2-small", "--install", "--accept-license"]
+
+[[workers]]
+worker_id = "ik-trainer-1"
+command = ["/absolute/path/to/training-venv/bin/python", "-m", "studio.services.vision.model_builder.training_worker", "--config", "/absolute/path/to/training.toml"]
+cwd = "/absolute/path/to/desk_buddy"
+
+[[workers]]
+worker_id = "ik-inference-1"
+command = ["/absolute/path/to/inference-venv/bin/python", "-m", "studio.services.vision.model_builder.inference_worker", "--config", "/absolute/path/to/inference.toml"]
+cwd = "/absolute/path/to/desk_buddy"

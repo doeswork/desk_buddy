@@ -1,7 +1,7 @@
 """The Accounts card, and the dialog that shows a password exactly once.
 
 View only. Which topics an account reaches, what a valid name is, and how a
-password is made are all decided in `studio.network.accounts`.
+password is made are all decided in `studio.services.network.accounts`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....network import accounts as service
+from ....services.network import accounts as service
 from ...components import Card
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 

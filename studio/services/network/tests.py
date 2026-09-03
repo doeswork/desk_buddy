@@ -1,6 +1,6 @@
 """Mosquitto finder tests.
 
-    python -m studio.network.tests
+    python -m studio.services.network.tests
 
 The interesting cases are the ones this developer machine cannot show: a box
 with no Mosquitto, a split package where only half is present, and a binary

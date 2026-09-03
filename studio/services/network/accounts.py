@@ -26,7 +26,7 @@ import secrets
 import signal
 import string
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import broker_commands as commands
 from .broker_finder import PASSWD_TOOL, find
@@ -55,17 +55,28 @@ class Account:
 
     name: str
     full_access: bool = False
+    vision_worker_id: str = ""
+    managed_identity: str = ""
+
+    @property
+    def managed(self) -> bool:
+        return bool(self.managed_identity)
 
     @property
     def topics(self) -> str:
         """The topic tree this account may use."""
+        if self.vision_worker_id:
+            return f"vision worker {self.vision_worker_id} only"
         return "#" if self.full_access else f"{self.name}/#"
 
     @property
     def description(self) -> str:
+        owner = "Managed by Vision — " if self.managed else ""
+        if self.vision_worker_id:
+            return f"{owner}worker topics only; no firmware access ({self.vision_worker_id})"
         if self.full_access:
-            return "Full access to every topic"
-        return f"Own topics only — {self.name}/#"
+            return f"{owner}full broker access"
+        return f"{owner}own topics only — {self.name}/#"
 
 
 @dataclass(frozen=True)
@@ -105,36 +116,65 @@ def accounts() -> list[Account]:
     if not passwd.exists():
         return []
 
-    full_access = _full_access_names()
+    metadata = _acl_metadata()
     found = []
     for line in passwd.read_text().splitlines():
         name, separator, _ = line.partition(":")
         if separator and name:
-            found.append(Account(name, full_access=name in full_access))
+            item = metadata.get(name, {})
+            found.append(Account(
+                name,
+                full_access=bool(item.get("full_access")),
+                vision_worker_id=str(item.get("vision_worker_id") or ""),
+                managed_identity=str(item.get("managed_identity") or ""),
+            ))
     return sorted(found, key=lambda account: account.name)
 
 
 def _full_access_names() -> set[str]:
     """Accounts whose ACL grants the whole tree rather than their own prefix."""
+    return {name for name, item in _acl_metadata().items() if item.get("full_access")}
+
+
+def _vision_worker_names() -> dict[str, str]:
+    """Read generated worker markers from the ACL without another database."""
+    return {
+        name: str(item["vision_worker_id"])
+        for name, item in _acl_metadata().items()
+        if item.get("vision_worker_id")
+    }
+
+
+def _acl_metadata() -> dict[str, dict[str, object]]:
+    """Read ACL ownership markers and permissions for every account."""
     acl = commands.acl_path()
     if not acl.exists():
-        return set()
-
-    names, current = set(), ""
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    current = ""
     for raw in acl.read_text().splitlines():
         line = raw.strip()
         if line.startswith("user "):
             current = line[5:].strip()
-        elif line.startswith("topic ") and current:
-            # "topic readwrite #" — the whole tree, not a prefix.
-            if line.split()[-1] == "#":
-                names.add(current)
-    return names
+            result.setdefault(current, {})
+        elif current and line.startswith("# vision-worker-id: "):
+            result[current]["vision_worker_id"] = line.split(":", 1)[1].strip()
+        elif current and line.startswith("# managed-identity: "):
+            result[current]["managed_identity"] = line.split(":", 1)[1].strip()
+        elif current and line.startswith("topic ") and line.split()[-1] == "#":
+            result[current]["full_access"] = True
+    return result
 
 
 # ---- Changing it ---------------------------------------------------------
 
-def add(name: str, *, full_access: bool = False) -> tuple[NewAccount | None, str]:
+def add(
+    name: str,
+    *,
+    full_access: bool = False,
+    vision_worker_id: str = "",
+    managed_identity: str = "",
+) -> tuple[NewAccount | None, str]:
     """Create an account. Returns (account, "") or (None, why not).
 
     The password is generated here and returned once. It is hashed into the
@@ -143,6 +183,12 @@ def add(name: str, *, full_access: bool = False) -> tuple[NewAccount | None, str
     problem = validate(name)
     if problem:
         return None, problem
+    if full_access and vision_worker_id:
+        return None, "A vision worker account cannot also have full access."
+    if vision_worker_id and not NAME_PATTERN.match(vision_worker_id):
+        return None, f"Invalid vision worker ID. {NAME_RULE}"
+    if managed_identity and (len(managed_identity) > 196 or any(value in managed_identity for value in "\r\n")):
+        return None, "Managed identity is invalid."
 
     tool = find(PASSWD_TOOL)
     if not tool:
@@ -155,7 +201,12 @@ def add(name: str, *, full_access: bool = False) -> tuple[NewAccount | None, str
     if result is not None:
         return None, result
 
-    account = Account(name, full_access=full_access)
+    account = Account(
+        name,
+        full_access=full_access,
+        vision_worker_id=vision_worker_id,
+        managed_identity=managed_identity,
+    )
     _write_acl([*accounts_without(name), account])
     reload_broker()
     return NewAccount(account, password), ""
@@ -206,6 +257,56 @@ def accounts_without(name: str) -> list[Account]:
     return [account for account in accounts() if account.name != name]
 
 
+def mark_managed(name: str, identity: str) -> str:
+    """Attach a managed-owner marker without changing credentials or ACL scope."""
+    entries = accounts()
+    account = next((item for item in entries if item.name == name), None)
+    if account is None:
+        return f"No account called {name!r}."
+    if account.managed_identity == identity:
+        return ""
+    if account.managed_identity and account.managed_identity != identity:
+        return f"Account {name!r} belongs to {account.managed_identity}."
+    _write_acl([
+        replace(item, managed_identity=identity) if item.name == name else item
+        for item in entries
+    ])
+    reload_broker()
+    return ""
+
+
+def repair_access(
+    name: str,
+    *,
+    full_access: bool = False,
+    vision_worker_id: str = "",
+    managed_identity: str = "",
+) -> str:
+    """Replace only an existing account's generated ACL metadata.
+
+    The password hash is deliberately untouched.  Callers must establish
+    ownership before using this: changing an arbitrary account's reach would
+    otherwise be an unexpected privilege change.
+    """
+    entries = accounts()
+    account = next((item for item in entries if item.name == name), None)
+    if account is None:
+        return f"No account called {name!r}."
+    if full_access and vision_worker_id:
+        return "A vision worker account cannot also have full access."
+    if vision_worker_id and not NAME_PATTERN.match(vision_worker_id):
+        return f"Invalid vision worker ID. {NAME_RULE}"
+    replacement = Account(
+        name,
+        full_access=full_access,
+        vision_worker_id=vision_worker_id,
+        managed_identity=managed_identity,
+    )
+    _write_acl([replacement if item.name == name else item for item in entries])
+    reload_broker()
+    return ""
+
+
 # ---- The ACL file --------------------------------------------------------
 
 ACL_HEADER = """\
@@ -221,7 +322,18 @@ def _write_acl(entries: list[Account]) -> None:
     lines = [ACL_HEADER]
     for account in sorted(entries, key=lambda item: item.name):
         lines.append(f"user {account.name}")
-        lines.append(f"topic readwrite {account.topics}")
+        if account.managed_identity:
+            lines.append(f"# managed-identity: {account.managed_identity}")
+        if account.vision_worker_id:
+            base = f"desk_buddy/vision/worker/{account.vision_worker_id}"
+            lines.append(f"# vision-worker-id: {account.vision_worker_id}")
+            lines.append(f"topic read {base}/request")
+            lines.append(f"topic read {base}/artifact/in")
+            lines.append(f"topic write {base}/event")
+            lines.append(f"topic write {base}/artifact/out")
+            lines.append(f"topic write {base}/status")
+        else:
+            lines.append(f"topic readwrite {account.topics}")
         lines.append("")
 
     path = commands.acl_path()
