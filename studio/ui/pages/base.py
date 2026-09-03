@@ -4,15 +4,19 @@ A Page is one screen inside a workspace. It owns its own vertical slice and
 builds it top-down: the page invokes its own contents, and those contents
 invoke theirs. Nothing about a page is assembled behind its back.
 
-Two things a page builds:
+Three things a page builds:
 
-    build_header()    title + subtitle  (rarely overridden)
-    build_page()      the main body
+    build_header()          title + subtitle, rarely overridden
+    build_header_actions()  the header's right-hand slot, optional
+    build_page()             the main body
 
 Neither the side panel nor BAR 2 is one of them — both belong to the workspace
 (see workspaces/base.py), so they keep their shape as the user moves between
-pages. A page that needs a list, or a button that acts on the one form it is
-showing, puts it in its own body where it belongs.
+pages. A page-level action that is not that — one button naming the page's
+one verb, like Accounts' Add Account — belongs in `build_header_actions`
+instead: it sits at the header's right edge, level with the subtitle, rather
+than floating as its own block above the body. A page that needs more than
+that, or a list, still puts it in its own body.
 
 `label` and `key` stay as attributes because the side panel needs them before
 the page is built — that is the page's identity, not its content.
@@ -20,7 +24,9 @@ the page is built — that is the page's identity, not its content.
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QVBoxLayout,
@@ -62,24 +68,48 @@ class Page:
         """The body under the header. Override in every page."""
         raise NotImplementedError
 
+    def build_header_actions(self) -> QWidget | None:
+        """The header's right-hand slot. None for a page with nothing there.
+
+        For the one button that names what this whole page is for — Add
+        Account, say. Anything that needs more room than that, or that acts
+        on a specific row rather than the page as a whole, belongs in the
+        body instead.
+        """
+        return None
+
     def build_header(self) -> QWidget:
-        """Title + subtitle. Rarely overridden."""
-        holder = QWidget()
-        layout = QVBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        """Title + subtitle on the left, header actions on the right.
+
+        Rarely overridden — override build_header_actions() instead, which
+        keeps the alignment (actions level with the subtitle column, not the
+        title alone) in one place for every page.
+        """
+        text = QWidget()
+        text_layout = QVBoxLayout(text)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
 
         title = QLabel(self.title)
         title.setObjectName("Title")
-        layout.addWidget(title)
+        text_layout.addWidget(title)
 
         if self.subtitle:
             subtitle = QLabel(self.subtitle)
             subtitle.setObjectName("Subtitle")
             subtitle.setWordWrap(True)
-            layout.addSpacing(HEADER_SPACING)
-            layout.addWidget(subtitle)
+            text_layout.addSpacing(HEADER_SPACING)
+            text_layout.addWidget(subtitle)
 
+        actions = self.build_header_actions()
+        if actions is None:
+            return text
+
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(text, 1)
+        layout.addWidget(actions, 0, Qt.AlignBottom)
         return holder
 
     # ---- assembly --------------------------------------------------------
@@ -105,11 +135,15 @@ class Page:
         return scroll
 
     def rebuild(self) -> None:
-        """Rebuild the body in place, after this page's state changed.
+        """Rebuild the header and body in place, after this page's state
+        changed.
 
-        The header and the scroll area stay; only the section stack is
-        replaced, so the page does not flicker or lose its scroll position.
-        A page that never changes never calls this.
+        The scroll area itself stays, so the page does not flicker or lose
+        its scroll position. Both the header and the body are replaced,
+        because build_header_actions() depends on the same state build_page()
+        does — Accounts' Add Account button has to come and go with whether
+        there is a password on screen, same as the table beneath it. A page
+        that never changes never calls this.
         """
         if self._widget is None:
             return  # Never built; the next widget() call is already current.
@@ -117,16 +151,18 @@ class Page:
         inner = self._widget.widget()
         layout = inner.layout()
 
-        # The body sits between the header and the trailing stretch.
-        item = layout.takeAt(1)
-        if item is not None and item.widget() is not None:
-            old = item.widget()
-            # Unparent before deleting. takeAt() only drops it from the
-            # layout: it stays a child of `inner` until the deferred delete
-            # runs, and goes on painting at its old geometry underneath the
-            # replacement in the meantime.
-            old.setParent(None)
-            old.deleteLater()
+        # Header and body sit before the trailing stretch, in that order.
+        for index in (0, 1):
+            item = layout.takeAt(0)
+            if item is not None and item.widget() is not None:
+                old = item.widget()
+                # Unparent before deleting. takeAt() only drops it from the
+                # layout: it stays a child of `inner` until the deferred
+                # delete runs, and goes on painting at its old geometry
+                # underneath the replacement in the meantime.
+                old.setParent(None)
+                old.deleteLater()
+        layout.insertWidget(0, self.build_header())
         layout.insertWidget(1, self.build_page())
 
         if self.on_rebuilt is not None:

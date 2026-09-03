@@ -2,6 +2,7 @@
 
     broker.py       is Mosquitto installed, and running?
     accounts.py     who may connect, and which topics they may use
+    topics.py       fixed message contracts used by Studio
     add_account.py  the form behind Accounts' Add Account button
 
 Coming with the later steps in mosquitto_plan: robot.py (heartbeat),

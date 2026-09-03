@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....services.network import accounts as service
+from ....models.mqtt_users import NAME_RULE, users
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -82,15 +82,19 @@ class AddAccountPage(Page):
 
         # Asked before doing: being told the rule while still on the form
         # beats being told after the attempt.
-        problem = service.validate(name)
+        problem = users().validate(name)
         if problem:
             self._fail(problem)
             return
 
-        created, problem = service.add(name, full_access=self._full_access)
+        created, problem = users().add(name, full_access=self._full_access)
         if problem:
             self._fail(problem)
             return
+
+        # Saved first, then pushed at the broker: the record is the thing that
+        # must survive, and a broker that is down must not lose the account.
+        self.workspace.apply_to_broker()
 
         # The password exists only in what add() just returned, so handing it
         # straight to the page that shows it is the only way it survives.
@@ -98,7 +102,7 @@ class AddAccountPage(Page):
         # workspace builds every page up front), so rebuild() takes effect
         # immediately either way, but state-then-navigate is the clearer order.
         accounts = self.workspace.find("accounts")
-        accounts.created(created.account.name, created.password)
+        accounts.created(created.name, created.password)
         self.workspace.go_to("accounts")
 
     def cancel(self) -> None:
@@ -134,7 +138,7 @@ class AccountForm(QWidget):
         self._name.textChanged.connect(on_name_changed)
         layout.addWidget(self._name)
 
-        rule = QLabel(problem or service.NAME_RULE)
+        rule = QLabel(problem or NAME_RULE)
         rule.setObjectName("FieldError" if problem else "CardBody")
         rule.setWordWrap(True)
         layout.addWidget(rule)

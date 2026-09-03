@@ -103,19 +103,30 @@ def acl_path() -> Path:
     return broker_dir() / "acl"
 
 
-def write_config(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> Path:
-    """Generate mosquitto.conf and the empty files it references.
+def ensure_account_files() -> None:
+    """Create the passwd and acl files if they are not there yet.
 
-    An empty password file is valid and correct here: with `allow_anonymous
-    false` the broker starts and refuses everyone until step 3 adds accounts.
-    That is the right default — an open broker would be worse.
+    Separate from write_config() because the account files and the listener
+    config have different owners: accounts change whenever the user edits one,
+    the listener only when the broker is started. Rewriting the config to
+    touch the account files would silently reset the port a running broker was
+    started on.
+
+    An empty password file is valid and correct: with `allow_anonymous false`
+    the broker starts and refuses everyone until an account exists. That is
+    the right default — an open broker would be worse.
     """
-    directory = broker_dir()
-
+    broker_dir()
     for path in (passwd_path(), acl_path()):
         if not path.exists():
             path.touch()
         path.chmod(0o600)
+
+
+def write_config(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> Path:
+    """Generate mosquitto.conf and the empty files it references."""
+    directory = broker_dir()
+    ensure_account_files()
 
     config = config_path()
     config.write_text(

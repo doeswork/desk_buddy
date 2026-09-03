@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....services.network import accounts as service
+from ....models.mqtt_users import STUDIO_DESCRIPTION, users
 from ....services.network import broker_commands as commands
 from ...components import Card, Column
 from ...pages.base import Page
@@ -58,100 +58,107 @@ class AccountsPage(Page):
 
     # ---- body ------------------------------------------------------------
     def build_page(self) -> QWidget:
-        if not self.workspace.running():
-            return Column(Card(
-                "The broker is not running",
-                "Accounts live in the broker's password file. Start the broker "
-                "on the Broker page to add one.",
-            ))
+        # Accounts are Studio's own records, so they are listed whether or not
+        # the broker is up. What a stopped broker changes is that nothing can
+        # connect with them yet, which the card below says.
+        entries = self.workspace.accounts()
+        port = self.workspace.broker().port or commands.DEFAULT_PORT
+        sections = []
 
         if self._credentials is not None:
             name, password = self._credentials
-            return Column(CredentialsCard(
+            sections.append(CredentialsCard(
                 name,
                 password,
                 commands.DEFAULT_HOST,
-                self.workspace.broker().port or commands.DEFAULT_PORT,
+                port,
                 on_done=self._dismiss,
             ))
 
-        # Reading the list is what creates Studio's account on a fresh broker,
-        # so it happens before anything below asks whether there is a password
-        # to show.
-        entries = self.workspace.accounts()
-        sections = []
-
-        if self.workspace.studio_problem:
+        if self.workspace.account_problem:
             sections.append(Card(
-                "Studio has no account of its own",
-                self.workspace.studio_problem,
-            ))
-        elif self.workspace.studio_password:
-            password = self.workspace.studio_password
-            self.workspace.studio_password = ""     # shown once, like any other
-            sections.append(CredentialsCard(
-                service.STUDIO_NAME,
-                password,
-                commands.DEFAULT_HOST,
-                self.workspace.broker().port or commands.DEFAULT_PORT,
-                intro="Studio created its own account so it can reach the "
-                      "broker. Copy the password if you want it — like every "
-                      "account, it cannot be shown again.",
+                "The broker did not take these accounts",
+                self.workspace.account_problem,
             ))
 
-        port = self.workspace.broker().port or commands.DEFAULT_PORT
-        sections.append(self._toolbar())
-        sections.append(Card(
-            "Connect to this broker",
-            f"{commands.DEFAULT_HOST}:{port}, with the username and "
-            "password below.",
-        ))
+        if self.workspace.running():
+            sections.append(Card(
+                "Connect to this broker",
+                f"{commands.DEFAULT_HOST}:{port}, with a username and "
+                "password below.",
+            ))
+        else:
+            sections.append(Card(
+                "The broker is not running",
+                "These accounts are saved, but nothing can connect with them "
+                "until the broker is started on the Broker page.",
+            ))
+
         sections.append(AccountTable(
             entries,
+            on_edit=self.edit_account,
             on_reset=self.reset_password,
             on_remove=self.remove_account,
+            on_show=self.show_credentials,
         ))
         return Column(*sections)
 
-    def _toolbar(self) -> QWidget:
-        """Add Account, at the top right of the page's own content.
+    def build_header_actions(self) -> QWidget | None:
+        """Add Account, level with the subtitle at the header's right edge.
 
         Not BAR 2: this button belongs to the accounts list, and putting it
         up in the workspace's bar would make Add Account exist even on pages
-        that have no account list to add to.
+        that have no account list to add to. Hidden while there is nothing
+        to add to yet, or a password already claiming the page's attention.
         """
-        holder = QWidget()
-        layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addStretch(1)
+        if not self.workspace.running() or self._credentials is not None:
+            return None
 
         add = QPushButton("Add Account")
         add.setObjectName("ContextPrimary")
         add.setCursor(Qt.PointingHandCursor)
         add.clicked.connect(self.workspace.add_account)
-        layout.addWidget(add)
-        return holder
+        return add
 
     # ---- actions ---------------------------------------------------------
     def created(self, name: str, password: str) -> None:
         """Called by the Add Account page once the account exists."""
         self._show(name, password)
 
+    def edit_account(self, name: str) -> None:
+        """Hand over to the Edit Account page, for one account's topics."""
+        edit = self.workspace.find("edit_account")
+        edit.open_for(name)
+        self.workspace.go_to("edit_account")
+
+    def show_credentials(self, name: str) -> None:
+        """Show one account's details, password included.
+
+        Possible at all because Studio keeps its own record of the password —
+        Mosquitto's file holds only a hash. Before that record existed this
+        could be offered exactly once, at creation, and never again.
+        """
+        user = users().find(name)
+        if user is None:
+            return
+        self._show(user.name, user.password)
+
     def reset_password(self, name: str) -> None:
-        password, problem = service.reset_password(name)
+        password, problem = users().reset_password(name)
         if problem:
             QMessageBox.warning(
                 self.widget(), "Could not reset the password", problem
             )
             return
 
+        self.workspace.apply_to_broker()
         self._show(name, password)
 
     def remove_account(self, name: str) -> None:
         parent = self.widget()
 
-        # Deleting a credential cannot be undone — the hash is gone and every
-        # device using it stops connecting — so it is worth one question.
+        # Every device using this credential stops connecting, and its topic
+        # list goes with it, so it is worth one question.
         confirm = QMessageBox.question(
             parent,
             f"Remove {name}?",
@@ -161,11 +168,12 @@ class AccountsPage(Page):
         if confirm != QMessageBox.Yes:
             return
 
-        problem = service.remove(name)
+        problem = users().remove(name)
         if problem:
             QMessageBox.warning(parent, "Could not remove the account", problem)
             return
 
+        self.workspace.apply_to_broker()
         self.rebuild()
 
     def _show(self, name: str, password: str) -> None:
@@ -187,12 +195,21 @@ class AccountTable(QTableWidget):
 
     # Host and port are the same for every row — they belong above the table
     # once, not repeated on every line — so a row is just the account.
-    COLUMNS = ("Username", "Access", "Topics", "")
-    # Index of the actions column, named: clearer at the call sites below than
-    # a bare integer, and the one place that has to change if a column is added.
-    ACTIONS = 3
+    #
+    # Access is left out for a different reason: it said "Full access" or
+    # "Own topics", which the topic list beside it already showed ("#" versus
+    # anything else). Two columns saying one thing is not worth the width the
+    # topics themselves need to stay readable.
+    COLUMNS = ("Username", "Topics", "")
+    # Named indexes: clearer at the call sites below than bare integers, and
+    # the one place that has to change if a column is added.
+    TOPICS = 1      # takes whatever width the fixed columns leave
+    ACTIONS = 2
 
-    def __init__(self, entries: list, *, on_reset, on_remove) -> None:
+
+
+    def __init__(self, entries: list, *, on_edit, on_reset, on_remove,
+                 on_show) -> None:
         super().__init__(len(entries), len(self.COLUMNS))
         self.setObjectName("AccountTable")
         self.setHorizontalHeaderLabels(self.COLUMNS)
@@ -207,13 +224,18 @@ class AccountTable(QTableWidget):
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         for row, account in enumerate(entries):
-            values = (account.name, account.access, account.topics)
+            values = (account.name, account.topics_display)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if account.is_studio:
                     # Studio's own row reads as chrome rather than as one of
                     # the user's: it is there, but it is not theirs to manage.
-                    item.setToolTip(service.STUDIO_DESCRIPTION)
+                    item.setToolTip(STUDIO_DESCRIPTION)
+                elif column in (0, 2):
+                    # Username and Topics are the two columns capped below
+                    # their content's natural width, so a long value can be
+                    # elided — the tooltip is where the rest of it still is.
+                    item.setToolTip(value)
                 self.setItem(row, column, item)
 
             if account.is_studio:
@@ -223,29 +245,34 @@ class AccountTable(QTableWidget):
             else:
                 self.setCellWidget(
                     row, self.ACTIONS,
-                    self._row_actions(account.name, on_reset, on_remove),
+                    self._row_actions(
+                        account.name, on_edit, on_reset, on_remove, on_show
+                    ),
                 )
 
-        # Topics is the one genuinely variable-length value — full_access
-        # accounts show "#", others "name/#" — so it alone takes the slack.
-        # Username and Access are fixed to their header's width; the actions
-        # column is set from the widest cell widget it actually holds.
+        # Topics is the one genuinely open-ended value — an account can carry
+        # any number of filters, joined with commas — so it alone takes the
+        # slack. Username and Access get a fixed width sized for what they
+        # actually hold (a name, "Own topics"/"Full access"), not for their
+        # header text: ResizeToContents measures the header label too, which
+        # left Username wider than any name in it needs and Topics squeezed
+        # for room that was never really in use.
         #
-        # ResizeToContents is deliberately not used for the actions column:
-        # it sizes from QHeaderView's own content-size query, which — for a
-        # cell widget — comes back narrower than the widget's own layout
-        # reports, and Reset/Remove would render clipped inside a column that
-        # measured itself too small for them.
+        # ResizeToContents is not used for the actions column either: it
+        # sizes from QHeaderView's own content-size query, which — for a cell
+        # widget — comes back narrower than the widget's own layout reports,
+        # and Reset/Remove would render clipped inside a column that measured
+        # itself too small for them.
         header = self.horizontalHeader()
         header.setHighlightSections(False)
         header.setStretchLastSection(False)
-        for column in range(len(self.COLUMNS)):
-            if column == 2:
-                header.setSectionResizeMode(column, QHeaderView.Stretch)
-            elif column == self.ACTIONS:
-                header.setSectionResizeMode(column, QHeaderView.Fixed)
-            else:
-                header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        header.setSectionResizeMode(self.TOPICS, QHeaderView.Stretch)
+        # Username is sized to its header label. The label is the floor
+        # because it can never elide — Qt does not shrink section text — so
+        # anything under it would clip the column caption itself, which is
+        # worse than clipping one long name.
+        self.setColumnWidth(0, self._header_width("Username"))
         self.setColumnWidth(self.ACTIONS, self._actions_width())
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -258,6 +285,17 @@ class AccountTable(QTableWidget):
                 widest = max(widest, cell.sizeHint().width())
         return widest
 
+    def _header_width(self, header_text: str) -> int:
+        """A column's width, from its own header label.
+
+        `2 * ROW_PADDING` accounts for the QSS padding both QHeaderView and
+        QTableWidget::item carry on each side. A value longer than its header
+        elides, with the full text left in the item's tooltip — cheaper than
+        reserving column width every row pays for on the rare long one.
+        """
+        text_width = self.horizontalHeader().fontMetrics().horizontalAdvance(header_text)
+        return text_width + 2 * ROW_PADDING
+
     @staticmethod
     def _pad(widget: QWidget) -> QWidget:
         holder = QWidget()
@@ -266,26 +304,38 @@ class AccountTable(QTableWidget):
         layout.addWidget(widget)
         return holder
 
-    def _row_actions(self, name: str, on_reset, on_remove) -> QWidget:
+    def _row_actions(self, name: str, on_edit, on_reset, on_remove,
+                     on_show) -> QWidget:
         holder = QWidget()
         layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, ROW_PADDING, 0)
+        # Several actions share this row, so the padding between them is
+        # tighter than a single button's — an inner gap only needs to separate
+        # two click targets, not frame one on its own.
+        layout.setContentsMargins(ROW_PADDING // 2, 0, ROW_PADDING, 0)
         layout.setSpacing(0)
 
         # Compact row actions, not BAR-2-style buttons: the row already says
         # whose account this is, so the control only needs to name the verb.
+        show = self._button("Show", "RowAction", f"Show {name}'s password")
+        show.mousePressEvent = lambda event: on_show(name)
+        layout.addWidget(show)
+
+        edit = self._button("Edit", "RowAction", f"Edit {name}'s topics")
+        edit.mousePressEvent = lambda event: on_edit(name)
+        layout.addWidget(edit)
+
         reset = self._button("Reset", "RowAction", f"Reset {name}'s password")
         reset.mousePressEvent = lambda event: on_reset(name)
         layout.addWidget(reset)
 
-        remove = self._button("Remove", "RowActionBad", f"Remove {name}")
+        remove = self._button("Remove", "RowActionBad", f"Remove {name}", last=True)
         remove.mousePressEvent = lambda event: on_remove(name)
         layout.addWidget(remove)
 
         return holder
 
     @staticmethod
-    def _button(text: str, object_name: str, tooltip: str) -> QLabel:
+    def _button(text: str, object_name: str, tooltip: str, *, last: bool = False) -> QLabel:
         # A clickable label, not a QPushButton or QToolButton: both bake a
         # platform-default minimum-width margin into their sizeHint that no
         # amount of QSS padding overrides, which was most of why two
@@ -295,12 +345,14 @@ class AccountTable(QTableWidget):
         # switches it onto Qt's styled-frame path, which adds its own
         # unpredictable margin on top — worse than what it replaced. So the
         # padding is real spacing in the layout instead, and the label sizes
-        # to exactly its text.
+        # to exactly its text. Only the last of a row of these needs the full
+        # gap on its right; the others sit close enough to read as one group.
+        right = ROW_PADDING if last else ROW_PADDING // 2
         label = QLabel(text)
         label.setObjectName(object_name)
         label.setCursor(Qt.PointingHandCursor)
         label.setToolTip(tooltip)
-        label.setContentsMargins(ROW_PADDING, 3, ROW_PADDING, 3)
+        label.setContentsMargins(ROW_PADDING // 2, 3, right, 3)
         return label
 
     def _fit(self) -> None:
