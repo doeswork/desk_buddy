@@ -2,8 +2,8 @@
 
     menus/             one file per menu, each owns its actions
     components/        reusable widgets, incl. BAR 1 and BAR 2
-    pages/             one file per screen, each owns its whole slice
-    widgets.py         shared card / list builders
+    workspaces/        one top-level area each, owning its pages
+    pages/             the Page base class
     theme/             palettes (light / dark / system) and stylesheet
 """
 
@@ -17,14 +17,15 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QStackedWidget,
+    QWidget,
 )
 
-from ..network import chip_text, shutdown_broker
-from ..user_config import keys
-from ..user_config.settings import settings
+from ..services.network import chip_text, shutdown_broker
+from ..storage import keys
+from ..storage.settings import settings
 from .menus import build_menu_bar
 from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
-from .pages import build_pages
+from .workspaces import build_workspaces
 from .theme import DEFAULT_THEME, available, omarchy, stylesheet
 from .components import ContextBar, NavBar
 
@@ -42,7 +43,7 @@ class MainWindow(QMainWindow):
         self._zoom_index = self._restored_zoom()
         self.setStyleSheet(stylesheet(self.zoom, self._theme))
 
-        self.pages_list = build_pages()
+        self.workspaces = build_workspaces()
 
         self._base_point_size = QApplication.font().pointSizeF()
         if self._base_point_size <= 0:
@@ -53,16 +54,17 @@ class MainWindow(QMainWindow):
         self.view_menu = self.menus["View"]
         self._build_toolbars()
         self._build_side_dock()
-        self._build_pages()
+        self._build_workspaces()
         self._build_status_bar()
         self._watch_system_theme()
         self._watch_broker()
 
-        self.select_page(self._restored_page())
+        self.select_workspace(self._restored_workspace())
+        self.workspace.go_to(self._restored_page())
         self._restore_window()
 
     def _build_toolbars(self) -> None:
-        self.nav_bar = NavBar(self, self.pages_list, self.select_page)
+        self.nav_bar = NavBar(self, self.workspaces, self.select_workspace)
         self.addToolBar(Qt.TopToolBarArea, self.nav_bar)
 
         self.context_bar = ContextBar(self)
@@ -77,22 +79,27 @@ class MainWindow(QMainWindow):
         # Qt's offscreen/Wayland backends warn about mouse grabs when a dock is
         # dragged, and a panel that pops out is not the layout we want.
         self.side_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+
+        # No title bar. Which workspace you are in is already said by the
+        # checked tab in BAR 1, and naming it again above its own page list
+        # is a header that carries no information. An empty widget is how Qt
+        # removes the bar; setTitleBarWidget(None) restores the default.
+        self.side_dock.setTitleBarWidget(QWidget())
         self.addDockWidget(Qt.LeftDockWidgetArea, self.side_dock)
 
-        # Qt resets this action's text whenever the dock title changes, so we
-        # keep a handle and restore the label on every page switch.
         self.panel_toggle = self.side_dock.toggleViewAction()
         self.panel_toggle.setText("Side Panel")
         self.view_menu.addAction(self.panel_toggle)
 
-    def _build_pages(self) -> None:
-        self.pages = QStackedWidget()
-        for page in self.pages_list:
-            # A page that changes its own state asks the chrome to catch up:
-            # its actions and status line may no longer be the ones showing.
-            page.on_rebuilt = self._page_changed
-            self.pages.addWidget(page.widget())
-        self.setCentralWidget(self.pages)
+    def _build_workspaces(self) -> None:
+        self.stack = QStackedWidget()
+        for workspace in self.workspaces:
+            # A workspace that changes its own state — or whose page did —
+            # asks the chrome to catch up: its actions, its side panel and its
+            # status line may no longer be the ones showing.
+            workspace.on_rebuilt = self._workspace_changed
+            self.stack.addWidget(workspace.widget())
+        self.setCentralWidget(self.stack)
 
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
@@ -149,8 +156,8 @@ class MainWindow(QMainWindow):
         # new scale or the app font alone changes nothing.
         self.setStyleSheet(stylesheet(scale, self._theme))
 
-        # Re-width the current page's side panel.
-        side = self.pages_list[self.pages.currentIndex()].side()
+        # Re-width the current workspace's side panel.
+        side = self.workspace.side()
         if side is not None:
             side.setFixedWidth(self._side_width())
         self.statusBar().showMessage(f"Zoom {int(scale * 100)}%", 1500)
@@ -170,9 +177,19 @@ class MainWindow(QMainWindow):
         index = self._settings.get(keys.ZOOM_INDEX)
         return index if 0 <= index < len(ZOOM_LEVELS) else DEFAULT_ZOOM_INDEX
 
-    def _restored_page(self) -> int:
-        index = self._settings.get(keys.LAST_PAGE)
-        return index if 0 <= index < len(self.pages_list) else 0
+    def _restored_workspace(self) -> int:
+        index = self._settings.get(keys.LAST_WORKSPACE)
+        return index if 0 <= index < len(self.workspaces) else 0
+
+    def _restored_page(self) -> str:
+        """The page key within the restored workspace.
+
+        A key rather than an index: pages get added and reordered between
+        releases, and a stale index would silently restore a different screen
+        than the one the user left. A key that no longer exists just falls
+        back to the workspace's first page.
+        """
+        return self._settings.get(keys.LAST_PAGE)
 
     def _restore_window(self) -> None:
         """Put the window back where it was.
@@ -198,7 +215,8 @@ class MainWindow(QMainWindow):
 
         self._settings.set(keys.THEME, self._theme)
         self._settings.set(keys.ZOOM_INDEX, self._zoom_index)
-        self._settings.set(keys.LAST_PAGE, self.pages.currentIndex())
+        self._settings.set(keys.LAST_WORKSPACE, self.stack.currentIndex())
+        self._settings.set(keys.LAST_PAGE, self.workspace.page_key)
         self._settings.set(keys.GEOMETRY, self.saveGeometry())
         self._settings.set(keys.WINDOW_STATE, self.saveState())
         self._settings.sync()
@@ -270,32 +288,39 @@ class MainWindow(QMainWindow):
         """Side panel grows with zoom so its rows never clip."""
         return round(218 * self.zoom)
 
-    def _page_changed(self) -> None:
-        """The current page rebuilt itself; re-read everything it provides.
+    @property
+    def workspace(self):
+        """The workspace showing right now."""
+        return self.workspaces[self.stack.currentIndex()]
 
-        Same work as arriving on the page: its actions, its side panel and its
+    def _workspace_changed(self) -> None:
+        """The current workspace rebuilt itself; re-read what it provides.
+
+        Same work as arriving on it: its actions, its side panel and its
         status may all have changed. Sharing one path is what stops the dock
-        from keeping a panel the page has already replaced.
+        from keeping a panel the workspace has already replaced.
         """
-        self._show_page(self.pages_list[self.pages.currentIndex()])
+        self._show_workspace(self.workspace)
         self.refresh_broker()
 
-    def select_page(self, index: int) -> None:
+    def select_workspace(self, index: int) -> None:
         """The one thing that happens on a BAR 1 click."""
         self.nav_bar.check(index)
-        self.pages.setCurrentIndex(index)
-        self._show_page(self.pages_list[index])
+        self.stack.setCurrentIndex(index)
+        self._show_workspace(self.workspaces[index])
 
-    def _show_page(self, page) -> None:
-        """Put a page's chrome on screen: BAR 2, the side dock, the status."""
-        self.context_bar.show_page(page)
+    def _show_workspace(self, workspace) -> None:
+        """Put a workspace's chrome on screen: BAR 2, the dock, the status.
 
-        # The page builds its own side panel; the dock just hosts it.
-        side = page.side()
+        BAR 2 and the status come from the page showing inside it; the side
+        panel is the workspace's own list of pages.
+        """
+        self.context_bar.show_page(workspace)
+
+        # The workspace builds its own side panel; the dock just hosts it.
+        side = workspace.side()
         self.side_dock.setVisible(side is not None)
         if side is not None:
             side.setFixedWidth(self._side_width())
-            self.side_dock.setWindowTitle(getattr(side, "title", "") or "Browser")
             self.side_dock.setWidget(side)
-        self.panel_toggle.setText("Side Panel")
-        self.status_label.setText(page.status)
+        self.status_label.setText(workspace.status)

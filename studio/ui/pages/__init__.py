@@ -1,31 +1,11 @@
-"""The six pages, in BAR 1 order.
+"""The Page base class.
 
-To add a page: write the file, import it, add it to PAGE_CLASSES. Nothing else
-in the app needs to change.
+Pages themselves live with the workspace that owns them, in ui/workspaces/ —
+a page has no meaning apart from its workspace, so it is not registered here.
 """
 
 from __future__ import annotations
 
 from .base import Page
-from .calibration import CalibrationPage
-from .logs import LogsPage
-from .manual import ManualPage
-from .network import NetworkPage
-from .vision import VisionPage
-from .workflows import WorkflowsPage
 
-PAGE_CLASSES = [
-    NetworkPage,
-    VisionPage,
-    WorkflowsPage,
-    CalibrationPage,
-    LogsPage,
-    ManualPage,
-]
-
-
-def build_pages() -> list[Page]:
-    return [cls() for cls in PAGE_CLASSES]
-
-
-__all__ = ["Page", "PAGE_CLASSES", "build_pages"]
+__all__ = ["Page"]

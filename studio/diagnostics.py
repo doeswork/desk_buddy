@@ -34,9 +34,9 @@ def _environment() -> list[str]:
 
 
 def _broker() -> list[str]:
-    from .network import broker_commands as commands
-    from .network import detect, report
-    from .network.broker_finder import DEFAULT_PORT, SYSTEM_PORT, port_open
+    from .services.network import broker_commands as commands
+    from .services.network import detect, report
+    from .services.network.broker_finder import DEFAULT_PORT, SYSTEM_PORT, port_open
 
     status = detect()
     live = report()
@@ -67,7 +67,7 @@ def _broker() -> list[str]:
 
 
 def _paths() -> list[str]:
-    from .user_config.settings import settings
+    from .storage.settings import settings
 
     lines = []
     try:
@@ -80,7 +80,7 @@ def _paths() -> list[str]:
         lines.append(f"preferences  unavailable: {error}")
 
     try:
-        from .network.broker_commands import broker_dir
+        from .services.network.broker_commands import broker_dir
 
         directory = broker_dir()
         lines.append(f"broker dir   {directory}")
@@ -96,11 +96,12 @@ def _paths() -> list[str]:
 
 def _window(window) -> list[str]:
     """What the UI is showing — the half a log file never captures."""
-    page = window.pages_list[window.pages.currentIndex()]
+    workspace = window.workspace
     buttons = window.context_bar.buttons
 
     lines = [
-        f"page         {page.key}",
+        f"workspace    {workspace.key}",
+        f"page         {workspace.page.key}",
         f"theme        {window.theme}   zoom={window.zoom}",
         f"BAR 1 chips  {window.nav_bar.broker_label.text()!r}"
         f" / {window.nav_bar.connection_label.text()!r}",
@@ -109,7 +110,7 @@ def _window(window) -> list[str]:
     for label, button in buttons.items():
         lines.append(f"  {label:16} enabled={button.isEnabled()}")
 
-    result = getattr(page, "last_result", None)
+    result = getattr(workspace, "last_result", None)
     if result is not None:
         lines += [
             "",

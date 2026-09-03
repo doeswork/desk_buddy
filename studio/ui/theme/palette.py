@@ -1,4 +1,4 @@
-"""Palette definition and the two skins the app ships with.
+"""Palette definition and the skins the app ships with.
 
 Every color the QSS needs is a field on Palette. Adding a skin means adding
 another Palette here and listing it in BUILTINS — no QSS is duplicated.
@@ -74,6 +74,8 @@ DARK = Palette(
     on_bad="#1c1c1a",
 )
 
+# Light and Dark are defined in this module; the bundled Omarchy palettes are
+# created lazily in available() so package initialization stays cycle-free.
 BUILTINS = (LIGHT, DARK)
 DEFAULT_THEME = LIGHT.name
 
@@ -81,18 +83,19 @@ DEFAULT_THEME = LIGHT.name
 def available() -> dict[str, Palette]:
     """The palettes offered on this machine.
 
-    The two built-ins are always there. The Omarchy skin only appears on an
-    Omarchy desktop, and is re-read on every call so it reflects whatever theme
-    is active right now rather than whatever was active at import.
+    Light, Dark, and all bundled Omarchy palettes are always there. The live
+    System skin only appears on an Omarchy desktop, and is re-read on every
+    call so it reflects whatever theme is active right now.
     """
     # Imported here, not at module scope: omarchy.py imports Palette from this
     # module, so a top-level import would be a cycle.
     from . import omarchy
 
-    palettes = {p.name: p for p in BUILTINS}
+    from .bundled_omarchy import palettes as bundled_omarchy_palettes
+
+    palettes = {p.name: p for p in (*BUILTINS, *bundled_omarchy_palettes())}
     if omarchy.is_omarchy():
         live = omarchy.load()
         if live is not None:
             palettes[live.name] = live
     return palettes
-

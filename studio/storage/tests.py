@@ -1,6 +1,6 @@
 """User-config tests. Mostly about surviving a bad file.
 
-    QT_QPA_PLATFORM=offscreen python -m studio.user_config.tests
+    QT_QPA_PLATFORM=offscreen python -m studio.storage.tests
 
 Preferences are read at startup before any window exists, so a settings file
 that cannot be parsed must degrade to defaults rather than stop the app from
@@ -33,7 +33,7 @@ def test_defaults_when_absent() -> None:
     s = config_file("")
     assert s.get(keys.THEME) == "light"
     assert s.get(keys.ZOOM_INDEX) == 2
-    assert s.get(keys.LAST_PAGE) == 0
+    assert s.get(keys.LAST_PAGE) == ""
 
 
 def test_round_trip() -> None:
@@ -75,7 +75,7 @@ def test_truncated_file() -> None:
 
 def test_empty_value() -> None:
     s = config_file("[window]\nlast_page=\n")
-    assert s.get(keys.LAST_PAGE) == 0
+    assert s.get(keys.LAST_PAGE) == ""
 
 
 def test_bytes_key_tolerates_junk() -> None:

@@ -1,11 +1,12 @@
-"""BAR 1 — the page switcher.
+"""BAR 1 — the workspace switcher.
 
-One button per page, exclusive, always visible. Never changes.
+One button per workspace, exclusive, always visible. Never changes. Switching
+between the pages *inside* a workspace is the side panel's job.
 
-Its right-hand end carries the two facts that are true no matter which page you
-are on: is the broker up, and is the robot there. They live here rather than on
-the Network page because they stay relevant while you are somewhere else — a
-robot that drops offline matters most when you are driving it from Manual.
+Its right-hand end carries the two facts that are true no matter where you
+are: is the broker up, and is the robot there. They live here rather than in
+the Network workspace because they stay relevant while you are somewhere else
+— a robot that drops offline matters most when you are driving it from Manual.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ from .spacer import spacer
 
 
 class NavBar(QToolBar):
-    def __init__(self, window: QMainWindow, pages, on_select) -> None:
-        super().__init__("Pages", window)
+    def __init__(self, window: QMainWindow, workspaces, on_select) -> None:
+        super().__init__("Workspaces", window)
         self.setObjectName("NavBar")
         self.setMovable(False)
         self.layout().setSpacing(0)
@@ -30,8 +31,8 @@ class NavBar(QToolBar):
         self._group.setExclusive(True)
         self.actions_by_index: list[QAction] = []
 
-        for index, page in enumerate(pages):
-            action = QAction(page.label, window)
+        for index, workspace in enumerate(workspaces):
+            action = QAction(workspace.label, window)
             action.setCheckable(True)
             action.triggered.connect(lambda _checked, i=index: on_select(i))
             self._group.addAction(action)

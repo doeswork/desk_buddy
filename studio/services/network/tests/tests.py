@@ -1,6 +1,6 @@
 """Mosquitto finder tests.
 
-    python -m studio.network.tests
+    python -m studio.services.network.tests.tests
 
 The interesting cases are the ones this developer machine cannot show: a box
 with no Mosquitto, a split package where only half is present, and a binary
@@ -15,8 +15,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-from . import broker_finder as install
-from .broker_finder import BrokerStatus, Tool
+from .. import broker_finder as install
+from ..broker_finder import BrokerStatus, Tool
 
 
 class fake_path:

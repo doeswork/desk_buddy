@@ -1,7 +1,7 @@
 """Palette and stylesheet. Autonomous Lamp's skin over FreeCAD's bones.
 
     metrics.py   layout spacing, for what the QSS cannot reach
-    palette.py   the Palette fields, plus LIGHT and DARK
+    palette.py   the Palette fields and bundled palettes
     omarchy.py   the System skin: whatever theme the Omarchy desktop is wearing
     qss.py       the single QSS template, rendered against a Palette
 """

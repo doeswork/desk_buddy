@@ -28,7 +28,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QStandardPaths
 
-from ..user_config.settings import APP, ORG
+from ...storage.settings import APP, ORG
 from .broker_finder import DEFAULT_PORT, find, port_open
 
 # How long to wait for the port to answer after a start, and for the process to

@@ -1,8 +1,4 @@
-"""The stylesheet template. One QSS, rendered against whichever Palette.
-
-Everything that is not built yet renders in the muted tones so it takes up its
-real space without pretending to work.
-"""
+"""The stylesheet template. One QSS, rendered against whichever Palette."""
 
 from __future__ import annotations
 
@@ -128,22 +124,93 @@ QToolBar::separator {{ background: {p.border}; width: {HAIRLINE}; margin: {px(3)
 QToolBar QWidget#Spacer {{ background: transparent; border: none; }}
 
 /* ---- Docks ---- */
-QDockWidget {{ titlebar-close-icon: none; titlebar-normal-icon: none; }}
-QDockWidget::title {{
-    background: {p.muted_bg};
-    padding: {px(4)} {px(9)};
-    border-bottom: {HAIRLINE} solid {p.border};
-    font-size: {px(11)};
-    font-weight: 600;
-    color: {p.muted};
-}}
+/* No ::title rule: the side dock has no title bar. BAR 1 already names the
+   workspace, so the panel is its page list and nothing else. */
 QDockWidget > QWidget {{ background: {p.panel}; border-right: {HAIRLINE} solid {p.border}; }}
 
 QListWidget, QListWidget#SidePanel {{ background: {p.panel}; border: none; padding: 0; outline: none; }}
-QListWidget::item {{ padding: {ROW_V} {ROW_H}; border-radius: 0; color: {p.text}; }}
-QListWidget::item:hover {{ background: {p.muted_bg}; }}
-QListWidget::item:selected {{ background: {p.border}; color: {p.text}; }}
-QListWidget::item:disabled {{ color: {p.muted}; }}
+
+/* Each state has to be legible on its own, so they differ by more than a few
+   percent of fill: hover tints, pressed goes darker still, and the selected
+   row carries the accent rule — the same mark BAR 1 uses for the active tab,
+   turned on its side. The transparent left border on the resting state is
+   what keeps text from shifting when that rule appears. */
+QListWidget::item {{
+    padding: {ROW_V} {ROW_H};
+    border-radius: 0;
+    border-left: {px(3)} solid transparent;
+    color: {p.text};
+}}
+QListWidget::item:hover {{ background: {p.muted_bg}; border-left-color: {p.border}; }}
+QListWidget::item:pressed {{ background: {p.border}; }}
+QListWidget::item:selected {{
+    background: {p.border};
+    border-left-color: {p.accent};
+    color: {p.text};
+    font-weight: 600;
+}}
+/* Selected *and* hovered is a distinct state: without this the hover rule
+   above would repaint the accent border as a plain one. */
+QListWidget::item:selected:hover {{ background: {p.muted_bg}; border-left-color: {p.accent}; }}
+QListWidget::item:disabled {{ color: {p.muted}; border-left-color: transparent; background: transparent; }}
+
+/* A list that is page content, not the side panel: it sits inside a card's
+   worth of space, so it takes the card's border and its own row rhythm
+   rather than the panel's flush-to-the-edge one. */
+QListWidget#AccountList {{
+    background: {p.panel};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+}}
+QListWidget#AccountList::item {{ padding: {ROW_V} {CARD_PAD}; }}
+
+/* ---- Tables: page content, so they read as a card with rows ---- */
+QTableWidget {{
+    background: {p.panel};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    gridline-color: transparent;
+    alternate-background-color: {p.muted_bg};
+    outline: none;
+}}
+QHeaderView::section {{
+    background: {p.panel};
+    border: none;
+    border-bottom: {HAIRLINE} solid {p.border};
+    padding: {ROW_V} {ROW_H};
+    color: {p.muted};
+    font-size: {px(11)};
+    font-weight: 600;
+    text-align: left;
+}}
+/* Only horizontal padding here: Qt lays a cell out inside the width the
+   header computed, so vertical padding on ::item pushes the text out of its
+   own row. Row height is set on the widget instead. */
+QTableWidget::item {{
+    padding: 0 {ROW_H};
+    border: none;
+    color: {p.text};
+}}
+QTableWidget::item:hover {{ background: {p.muted_bg}; }}
+QTableWidget::item:selected {{ background: {p.border}; color: {p.text}; }}
+
+/* A validation message, next to the field it is about. */
+QLabel#FieldError {{ color: {p.bad}; font-size: {px(11)}; }}
+
+/* Row actions: small text buttons inside a table cell, not BAR 2 controls.
+   Compact on purpose — the row already carries the account's name, so the
+   button only needs to name the verb. */
+/* Spacing is set in layout code (setContentsMargins), not here: QSS padding
+   on a QLabel switches it onto Qt's styled-frame path, which then adds its
+   own unpredictable margin on top of the number given. */
+QLabel#RowAction, QLabel#RowActionBad {{
+    border-radius: {RADIUS};
+    color: {p.text};
+    font-size: {px(11)};
+}}
+QLabel#RowAction:hover {{ background: {p.muted_bg}; }}
+QLabel#RowActionBad {{ color: {p.bad}; }}
+QLabel#RowActionBad:hover {{ background: {p.bad}; color: {p.on_bad}; }}
 
 /* ---- Cards ---- */
 QFrame#Card {{
@@ -151,28 +218,12 @@ QFrame#Card {{
     border: {HAIRLINE} solid {p.border};
     border-radius: {RADIUS};
 }}
-QFrame#CardMuted {{
-    background: {p.muted_bg};
-    border: {HAIRLINE} dashed {p.border};
-    border-radius: {RADIUS};
-}}
-
 /* Labels must not paint their own background over cards. */
 QLabel {{ background: transparent; }}
 QLabel#Title {{ font-size: {px(18)}; font-weight: 600; color: {p.text}; }}
 QLabel#Subtitle {{ font-size: {px(12)}; color: {p.muted}; }}
 QLabel#CardTitle {{ font-size: {px(13)}; font-weight: 600; color: {p.text}; }}
 QLabel#CardBody {{ font-size: {px(12)}; color: {p.muted}; }}
-QLabel#NotBuilt {{
-    font-size: {px(10)};
-    font-weight: 600;
-    color: {p.muted};
-    background: {p.muted_bg};
-    border: {HAIRLINE} dashed {p.border};
-    border-radius: {RADIUS};
-    padding: {px(2)} {px(6)};
-}}
-
 /* ---- Status chips on BAR 1 ----
    The two always-true facts, quiet until they matter. */
 QLabel#StatusChip {{

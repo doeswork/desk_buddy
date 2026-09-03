@@ -4,31 +4,18 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
 
-from ..components import ActionSpec, Card, Column, Separator, SidePanel
-from .base import Page
+from ..components import ActionSpec, Card, Column, Separator
+from ..pages.base import Page
+from .base import Workspace
 
 
-class ManualPage(Page):
-    key = "manual"
-    label = "Manual"
+class DrivePage(Page):
+    key = "drive"
+    label = "Drive"
 
     title = "Manual Controller"
     subtitle = "Direct drive: servos, base, gripper, camera."
     status = "No robot connected"
-
-    def build_actions(self) -> list:
-        return [
-            ActionSpec("Home", primary=True),
-            ActionSpec("Perch"),
-            Separator(),
-            ActionSpec("Open"),
-            ActionSpec("Close"),
-            Separator(),
-            ActionSpec("Photo"),
-        ]
-
-    def build_side(self) -> QWidget:
-        return SidePanel("Joints", ["Base", "Shoulder", "Elbow", "Wrist", "Gripper"])
 
     def build_page(self) -> QWidget:
         return Column(
@@ -41,3 +28,20 @@ class ManualPage(Page):
 
     def build_camera(self) -> QWidget:
         return Card("Camera", "No image.")
+
+
+class ManualWorkspace(Workspace):
+    key = "manual"
+    label = "Manual"
+    page_classes = [DrivePage]
+
+    def build_actions(self) -> list:
+        return [
+            ActionSpec("Home", primary=True),
+            ActionSpec("Perch"),
+            Separator(),
+            ActionSpec("Open"),
+            ActionSpec("Close"),
+            Separator(),
+            ActionSpec("Photo"),
+        ]

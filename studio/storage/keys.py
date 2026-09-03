@@ -32,6 +32,8 @@ ZOOM_INDEX = Key("appearance/zoom_index", int, 2)   # index into ZOOM_LEVELS
 # Qt serialises these itself; we only carry the bytes.
 GEOMETRY = Key("window/geometry", bytes, b"")
 WINDOW_STATE = Key("window/state", bytes, b"")
-LAST_PAGE = Key("window/last_page", int, 0)
+# Where the user was: which workspace, and which of its pages.
+LAST_WORKSPACE = Key("window/last_workspace", int, 0)
+LAST_PAGE = Key("window/last_page", str, "")
 
-ALL = (THEME, ZOOM_INDEX, GEOMETRY, WINDOW_STATE, LAST_PAGE)
+ALL = (THEME, ZOOM_INDEX, GEOMETRY, WINDOW_STATE, LAST_WORKSPACE, LAST_PAGE)

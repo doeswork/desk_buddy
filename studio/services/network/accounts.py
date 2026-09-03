@@ -48,6 +48,14 @@ PASSWORD_LENGTH = 24
 
 COMMAND_TIMEOUT = 10
 
+# Studio's own credential. Studio is a participant on its own bus like anything
+# else — it publishes commands and reads telemetry — so it needs an account,
+# and it needs the whole tree to do it. Created on demand rather than asked
+# for: a broker with no way for Studio to reach it is not a working setup, and
+# making the user create that by hand is asking them to perform a formality.
+STUDIO_NAME = "studio"
+STUDIO_DESCRIPTION = "Studio itself — created automatically"
+
 
 @dataclass(frozen=True)
 class Account:
@@ -62,7 +70,19 @@ class Account:
         return "#" if self.full_access else f"{self.name}/#"
 
     @property
+    def access(self) -> str:
+        """What this account may reach, in two words."""
+        return "Full access" if self.full_access else "Own topics"
+
+    @property
+    def is_studio(self) -> bool:
+        """Studio's own account, which the user may not remove."""
+        return self.name == STUDIO_NAME
+
+    @property
     def description(self) -> str:
+        if self.is_studio:
+            return STUDIO_DESCRIPTION
         if self.full_access:
             return "Full access to every topic"
         return f"Own topics only — {self.name}/#"
@@ -88,6 +108,8 @@ def validate(name: str) -> str:
         return "No leading or trailing spaces."
     if not NAME_PATTERN.match(name):
         return NAME_RULE
+    if name == STUDIO_NAME:
+        return f"{STUDIO_NAME!r} is reserved for Studio's own account."
     if name in [account.name for account in accounts()]:
         return f"An account called {name!r} already exists."
     return ""
@@ -161,6 +183,37 @@ def add(name: str, *, full_access: bool = False) -> tuple[NewAccount | None, str
     return NewAccount(account, password), ""
 
 
+def ensure_studio() -> tuple[NewAccount | None, str]:
+    """Make sure Studio's own account exists. Returns (created, "").
+
+    `created` is None when it was already there, which is the usual case —
+    this runs on every visit to the accounts list, and doing nothing is the
+    answer almost every time. The password is returned only on the call that
+    creates it, since that is the only moment it can be known.
+
+    Not routed through add(): validate() reserves the name precisely so a user
+    cannot take it, and this is the one caller allowed to use it.
+    """
+    if any(account.is_studio for account in accounts()):
+        return None, ""
+
+    tool = find(PASSWD_TOOL)
+    if not tool:
+        return None, f"{PASSWD_TOOL} is not installed, so accounts cannot be created."
+
+    commands.write_config()      # ensures the directory and both files exist
+    password = generate_password()
+
+    result = _run([tool, "-b", str(commands.passwd_path()), STUDIO_NAME, password])
+    if result is not None:
+        return None, result
+
+    account = Account(STUDIO_NAME, full_access=True)
+    _write_acl([*accounts_without(STUDIO_NAME), account])
+    reload_broker()
+    return NewAccount(account, password), ""
+
+
 def reset_password(name: str) -> tuple[str, str]:
     """Generate a new password for an existing account. Returns (password, "").
 
@@ -186,6 +239,10 @@ def reset_password(name: str) -> tuple[str, str]:
 
 def remove(name: str) -> str:
     """Delete an account and its ACL. Empty string on success, else why not."""
+    if name == STUDIO_NAME:
+        # Removing it would cut Studio off from the broker it is managing, and
+        # the next visit to the accounts list would recreate it anyway.
+        return "Studio's own account cannot be removed."
     if name not in [account.name for account in accounts()]:
         return f"No account called {name!r}."
 

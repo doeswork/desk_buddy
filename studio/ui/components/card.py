@@ -1,7 +1,4 @@
-"""A card. The default block for a page body.
-
-Muted variant is the placeholder: real space, obviously inert.
-"""
+"""A card. The default block for a page body."""
 
 from __future__ import annotations
 
@@ -11,10 +8,10 @@ from ..theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 
 
 class Card(QFrame):
-    def __init__(self, title: str, body: str = "", parent: QWidget | None = None,
-                 *, muted: bool = True) -> None:
+    def __init__(self, title: str, body: str = "",
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("CardMuted" if muted else "Card")
+        self.setObjectName("Card")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(

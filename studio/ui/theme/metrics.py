@@ -22,8 +22,11 @@ CARD_MARGIN_V = 9
 CARD_SPACING = 3       # title -> body
 CARD_GAP = 6           # between stacked cards
 
+# Table rows. Set in layout code, not the QSS: vertical padding on a cell
+# moves its text rather than growing the row it sits in.
+ROW_PADDING = 9
+
 # Header.
-HEADER_GAP = 8         # title -> badge
 HEADER_SPACING = 4     # title -> subtitle
 
 

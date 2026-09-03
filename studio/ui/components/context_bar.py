@@ -1,20 +1,22 @@
 """BAR 2 — the context bar.
 
-Holds only the actions for the page you are on, and is rebuilt from scratch on
-every page change. That swap is the core of the FreeCAD model: pick a page, the
-whole toolset below it changes.
+Holds the actions for the workspace you are in, and is rebuilt from scratch on
+every switch. That swap is the core of the FreeCAD model: pick a workspace and
+the whole toolset below it changes.
 
-A page declares its actions as plain strings (see pages/base.py). One may be
-marked primary — it renders filled; the rest render outlined.
+Within one workspace it does not change shape. The same controls stay in the
+same places on every page; what moves is which of them are live. A workspace
+declares them (see workspaces/base.py) as ActionSpecs — one may be marked
+primary, which renders filled; the rest render outlined. An action with no
+handler renders disabled rather than being left out.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMainWindow, QPushButton, QToolBar
+from PySide6.QtWidgets import QMainWindow, QPushButton, QToolBar
 
 from .action_spec import Separator
-from .spacer import spacer
 
 
 class ContextButton(QPushButton):
@@ -45,12 +47,12 @@ class ContextBar(QToolBar):
         self._window = window
         self.buttons: dict[str, ContextButton] = {}
 
-    def show_page(self, page) -> None:
-        """Rebuild the bar for one page."""
+    def show_page(self, source) -> None:
+        """Rebuild the bar from whatever declares actions — a workspace."""
         self.clear()
         self.buttons = {}
 
-        for spec in page.build_actions():
+        for spec in source.build_actions():
             if isinstance(spec, Separator):
                 self.addSeparator()
                 continue
@@ -65,5 +67,9 @@ class ContextBar(QToolBar):
             self.addWidget(button)
             self.buttons[spec.label] = button
 
-        self.addWidget(spacer())
-        self.addWidget(QLabel(f"{page.status}   "))
+        # No overflow chevron. The point of a bar that keeps its shape is that
+        # every control stays where the user last saw it, and folding the tail
+        # of it behind a "»" is the same disappearance by another route. Qt
+        # only offers the extension button when the bar is too narrow, so the
+        # fix is to refuse to be: claim the width the buttons actually need.
+        self.setMinimumWidth(self.sizeHint().width())

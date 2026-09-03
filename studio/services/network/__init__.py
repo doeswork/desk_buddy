@@ -5,7 +5,7 @@
     accounts.py          who may connect, and which topics they may use
 
 These are the objects the UI asks questions of. They return data and finished
-strings; the pages under ui/pages/network/ decide only how that looks. Keeping
+strings; the pages under ui/workspaces/network/ decide only how that looks. Keeping
 Qt out means they are testable without a window and reusable from a CLI or a
 future headless mode.
 

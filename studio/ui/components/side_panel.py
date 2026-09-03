@@ -1,6 +1,7 @@
-"""The side panel's list. A page builds this itself in `build_side()`.
+"""The side panel's list. A workspace builds this in `build_side()`.
 
-Rows are inert until the thing behind them exists.
+Normally it lists the workspace's pages, so it is how you move around inside
+one. Rows are inert until the thing behind them exists.
 """
 
 from __future__ import annotations
@@ -13,8 +14,13 @@ class SidePanel(QListWidget):
     def __init__(self, title: str, items: list[str], parent: QWidget | None = None,
                  *, enabled: bool = False) -> None:
         super().__init__(parent)
-        self.title = title          # the dock reads this for its header
+        self.title = title          # what the list is, for callers that ask
         self.setObjectName("SidePanel")
+        # A row that responds to a click should say so before it is clicked.
+        # Only when there is something behind the rows: a pointing hand over
+        # an inert list is the control lying about what it does.
+        if enabled:
+            self.setCursor(Qt.PointingHandCursor)
 
         for text in items:
             item = QListWidgetItem(text)
