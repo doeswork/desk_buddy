@@ -16,6 +16,7 @@ from .column import Column
 from .context_bar import ContextBar, ContextButton
 from .debug_tray import DebugTray
 from .nav_bar import NavBar
+from .preferences_dialog import PreferencesDialog
 from .serial_monitor import SerialMonitor
 from .side_panel import SidePanel
 from .spacer import spacer
@@ -29,6 +30,7 @@ __all__ = [
     "ContextButton",
     "DebugTray",
     "NavBar",
+    "PreferencesDialog",
     "SerialMonitor",
     "Separator",
     "SidePanel",

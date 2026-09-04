@@ -50,9 +50,12 @@ persistence true
 persistence_location {data}/
 """
 
-# Bound to localhost by default. A broker on 0.0.0.0 is reachable from every
-# network the machine joins; reaching a real robot needs a deliberate choice,
-# not a default. (Step 2's remaining [OPEN] is how that choice is offered.)
+# The fallback only. Callers pass this machine's LAN address instead — a
+# robot is always a separate device, so a broker it cannot reach is not a
+# useful one. Loopback is what is left when there is no network at all,
+# where the broker at least still starts and Studio can still talk to it.
+# Deliberately a specific interface rather than 0.0.0.0, which would expose
+# the broker on every network the machine ever joins.
 DEFAULT_HOST = "127.0.0.1"
 
 

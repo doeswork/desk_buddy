@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from ...models.config.mqtt_users import users
 from ...services.firmware import mqtt_provisioning_command, wifi_provisioning_command
-from ...services.network import our_port
+from ...services.network import active_firewall, our_port
 
 
 class SerialMonitor(QWidget):
@@ -615,8 +615,9 @@ class MqttDialog(QDialog):
         self.account.currentTextChanged.connect(self._account_changed)
         layout.addWidget(self.account)
 
+        # Carries both blocking problems and non-blocking advice, so its
+        # style is set per message rather than fixed here.
         self.broker_note = QLabel()
-        self.broker_note.setObjectName("FieldError")
         self.broker_note.setWordWrap(True)
         self.broker_note.hide()
         layout.addWidget(self.broker_note)
@@ -716,29 +717,51 @@ class MqttDialog(QDialog):
                 "Start the broker on Network → Broker to get a reachable "
                 "address, or pick Custom to point at one elsewhere."
             )
-            self.broker_note.show()
+            self._show_note(blocking=True)
             self.save_button.setEnabled(False)
         elif self._broker_host in LOOPBACK_HOSTS:
-            # The robot is a different machine: loopback would point it at
-            # itself, and it would fail to connect forever with no clue why.
-            # Refuse rather than hand over an address that cannot work.
+            # Only happens with no network at all — the broker binds to the
+            # LAN address otherwise. Loopback would point the robot at
+            # itself, so refuse rather than hand over an unusable address.
             self.server.clear()
             self.port.clear()
             self.broker_note.setText(
-                f"The broker is only listening on {self._broker_host}, which "
-                "the robot cannot reach. Set it to “This network” on "
-                "Network → Broker and restart it, then try again."
+                "This machine has no network address, so the broker is only "
+                "reachable from itself. Connect it to the same network as "
+                "the robot and restart the broker."
             )
-            self.broker_note.show()
+            self._show_note(blocking=True)
             self.save_button.setEnabled(False)
         else:
             self.server.setText(self._broker_host)
             self.port.setText(str(self._broker_port))
-            self.broker_note.hide()
             self.save_button.setEnabled(True)
+            # Not an error — the port may well be open, and Studio cannot
+            # tell without root. But a firewall is the most likely reason a
+            # robot provisioned from here still never connects, and this is
+            # the moment the user is pointing one at the broker.
+            firewall = active_firewall()
+            if firewall:
+                self.broker_note.setText(
+                    f"{firewall} is running. If the robot never connects, "
+                    f"open port {self._broker_port} for your network — see "
+                    "Network → Broker for the command."
+                )
+                self._show_note(blocking=False)
+            else:
+                self.broker_note.hide()
         self.user.setText(account.name)
         self.password.setText(account.password)
         self.client_id.setText(account.name)
+
+    def _show_note(self, *, blocking: bool) -> None:
+        """Show broker_note, styled for whether it stops the user or informs."""
+        self.broker_note.setObjectName("FieldError" if blocking else "CardBody")
+        # Qt only re-evaluates the stylesheet when the object name changes if
+        # the widget is repolished; without this the first style sticks.
+        self.broker_note.style().unpolish(self.broker_note)
+        self.broker_note.style().polish(self.broker_note)
+        self.broker_note.show()
 
     def _set_password_visible(self, visible: bool) -> None:
         self.password.setEchoMode(QLineEdit.Normal if visible else QLineEdit.Password)

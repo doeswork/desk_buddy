@@ -8,13 +8,19 @@ service.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QButtonGroup, QRadioButton, QWidget
+from PySide6.QtWidgets import QWidget
 
-from ....services.network import BrokerReport, CommandResult, lan_address
+from ....services.network import (
+    BrokerReport,
+    CommandResult,
+    active_firewall,
+    firewall_hint,
+    lan_address,
+    our_port,
+)
+from ....services.network.broker.finder import DEFAULT_PORT
 from ...components import Card, CommandCard, Column
 from ...pages.base import Page
-from ...theme.metrics import CARD_SPACING
 
 
 class BrokerPage(Page):
@@ -25,14 +31,16 @@ class BrokerPage(Page):
     subtitle = "The MQTT hub. Robot, models, and workflows all talk through it."
 
     def build_page(self) -> QWidget:
-        return Column(
+        sections = [
             broker_card(self.workspace.broker(), self.workspace.last_result),
-            BindHostCard(
-                self.workspace.bind_lan,
-                running=self.workspace.running(),
-                on_change=self.workspace.set_bind_lan,
-            ),
-        )
+            address_card(self.workspace.broker_host()),
+        ]
+        # Studio's own port, not broker().port — that reports whichever
+        # broker was detected, which may be an unrelated system one on 1883.
+        firewall = firewall_card(our_port() or DEFAULT_PORT)
+        if firewall is not None:
+            sections.append(firewall)
+        return Column(*sections)
 
 
 def broker_card(report: BrokerReport, result: CommandResult | None = None) -> QWidget:
@@ -51,41 +59,52 @@ def broker_card(report: BrokerReport, result: CommandResult | None = None) -> QW
     return Card(report.headline, report.detail)
 
 
-class BindHostCard(Card):
-    """Localhost-only vs this network — off by default, and deliberate.
+def firewall_card(port: int) -> QWidget | None:
+    """Warn that a firewall is running, with the command that opens the port.
 
-    Reaching a real robot needs the broker on the LAN; reaching only what is
-    on this machine is the safer default (see DEFAULT_HOST's own reasoning
-    in services/network/broker/commands.py). Disabled while running because
-    the choice only takes effect on the next start — flipping it live would
-    look like it changed something about a broker that is, in fact, still
-    listening exactly where it always was.
+    Deliberately shown whenever a firewall is up rather than only when the
+    port is known-blocked: reading the rules needs root, and a connect from
+    this machine goes over loopback and succeeds even while an external
+    device is refused. So Studio cannot tell the two apart — and a broker
+    that is listening but unreachable looks exactly like a broken robot,
+    which is worth one card to rule out.
     """
+    firewall = active_firewall()
+    if not firewall:
+        return None
+    return CommandCard(
+        f"{firewall} is running on this machine",
+        f"If a robot cannot reach the broker on port {port}, the firewall is "
+        "the first thing to check — a listening broker is still refused "
+        "until the port is opened. Studio cannot read the rules (that needs "
+        "root), so this may already be allowed:",
+        firewall_hint(port, firewall),
+    )
 
-    def __init__(self, bind_lan: bool, *, running: bool, on_change) -> None:
-        address = lan_address()
-        super().__init__(
-            "Who can reach this broker",
-            "Takes effect on the next start or restart." if not running else
-            "Stop or restart the broker to apply a change.",
+
+def address_card(bound_host: str) -> QWidget:
+    """Where a robot reaches this broker.
+
+    The broker always binds to this machine's LAN address — a robot is
+    always a separate device, so there is no second case to offer. This
+    only reports the address, since it is what has to be typed into (or
+    provisioned onto) a robot.
+    """
+    if bound_host:
+        return Card(
+            "Robots reach this broker at",
+            f"{bound_host} — provisioned automatically by Set MQTT on the "
+            "Serial Monitor.",
         )
 
-        layout = self.layout()
-        layout.addSpacing(CARD_SPACING * 2)
-
-        self._group = QButtonGroup(self)
-        local = QRadioButton("This machine only (127.0.0.1)")
-        lan = QRadioButton(
-            f"This network ({address})" if address else
-            "This network (no address found)"
+    address = lan_address()
+    if not address:
+        return Card(
+            "No network address",
+            "This machine is not on a network, so a robot has no way to "
+            "reach the broker. Connect it to the same network as the robot.",
         )
-        lan.setEnabled(bool(address))
-        for index, button in enumerate((local, lan)):
-            button.setCursor(Qt.PointingHandCursor)
-            button.setEnabled(button.isEnabled() and not running)
-            self._group.addButton(button, index)
-            layout.addWidget(button)
-        (lan if bind_lan else local).setChecked(True)
-        self._group.idToggled.connect(
-            lambda index, checked: on_change(index == 1) if checked else None
-        )
+    return Card(
+        "Robots will reach this broker at",
+        f"{address}, once it is started.",
+    )

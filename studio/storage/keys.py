@@ -36,4 +36,15 @@ WINDOW_STATE = Key("window/state", bytes, b"")
 LAST_WORKSPACE = Key("window/last_workspace", int, 0)
 LAST_PAGE = Key("window/last_page", str, "")
 
-ALL = (THEME, ZOOM_INDEX, GEOMETRY, WINDOW_STATE, LAST_WORKSPACE, LAST_PAGE)
+# ---- Network ------------------------------------------------------------
+MQTT_BROKER_AUTO_START = Key("network/mqtt_broker_auto_start", bool, True)
+
+ALL = (
+    THEME,
+    ZOOM_INDEX,
+    GEOMETRY,
+    WINDOW_STATE,
+    LAST_WORKSPACE,
+    LAST_PAGE,
+    MQTT_BROKER_AUTO_START,
+)

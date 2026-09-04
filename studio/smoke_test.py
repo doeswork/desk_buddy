@@ -24,7 +24,15 @@ from .ui.menus.view import DEFAULT_ZOOM_INDEX
 
 def main() -> int:
     app = QApplication([])
-    window = MainWindow()
+    with (
+        mock.patch(
+            "studio.ui.workspaces.network.workspace.NetworkWorkspace.start_on_startup"
+        ) as start_broker,
+        mock.patch("studio.ui.main_window.preferences") as preferences,
+    ):
+        preferences.return_value.mqtt_broker_auto_start = True
+        window = MainWindow()
+    start_broker.assert_called_once()
     window.show()
 
     assert window.windowTitle() == "Desk Buddy Studio"
@@ -167,6 +175,11 @@ def check_debug_tray(window) -> None:
     assert flash.board_label.text() == "ESP32-S3-CAM (N16R8)"
     assert flash.port.isEditable()
     assert flash.flash_button.text() == "Flash Firmware"
+    assert not flash.flash_button.isEnabled()
+    assert not flash.port_requirement.isHidden()
+    flash.port.addItem("/dev/ttyUSB0 — USB serial", "/dev/ttyUSB0")
+    assert flash.flash_button.isEnabled()
+    assert flash.port_requirement.isHidden()
     assert flash.output.isReadOnly()
     assert flash.output.lineWrapMode() == QPlainTextEdit.NoWrap
     flash.wrap_lines.click()
@@ -198,6 +211,8 @@ def check_debug_tray(window) -> None:
     assert wifi_dialog.password.echoMode() == QLineEdit.Password
     assert window.debug_tray.close_button.text() == "×"
     assert window.restart_action.text() == "Restart App…"
+    assert window.preferences_action.text() == "Preferences…"
+    assert window.preferences_action.isEnabled()
 
     # Saying No must never spawn a process or close the current window.
     with (

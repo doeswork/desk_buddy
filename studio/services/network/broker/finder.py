@@ -272,6 +272,56 @@ def running_port() -> int:
     return 0
 
 
+def active_firewall() -> str:
+    """The name of a running host firewall, or "" if none is detected.
+
+    Studio cannot tell whether a given port is *allowed* — reading rules
+    needs root on every one of these — so this only answers "is something
+    filtering here", which is enough to explain a robot that cannot reach a
+    broker that is demonstrably listening.
+
+    A local connect cannot answer that question either: traffic to this
+    machine's own address is routed over loopback and never traverses the
+    INPUT chain, so `port_open()` reports success from here while an
+    external device is refused. That gap is exactly the failure this warns
+    about, and it is why the check is "is a firewall up", not "can I
+    connect".
+    """
+    if platform.system() != "Linux":
+        # Only Linux is handled: macOS's per-application firewall does not
+        # block a listener the user started, and claiming to know about
+        # Windows Firewall without checking would be a guess.
+        return ""
+
+    for service, name in (("ufw", "ufw"), ("firewalld", "firewalld")):
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", service],
+                capture_output=True, text=True, timeout=PROBE_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.stdout.strip() == "active":
+            return name
+    return ""
+
+
+def firewall_hint(port: int, firewall: str) -> str:
+    """The command that would open `port` on `firewall`, for the user to read.
+
+    Shown, never run — same rule as install_command(): a tool that edits
+    firewall rules as root unprompted is not a habit to teach.
+    """
+    if firewall == "ufw":
+        return f"sudo ufw allow from 192.168.0.0/16 to any port {port} proto tcp"
+    if firewall == "firewalld":
+        return (
+            f"sudo firewall-cmd --permanent --add-port={port}/tcp "
+            "&& sudo firewall-cmd --reload"
+        )
+    return ""
+
+
 def lan_address() -> str:
     """Best-guess LAN IP for this machine, or "" if none is reachable.
 

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ....models.config.mqtt_users import STUDIO_DESCRIPTION, users
 from ....services.network import broker_commands as commands
+from ....services.network import lan_address
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import (
@@ -63,6 +64,9 @@ class AccountsPage(Page):
         # connect with them yet, which the card below says.
         entries = self.workspace.accounts()
         port = self.workspace.broker().port or commands.DEFAULT_PORT
+        # The address a client actually connects on, which is the LAN one
+        # the broker binds to — not loopback, which no robot can reach.
+        host = self.workspace.broker_host() or lan_address() or commands.DEFAULT_HOST
         sections = []
 
         if self._credentials is not None:
@@ -70,7 +74,7 @@ class AccountsPage(Page):
             sections.append(CredentialsCard(
                 name,
                 password,
-                commands.DEFAULT_HOST,
+                host,
                 port,
                 on_done=self._dismiss,
             ))
@@ -84,8 +88,7 @@ class AccountsPage(Page):
         if self.workspace.running():
             sections.append(Card(
                 "Connect to this broker",
-                f"{commands.DEFAULT_HOST}:{port}, with a username and "
-                "password below.",
+                f"{host}:{port}, with a username and password below.",
             ))
         else:
             sections.append(Card(

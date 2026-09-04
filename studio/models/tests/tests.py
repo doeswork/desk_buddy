@@ -15,10 +15,14 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSettings
+
+from ...storage.settings import Settings
 from ...storage.store import Store
 from ..config.calibrations import Calibration, Calibrations
 from ..config.mqtt_topics import TOPIC_PATTERN, default_topics, validate_topic
 from ..config.mqtt_users import STUDIO_NAME, MqttUser, Users
+from ..config.prefrences import Preferences
 from ..config.robots import Robots
 from ..data.app_errors import AppErrors
 from ..data.database import Database, SCHEMA_VERSION
@@ -28,6 +32,22 @@ from ..data.mqtt_messages import MqttMessages
 def fresh_users() -> tuple[Users, Path]:
     directory = Path(tempfile.mkdtemp())
     return Users(Store("mqtt_users", directory=directory)), directory
+
+
+def fresh_preferences() -> tuple[Preferences, Path]:
+    path = Path(tempfile.mktemp(suffix=".ini"))
+    return Preferences(Settings(QSettings(str(path), QSettings.IniFormat))), path
+
+
+# ---- Preferences --------------------------------------------------------
+
+def test_broker_starts_on_launch_by_default_and_can_be_disabled() -> None:
+    preferences, path = fresh_preferences()
+    assert preferences.mqtt_broker_auto_start
+    preferences.set_mqtt_broker_auto_start(False)
+
+    reloaded = Preferences(Settings(QSettings(str(path), QSettings.IniFormat)))
+    assert not reloaded.mqtt_broker_auto_start
 
 
 # ---- Topics --------------------------------------------------------------

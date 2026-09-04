@@ -204,7 +204,10 @@ void BuddyMQTT::maintain() {
     }
 
     sentReadyMessage = false;  // Reset flag on disconnect
-    Serial.print("Connecting MQTT (TLS)… ");
+    // Says which transport is actually in use. Hardcoding "TLS" here once
+    // sent hours chasing a transport switch that had in fact worked — the
+    // line claimed TLS while the settings dump above said "TLS: no".
+    Serial.print(USE_TLS ? "Connecting MQTT (TLS)… " : "Connecting MQTT… ");
     LED::Blink(0.5);
 
     mqttClient.setCallback(messageCallback);
@@ -218,8 +221,22 @@ void BuddyMQTT::maintain() {
       mqttClient.subscribe(STATUS_TOPIC.c_str());
       Heartbeat::send(true);
     } else {
+      const int state = mqttClient.state();
       Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());   // -4 timeout, 5 not authorized, etc.
+      Serial.print(state);   // -4 timeout, 5 not authorized, etc.
+      // rc=-2 is a socket that never opened, which says nothing about MQTT
+      // itself — the causes are all one layer down, and are worth naming
+      // because the bare number reads as "the broker rejected us".
+      if (state == -2) {
+        Serial.print(" (no TCP connection to ");
+        Serial.print(SERVER);
+        Serial.print(':');
+        Serial.print(PORT);
+        Serial.print(USE_TLS ? " — wrong address, firewall, or the broker is "
+                               "plaintext while this is set to TLS)"
+                             : " — wrong address, firewall, or the broker is "
+                               "TLS while this is set to plaintext)");
+      }
       Serial.print("; retrying in ");
       Serial.print(RECONNECT_INTERVAL_MS / 1000);
       Serial.println("s (hold BOOT 3s to reset WiFi/MQTT)");

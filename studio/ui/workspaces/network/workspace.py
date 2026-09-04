@@ -47,33 +47,15 @@ class NetworkWorkspace(Workspace):
         # Set when applying records to the broker fails, so the page can say
         # so rather than looking as though the change took.
         self.account_problem = ""
-        # Off by default: a robot on the network cannot reach 127.0.0.1 on
-        # this machine, so exposing the broker beyond localhost is a
-        # deliberate choice the user makes on the Broker page, not a
-        # default — see services/network/broker/commands.py's DEFAULT_HOST.
-        self._bind_lan = False
-        # The host the *running* broker was actually started on — separate
-        # from the toggle above, which is next start's intent. A toggle
-        # flipped after the broker is already up must not claim a host it
-        # is not really listening on.
+        # The host the running broker was actually started on. Recorded
+        # rather than recomputed: the machine's LAN address can change while
+        # the broker keeps running on the one it bound at start.
         self._bound_host = ""
-
-    # ---- LAN bind choice ---------------------------------------------------
-    @property
-    def bind_lan(self) -> bool:
-        return self._bind_lan
-
-    def set_bind_lan(self, value: bool) -> None:
-        if value == self._bind_lan:
-            return
-        self._bind_lan = value
-        self.refresh()
 
     def broker_host(self) -> str:
         """The host the running broker actually listens on, or "" if it is
         not running. What anything that wants to *reach* the broker — the
-        MQTT provisioning dialog, say — should read, instead of assuming a
-        host from the toggle above."""
+        MQTT provisioning dialog, say — should read."""
         return self._bound_host if self.running() else ""
 
     # ---- shared state ----------------------------------------------------
@@ -161,6 +143,18 @@ class NetworkWorkspace(Workspace):
     def start_broker(self) -> None:
         self._run(commands.start)
 
+    def start_on_startup(self) -> None:
+        """Start the managed broker when Studio launches, if it is available.
+
+        A missing or partial Mosquitto installation remains a setup task the
+        Broker page can explain; launching Studio must not turn it into a
+        modal error. A genuine start failure still goes through ``_run`` so
+        that page retains the useful diagnostic for a port conflict or bad
+        local setup.
+        """
+        if not self.running() and self.broker().installed:
+            self._run(commands.start)
+
     def stop_broker(self) -> None:
         self._run(commands.stop)
 
@@ -168,18 +162,15 @@ class NetworkWorkspace(Workspace):
         self._run(commands.restart)
 
     def _chosen_host(self) -> str:
-        """The host to start on, resolving the toggle to an address.
+        """The host to start on: this machine's LAN address.
 
-        Falls back to localhost-only if the LAN toggle is on but no LAN
-        address could be found (no network) — the broker still starts and
-        is still reachable from this machine, just not from a robot, which
-        is a better failure than not starting at all.
+        The whole point of the broker is that a robot can reach it, and a
+        robot is always a separate device on the network — so binding to
+        loopback would make it unreachable by the only thing that needs it.
+        Falls back to loopback only when there is no network at all, where
+        the broker at least still starts and Studio can still talk to it.
         """
-        if self._bind_lan:
-            address = lan_address()
-            if address:
-                return address
-        return commands.DEFAULT_HOST
+        return lan_address() or commands.DEFAULT_HOST
 
     def _run(self, command) -> None:
         """Run a broker command, then show whatever it says.
@@ -192,6 +183,11 @@ class NetworkWorkspace(Workspace):
         it was started from config files that may be older than them, or
         absent entirely on a machine where the broker directory was cleared.
         """
+        # The broker is never open anonymously. Ensure Studio's credential is
+        # present before generating its password and ACL files for a start.
+        if command in (commands.start, commands.restart):
+            users().ensure_studio()
+
         host = self._chosen_host()
         # start/restart take (port, host); stop takes neither. Calling every
         # command the same way would pass stop() a host it does not accept.

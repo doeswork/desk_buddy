@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models.data import app_errors, mqtt_messages
+from ..models.config.prefrences import preferences
 from ..services import ErrorReporter
 from ..services.network import TrafficRecorder, chip_text, shutdown_broker
 from ..storage import keys
@@ -33,7 +34,7 @@ from .menus import build_menu_bar
 from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
 from .workspaces import build_workspaces
 from .theme import DEFAULT_THEME, available, omarchy, stylesheet
-from .components import ContextBar, DebugTray, NavBar
+from .components import ContextBar, DebugTray, NavBar, PreferencesDialog
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +43,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Desk Buddy Studio")
         self.resize(1180, 760)
         self._settings = settings()
+        self._preferences = preferences()
         self._app_errors = app_errors()
         self._error_reporter = ErrorReporter(self._app_errors)
         self._error_reporter.install()
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
         self.select_workspace(self._restored_workspace())
         self.workspace.go_to(self._restored_page())
         self._restore_window()
+        self._start_network_broker()
 
     def _build_toolbars(self) -> None:
         self.nav_bar = NavBar(self, self.workspaces, self.select_workspace)
@@ -175,6 +178,16 @@ class MainWindow(QMainWindow):
     def refresh_broker(self) -> None:
         self.nav_bar.set_broker(chip_text())
         self._traffic_recorder.reconcile()
+
+    def _start_network_broker(self) -> None:
+        """Give Studio's managed broker one start attempt on launch."""
+        if not self._preferences.mqtt_broker_auto_start:
+            return
+        network = next(workspace for workspace in self.workspaces if workspace.key == "network")
+        network.start_on_startup()
+
+    def open_preferences(self) -> None:
+        PreferencesDialog(self._preferences, self).exec()
 
     # ---- Zoom -----------------------------------------------------------
     def zoom_in(self) -> None:

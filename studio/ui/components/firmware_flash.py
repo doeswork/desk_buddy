@@ -70,9 +70,14 @@ class FirmwareFlash(QWidget):
         self.port.setEditable(True)
         self.port.setMinimumWidth(180)
         self.port.lineEdit().setPlaceholderText("Connect a board, then scan")
+        self.port.currentIndexChanged.connect(self._update_flash_availability)
+        self.port.currentTextChanged.connect(self._update_flash_availability)
         controls.addWidget(self.port, 1)
         self.scan_button = self._button("List USB Devices", self.scan)
         controls.addWidget(self.scan_button)
+        self.port_requirement = QLabel("Required: select a USB port before flashing")
+        self.port_requirement.setObjectName("FieldError")
+        controls.addWidget(self.port_requirement)
         controls.addSpacing(8)
         controls.addWidget(QLabel("Speed"))
         self.speed = QComboBox()
@@ -115,10 +120,26 @@ class FirmwareFlash(QWidget):
         )
         self.output.document().setMaximumBlockCount(20_000)
         layout.addWidget(self.output, 1)
+        self._update_flash_availability()
 
     def _set_wrap(self, enabled: bool) -> None:
         self.output.setLineWrapMode(
             QPlainTextEdit.WidgetWidth if enabled else QPlainTextEdit.NoWrap
+        )
+
+    def _has_selected_port(self) -> bool:
+        index = self.port.currentIndex()
+        return (
+            index >= 0
+            and self.port.currentText() == self.port.itemText(index)
+            and bool(self.port.itemData(index))
+        )
+
+    def _update_flash_availability(self, *_unused) -> None:
+        selected = self._has_selected_port()
+        self.port_requirement.setVisible(not selected)
+        self.flash_button.setEnabled(
+            selected and self._process.state() == QProcess.NotRunning
         )
 
     @staticmethod
@@ -247,11 +268,12 @@ class FirmwareFlash(QWidget):
 
     def _set_running(self, running: bool) -> None:
         for control in (
-            self.scan_button, self.build_button, self.flash_button,
+            self.scan_button, self.build_button,
             self.port, self.speed, self.erase_first, self.verbose,
         ):
             control.setEnabled(not running)
         self.stop_button.setEnabled(running)
+        self._update_flash_availability()
 
     def stop(self) -> None:
         if self._process.state() == QProcess.NotRunning:

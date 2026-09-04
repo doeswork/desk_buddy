@@ -293,6 +293,25 @@ def test_chip_marks_a_broker_that_is_not_ours() -> None:
     assert "not ours" in install.chip_for(1883, False)
 
 
+# ---- Firewall detection --------------------------------------------------
+
+def test_firewall_hint_matches_the_detected_firewall() -> None:
+    """The command has to be the one that works for *that* firewall."""
+    assert "ufw allow" in install.firewall_hint(18830, "ufw")
+    assert "18830" in install.firewall_hint(18830, "ufw")
+    assert "firewall-cmd" in install.firewall_hint(18830, "firewalld")
+    # An unknown or absent firewall has no command to offer, and must not
+    # invent one — a wrong sudo command is worse than none.
+    assert install.firewall_hint(18830, "") == ""
+    assert install.firewall_hint(18830, "pf") == ""
+
+
+def test_active_firewall_reports_a_name_or_nothing() -> None:
+    """Never raises, whatever the host looks like — it runs on every build
+    of the Broker page, and a machine without systemd must not break it."""
+    assert install.active_firewall() in ("", "ufw", "firewalld")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
