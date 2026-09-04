@@ -9,25 +9,31 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QFileSystemWatcher, QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QWidget,
 )
 
-from ..services.network import chip_text, shutdown_broker
+from ..models.data import app_errors, mqtt_messages
+from ..services import ErrorReporter
+from ..services.network import TrafficRecorder, chip_text, shutdown_broker
 from ..storage import keys
 from ..storage.settings import settings
 from .menus import build_menu_bar
 from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
 from .workspaces import build_workspaces
 from .theme import DEFAULT_THEME, available, omarchy, stylesheet
-from .components import ContextBar, NavBar
+from .components import ContextBar, DebugTray, NavBar
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +42,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Desk Buddy Studio")
         self.resize(1180, 760)
         self._settings = settings()
+        self._app_errors = app_errors()
+        self._error_reporter = ErrorReporter(self._app_errors)
+        self._error_reporter.install()
 
         # Appearance is restored before the first paint, so the window never
         # flashes the default theme on the way to the user's.
@@ -54,6 +63,7 @@ class MainWindow(QMainWindow):
         self.view_menu = self.menus["View"]
         self._build_toolbars()
         self._build_side_dock()
+        self._build_debug_dock()
         self._build_workspaces()
         self._build_status_bar()
         self._watch_system_theme()
@@ -91,6 +101,43 @@ class MainWindow(QMainWindow):
         self.panel_toggle.setText("Side Panel")
         self.view_menu.addAction(self.panel_toggle)
 
+    def _build_debug_dock(self) -> None:
+        """The old Logs workspace, reshaped as a bottom activity tray."""
+        self._mqtt_messages = mqtt_messages()
+        self._traffic_recorder = TrafficRecorder(self._mqtt_messages)
+        # The Serial Monitor's MQTT dialog fills itself in from Studio's own
+        # accounts and the broker it actually reachable on — both live on
+        # NetworkWorkspace, which is already built (self.workspaces, above)
+        # by the time this runs.
+        network = next(w for w in self.workspaces if w.key == "network")
+        self.debug_tray = DebugTray(
+            self._mqtt_messages,
+            self._app_errors,
+            self._traffic_recorder,
+            lambda: self.debug_dock.setVisible(False),
+            broker_host=network.broker_host,
+        )
+
+        self.debug_dock = QDockWidget("Debug Tray", self)
+        self.debug_dock.setObjectName("DebugDock")
+        self.debug_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        # Closable keeps Qt's toggleViewAction enabled. The empty title bar
+        # removes the floating/close chrome; View → Debug Tray is the control.
+        self.debug_dock.setFeatures(QDockWidget.DockWidgetClosable)
+        self.debug_dock.setTitleBarWidget(QWidget())
+        self.debug_dock.setMinimumHeight(220)
+        self.debug_dock.setWidget(self.debug_tray)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.debug_dock)
+        self.debug_dock.setVisible(False)
+        self.debug_dock.visibilityChanged.connect(
+            lambda visible: self.debug_tray.refresh(force=True) if visible else None
+        )
+
+        self.debug_toggle = self.debug_dock.toggleViewAction()
+        self.debug_toggle.setText("Debug Tray")
+        self.debug_toggle.setShortcut("Ctrl+`")
+        self.view_menu.addAction(self.debug_toggle)
+
     def _build_workspaces(self) -> None:
         self.stack = QStackedWidget()
         for workspace in self.workspaces:
@@ -127,6 +174,7 @@ class MainWindow(QMainWindow):
 
     def refresh_broker(self) -> None:
         self.nav_bar.set_broker(chip_text())
+        self._traffic_recorder.reconcile()
 
     # ---- Zoom -----------------------------------------------------------
     def zoom_in(self) -> None:
@@ -209,6 +257,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Save preferences and stop our broker on the way out."""
+        self.debug_tray.shutdown()
+        self._traffic_recorder.stop()
         # A broker Studio started belongs to this session; leaving it running
         # would orphan a process holding a port nothing will ever reclaim.
         shutdown_broker()
@@ -220,7 +270,43 @@ class MainWindow(QMainWindow):
         self._settings.set(keys.GEOMETRY, self.saveGeometry())
         self._settings.set(keys.WINDOW_STATE, self.saveState())
         self._settings.sync()
+        self._error_reporter.uninstall()
         super().closeEvent(event)
+
+    def restart_app(self) -> bool:
+        """Start a replacement process after an explicit confirmation."""
+        answer = QMessageBox.question(
+            self,
+            "Restart Desk Buddy Studio?",
+            "Studio will close and reopen. Any running broker will be stopped "
+            "cleanly as the current window closes.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+
+        if getattr(sys, "frozen", False):
+            program = sys.executable
+            arguments = sys.argv[1:]
+            working_directory = str(Path(sys.executable).resolve().parent)
+        else:
+            program = sys.executable
+            arguments = ["-m", "studio", *sys.argv[1:]]
+            working_directory = str(Path(__file__).resolve().parents[2])
+
+        result = QProcess.startDetached(program, arguments, working_directory)
+        started = result[0] if isinstance(result, tuple) else result
+        if not started:
+            QMessageBox.warning(
+                self,
+                "Could not restart",
+                "Studio could not start the replacement process.",
+            )
+            return False
+
+        self.close()
+        return True
 
     # ---- Theme ----------------------------------------------------------
     def set_theme(self, name: str) -> None:

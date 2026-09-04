@@ -36,7 +36,7 @@ def _environment() -> list[str]:
 def _broker() -> list[str]:
     from .services.network import broker_commands as commands
     from .services.network import detect, report
-    from .services.network.broker_finder import DEFAULT_PORT, SYSTEM_PORT, port_open
+    from .services.network.broker.finder import DEFAULT_PORT, SYSTEM_PORT, port_open
 
     status = detect()
     live = report()
@@ -80,7 +80,7 @@ def _paths() -> list[str]:
         lines.append(f"preferences  unavailable: {error}")
 
     try:
-        from .services.network.broker_commands import broker_dir
+        from .services.network.broker.commands import broker_dir
 
         directory = broker_dir()
         lines.append(f"broker dir   {directory}")
@@ -90,6 +90,19 @@ def _paths() -> list[str]:
                 lines.append(f"  {child.name:16} {mode}  {child.stat().st_size}b")
     except OSError as error:
         lines.append(f"broker dir   unavailable: {error}")
+
+    try:
+        from .models.data import app_errors, mqtt_messages
+
+        history = mqtt_messages()
+        errors = app_errors()
+        lines += [
+            f"database     {history.path}",
+            f"  messages   {history.count()}",
+            f"  app errors {errors.count()}",
+        ]
+    except (OSError, RuntimeError) as error:
+        lines.append(f"database     unavailable: {error}")
 
     return _section("Paths", lines)
 
@@ -106,6 +119,8 @@ def _window(window) -> list[str]:
         f"BAR 1 chips  {window.nav_bar.broker_label.text()!r}"
         f" / {window.nav_bar.connection_label.text()!r}",
         f"BAR 2        {list(buttons) or 'EMPTY'}",
+        f"debug tray   visible={window.debug_dock.isVisible()}",
+        f"recorder     {window._traffic_recorder.status!r}",
     ]
     for label, button in buttons.items():
         lines.append(f"  {label:16} enabled={button.isEnabled()}")

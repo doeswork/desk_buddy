@@ -1,8 +1,7 @@
 """The records Studio keeps, and the rules about their shape.
 
-    mqtt_users.py     broker accounts: name, password, topics
-    mqtt_topics.py    what a topic filter is, and what a new account starts with
-    calibrations.py   a calibration result per robot
+    config/     small records backed by readable JSON files
+    data/       append-heavy history backed by SQLite
 
 A model owns three things: what a record *is* (the dataclass), what makes one
 valid, and how it is read back and written. It owns no side effects on the
@@ -14,13 +13,35 @@ describes is currently running.
 
 from __future__ import annotations
 
-from .mqtt_users import MqttUser, users
-from .mqtt_topics import TOPIC_RULE, default_topics, validate_topic
+from .config import (
+    Calibration,
+    Calibrations,
+    MqttUser,
+    Robot,
+    Robots,
+    TOPIC_RULE,
+    calibrations,
+    default_topics,
+    robots,
+    users,
+    validate_topic,
+)
+from .data import AppError, MqttMessage, app_errors, mqtt_messages
 
 __all__ = [
+    "Calibration",
+    "Calibrations",
     "MqttUser",
+    "MqttMessage",
+    "AppError",
+    "Robot",
+    "Robots",
     "TOPIC_RULE",
+    "calibrations",
     "default_topics",
+    "robots",
     "users",
+    "mqtt_messages",
+    "app_errors",
     "validate_topic",
 ]

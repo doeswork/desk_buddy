@@ -247,6 +247,87 @@ QLineEdit#CommandText {{
     font-size: {px(12)};
 }}
 
+/* ---- Bottom debug tray ---- */
+QDockWidget#DebugDock {{
+    background: {p.panel};
+    border: none;
+    border-top: {HAIRLINE} solid {p.border};
+}}
+QWidget#DebugTray {{ background: {p.panel}; }}
+QLabel#DebugTitle {{
+    color: {p.text};
+    font-size: {px(12)};
+    font-weight: 600;
+}}
+QLabel#DebugStatus {{ color: {p.muted}; font-size: {px(11)}; }}
+QLabel#DebugValue {{ color: {p.text}; font-weight: 600; }}
+QPushButton#DebugAction {{ padding: {px(3)} {px(10)}; }}
+QPushButton#DebugClose {{
+    background: transparent;
+    border: none;
+    color: {p.muted};
+    font-size: {px(15)};
+    font-weight: 600;
+    padding: {px(2)} {px(8)};
+}}
+QPushButton#DebugClose:hover {{ color: {p.text}; background: {p.muted_bg}; }}
+QPushButton#DebugClose:pressed {{ background: {p.border}; }}
+QPushButton#DebugPrimaryAction {{
+    background: {p.accent};
+    color: {p.on_accent};
+    border-color: {p.accent};
+    padding: {px(3)} {px(10)};
+}}
+QComboBox#FlashPort, QComboBox#SerialPort {{ min-width: {px(180)}; }}
+QLineEdit#SerialSend, QLineEdit#SerialCredential, QLineEdit#SerialPassword {{
+    background: {p.muted_bg};
+    color: {p.text};
+    border: {HAIRLINE} solid {p.border};
+    padding: {px(3)} {px(7)};
+}}
+QLineEdit#SerialPassword {{
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}}
+QToolButton#PasswordEye {{
+    background: {p.muted_bg};
+    color: {p.muted};
+    border: {HAIRLINE} solid {p.border};
+    border-left: none;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    min-width: {px(30)};
+    padding: {px(3)} {px(6)};
+}}
+QToolButton#PasswordEye:hover {{ color: {p.text}; background: {p.panel}; }}
+QToolButton#PasswordEye:checked {{ color: {p.accent}; }}
+QTabWidget#DebugTabs::pane {{
+    border: none;
+    border-top: {HAIRLINE} solid {p.border};
+}}
+QTabWidget#DebugTabs QTabBar::tab {{
+    background: transparent;
+    color: {p.muted};
+    border: none;
+    padding: {px(5)} {px(12)};
+}}
+QTabWidget#DebugTabs QTabBar::tab:hover {{ background: {p.muted_bg}; }}
+QTabWidget#DebugTabs QTabBar::tab:selected {{
+    color: {p.text};
+    border-bottom: {px(2)} solid {p.accent};
+    font-weight: 600;
+}}
+QPlainTextEdit#DebugLog {{
+    background: #101820;
+    color: #dce6eb;
+    selection-background-color: #35566b;
+    border: {HAIRLINE} solid {p.border};
+    border-radius: 0;
+    padding: {px(6)};
+    font-family: "JetBrains Mono", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: {px(11)};
+}}
+
 /* ---- Status strip ---- */
 QStatusBar {{
     background: {p.panel};

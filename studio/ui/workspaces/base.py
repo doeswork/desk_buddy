@@ -26,7 +26,8 @@ broker report, a model list — is fetched by the workspace and shared, not
 re-fetched per page.
 
 Not to be confused with a Service (PLAN.md), which is a background process
-Studio starts and stops. A workspace may drive a service; Logs does not.
+Studio starts and stops. A workspace may drive a service; the bottom debug
+tray observes one without becoming a workspace of its own.
 """
 
 from __future__ import annotations

@@ -23,7 +23,11 @@ class FileMenu(Menu):
         super().build(window, menu)
         menu.addSeparator()
 
-        # Quit is the one thing in this menu that works.
+        restart_action = QAction("Restart App…", window)
+        restart_action.triggered.connect(window.restart_app)
+        menu.addAction(restart_action)
+        window.restart_action = restart_action
+
         quit_action = QAction("Quit", window)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(window.close)

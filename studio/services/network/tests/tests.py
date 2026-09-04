@@ -15,8 +15,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-from .. import broker_finder as install
-from ..broker_finder import BrokerStatus, Tool
+from ..broker import finder as install
+from ..broker.finder import BrokerStatus, Tool
 
 
 class fake_path:

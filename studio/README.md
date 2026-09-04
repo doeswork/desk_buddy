@@ -14,6 +14,10 @@ python3 -m venv .venv
 A venv is required on distros with an externally-managed Python (Arch, Debian,
 Fedora). `python -m studio` and `python studio/app.py` both work.
 
+The Flash Firmware tab requires `arduino-cli` and the Espressif ESP32 board
+core. Its three sketch libraries are pinned under `../firmware/vendor` and do
+not need to be installed separately in the Arduino IDE.
+
 ## Package it
 
 Python is not a compiled language, so nothing becomes a `.exe` on its own. A

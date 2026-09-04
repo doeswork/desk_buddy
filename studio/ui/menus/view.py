@@ -58,11 +58,14 @@ class ViewMenu(Menu):
         """One exclusive, checkable entry per palette.
 
         build_menu_bar keeps the QMenu, not this instance, so the actions live
-        on the window — that is also where set_theme reaches for them.
+        on the window — that is also where set_theme reaches for them. Bundled
+        Omarchy copies live in a submenu so they do not overwhelm View; the
+        live System theme remains at the top level with Light and Dark.
         """
         window.theme_actions = {}
         group = QActionGroup(window)
         group.setExclusive(True)
+        omarchy_menu = None
 
         for name, palette in available().items():
             action = QAction(palette.label, window)
@@ -70,5 +73,10 @@ class ViewMenu(Menu):
             action.setChecked(name == window.theme)
             action.triggered.connect(partial(window.set_theme, name))
             group.addAction(action)
-            menu.addAction(action)
+            if name.startswith("omarchy-"):
+                if omarchy_menu is None:
+                    omarchy_menu = menu.addMenu("Omarchy Themes")
+                omarchy_menu.addAction(action)
+            else:
+                menu.addAction(action)
             window.theme_actions[name] = action

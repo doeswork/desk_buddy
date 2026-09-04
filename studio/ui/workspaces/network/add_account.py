@@ -6,7 +6,7 @@ the user should be able to wander into with nothing in mind — but it is still
 a page, with the room to explain what the choice on it means.
 
 View only. What makes a valid name, and what each access level grants, are
-decided in `studio.services.network.accounts`.
+decided in `studio.services.network.broker.accounts`.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.mqtt_users import NAME_RULE, users
+from ....models.config.mqtt_users import NAME_RULE, users
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -31,10 +31,10 @@ from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 
 class AddAccountPage(Page):
     key = "add_account"
-    label = "Add Account"
+    label = "Add User"
 
-    title = "Add Account"
-    subtitle = "A name, and how much of the broker this account may reach."
+    title = "Add User"
+    subtitle = "A name, and how much of the broker this user may reach."
 
     def __init__(self, workspace=None) -> None:
         super().__init__(workspace)
@@ -172,7 +172,7 @@ class AccountForm(QWidget):
         buttons = QHBoxLayout()
         buttons.setSpacing(CARD_SPACING * 2)
 
-        create = QPushButton("Create Account")
+        create = QPushButton("Create User")
         create.setObjectName("ContextPrimary")
         create.setCursor(Qt.PointingHandCursor)
         create.clicked.connect(on_submit)

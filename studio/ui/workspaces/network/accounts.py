@@ -1,7 +1,7 @@
 """The Accounts page: who may connect, and which topics they may use.
 
 View only. Which topics an account reaches, what a valid name is, and how a
-password is made are all decided in `studio.services.network.accounts`.
+password is made are all decided in `studio.services.network.broker.accounts`.
 
 Add Account, Reset Password and Remove Account live here rather than on BAR
 2: BAR 2 is the workspace's own controls, the same on every Network page, and
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.mqtt_users import STUDIO_DESCRIPTION, users
+from ....models.config.mqtt_users import STUDIO_DESCRIPTION, users
 from ....services.network import broker_commands as commands
 from ...components import Card, Column
 from ...pages.base import Page
@@ -46,10 +46,10 @@ from ...theme.metrics import (
 
 class AccountsPage(Page):
     key = "accounts"
-    label = "Accounts"
+    label = "Users"
 
-    title = "Accounts"
-    subtitle = "Each one gets its own topics, so two robots never hear each other."
+    title = "Users"
+    subtitle = "Each user gets its own topics, so two robots never hear each other."
 
     def __init__(self, workspace=None) -> None:
         super().__init__(workspace)
@@ -77,7 +77,7 @@ class AccountsPage(Page):
 
         if self.workspace.account_problem:
             sections.append(Card(
-                "The broker did not take these accounts",
+                "The broker did not take these users",
                 self.workspace.account_problem,
             ))
 
@@ -90,7 +90,7 @@ class AccountsPage(Page):
         else:
             sections.append(Card(
                 "The broker is not running",
-                "These accounts are saved, but nothing can connect with them "
+                "These users are saved, but nothing can connect with them "
                 "until the broker is started on the Broker page.",
             ))
 
@@ -104,7 +104,7 @@ class AccountsPage(Page):
         return Column(*sections)
 
     def build_header_actions(self) -> QWidget | None:
-        """Add Account, level with the subtitle at the header's right edge.
+        """Add User, level with the subtitle at the header's right edge.
 
         Not BAR 2: this button belongs to the accounts list, and putting it
         up in the workspace's bar would make Add Account exist even on pages
@@ -114,7 +114,7 @@ class AccountsPage(Page):
         if not self.workspace.running() or self._credentials is not None:
             return None
 
-        add = QPushButton("Add Account")
+        add = QPushButton("Add User")
         add.setObjectName("ContextPrimary")
         add.setCursor(Qt.PointingHandCursor)
         add.clicked.connect(self.workspace.add_account)
@@ -147,7 +147,7 @@ class AccountsPage(Page):
         password, problem = users().reset_password(name)
         if problem:
             QMessageBox.warning(
-                self.widget(), "Could not reset the password", problem
+                self.widget(), "Could not reset the user's password", problem
             )
             return
 
@@ -170,7 +170,7 @@ class AccountsPage(Page):
 
         problem = users().remove(name)
         if problem:
-            QMessageBox.warning(parent, "Could not remove the account", problem)
+            QMessageBox.warning(parent, "Could not remove the user", problem)
             return
 
         self.workspace.apply_to_broker()
@@ -404,7 +404,7 @@ class CredentialsCard(QWidget):
         )
         layout.setSpacing(CARD_SPACING * 2)
 
-        title = QLabel(f"Account {name} is ready")
+        title = QLabel(f"User {name} is ready")
         title.setObjectName("CardTitle")
         layout.addWidget(title)
 

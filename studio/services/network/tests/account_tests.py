@@ -24,11 +24,14 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from .... models.mqtt_users import STUDIO_NAME, Users
+from ....models.config.mqtt_users import STUDIO_NAME, Users
+from ....models.data.database import Database
+from ....models.data.mqtt_messages import MqttMessages
 from ....storage.store import Store
-from .. import accounts as svc
 from .. import broker_commands as commands
-from ..broker_finder import find
+from ..broker import accounts as svc
+from ..broker.finder import find
+from ..pub_sub.traffic import TrafficRecorder
 
 TEST_PORT = 18892
 
@@ -109,7 +112,10 @@ class Sandbox:
         self._process: subprocess.Popen | None = None
         self._patches = [
             mock.patch.object(commands, "broker_dir", lambda: self._directory),
-            mock.patch("studio.services.network.accounts.users", lambda: self.users),
+            mock.patch(
+                "studio.services.network.broker.accounts.users",
+                lambda: self.users,
+            ),
         ]
 
     def __enter__(self) -> "Sandbox":
@@ -167,6 +173,15 @@ def _wait_for_port(timeout: float = 5.0) -> None:
         if commands.port_open(TEST_PORT):
             return
         time.sleep(0.05)
+
+
+def _wait_until(check, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 # ---- What a recorded account can actually do -----------------------------
@@ -305,6 +320,44 @@ def test_reload_does_not_restart_the_broker() -> None:
             svc.sync()
             assert commands._process.pid == before, "the broker was restarted"
         finally:
+            box.stop_broker()
+
+
+def test_traffic_recorder_persists_a_real_publication() -> None:
+    if not has_mosquitto():
+        return
+    with Sandbox() as box:
+        studio = box.users.ensure_studio()
+        box.start_broker()
+        recorder = TrafficRecorder(
+            MqttMessages(Database(box._directory / "traffic.sqlite3"))
+        )
+        try:
+            assert svc.sync() == ""
+            with mock.patch(
+                "studio.services.network.pub_sub.traffic.users",
+                lambda: box.users,
+            ):
+                recorder.start(TEST_PORT)
+                assert _wait_until(
+                    lambda: recorder.status.startswith("Recording all")
+                ), recorder.status
+                result = subprocess.run(
+                    [
+                        "mosquitto_pub", "-h", "127.0.0.1", "-p", str(TEST_PORT),
+                        "-u", studio.name, "-P", studio.password,
+                        "-t", "black/telemetry", "-m", '{"angle":42}',
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                assert result.returncode == 0, result.stderr
+                assert _wait_until(lambda: recorder.store.count() == 1)
+                saved = recorder.store.recent(include_heartbeats=True)[0]
+                assert saved.topic == "black/telemetry"
+                assert saved.payload_text == '{"angle":42}'
+        finally:
+            recorder.stop()
             box.stop_broker()
 
 

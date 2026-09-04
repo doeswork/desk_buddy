@@ -3,6 +3,8 @@
 #include "ActionController.h"
 #include "ActionOTA.h"
 #include "Heartbeat.h"
+#include "SerialHeartbeat.h"
+#include "SerialProvisioning.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // secure TCP
 #include <PubSubClient.h>
@@ -32,12 +34,19 @@ namespace {
   String USER;
   String PASS;
   String CLIENT_ID;
+  bool USE_TLS = true;
   String STATUS_TOPIC;       // Built from USER/test
   String HEARTBEAT_TOPIC;    // Built from USER/HEARTBEAT
 
 
-  WiFiClientSecure netClient;     // TLS client
-  PubSubClient     mqttClient(netClient);
+  // Both transports exist; ensureInited() points PubSubClient at whichever
+  // the saved `tls` preference calls for. A TLS client against a plaintext
+  // broker fails the TCP handshake outright and reports rc=-2, which reads
+  // as "broker unreachable" rather than "wrong transport" — so Studio's own
+  // local broker, which has no certificates to offer, needs the plain one.
+  WiFiClientSecure tlsClient;     // TLS transport (cloud broker)
+  WiFiClient       plainClient;   // Plaintext transport (local broker)
+  PubSubClient     mqttClient(tlsClient);
 
   bool inited = false;
   String receivedMessage;
@@ -105,6 +114,7 @@ namespace {
       USER = prefs.getString("user", DEFAULT_USER);
       PASS = prefs.getString("password", DEFAULT_PASS);
       CLIENT_ID = prefs.getString("client_id", DEFAULT_CLIENT_ID);
+      USE_TLS = prefs.getBool("tls", true);
       prefs.end();
     } else {
       // Use defaults if Preferences not available
@@ -113,6 +123,7 @@ namespace {
       USER = DEFAULT_USER;
       PASS = DEFAULT_PASS;
       CLIENT_ID = DEFAULT_CLIENT_ID;
+      USE_TLS = true;
     }
 
     // Build topics from username
@@ -124,12 +135,19 @@ namespace {
     Serial.println("  Port: " + String(PORT));
     Serial.println("  User: " + USER);
     Serial.println("  Client ID: " + CLIENT_ID);
+    Serial.println("  TLS: " + String(USE_TLS ? "yes" : "no"));
     Serial.println("  Status Topic: " + STATUS_TOPIC);
     Serial.println("  Heartbeat Topic: " + HEARTBEAT_TOPIC);
 
-    // TODO: load cert from Preferences/web UI for proper TLS verification
-    netClient.setInsecure();
-    netClient.setTimeout(2000);
+    if (USE_TLS) {
+      // TODO: load cert from Preferences/web UI for proper TLS verification
+      tlsClient.setInsecure();
+      tlsClient.setTimeout(2000);
+      mqttClient.setClient(tlsClient);
+    } else {
+      plainClient.setTimeout(2000);
+      mqttClient.setClient(plainClient);
+    }
     mqttClient.setKeepAlive(30);
 
     // MQTT setup
@@ -276,13 +294,17 @@ void BuddyMQTT::listen() {
 
   if (Heartbeat::isEnabled()) {
     while (mqttClient.connected() && receivedMessage == "") {
+      SerialHeartbeat::maintain();
       BuddyWifi::maintain();
+      SerialProvisioning::maintain();
       mqttClient.loop();
       if (Heartbeat::shouldSend()) { Heartbeat::send(true); Heartbeat::markSent(); }
     }
   } else {
     while (mqttClient.connected() && receivedMessage == "") {
+      SerialHeartbeat::maintain();
       BuddyWifi::maintain();
+      SerialProvisioning::maintain();
       mqttClient.loop();
       delay(10);
     }

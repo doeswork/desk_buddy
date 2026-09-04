@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import os
 import tempfile
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPlainTextEdit
 
 from .storage import keys
 from .storage.settings import Settings
 from .ui.components import ActionSpec
+from .ui.components.serial_monitor import WifiDialog
 from .ui.main_window import MainWindow
 from .ui.menus.view import DEFAULT_ZOOM_INDEX
 
@@ -28,8 +30,11 @@ def main() -> int:
     assert window.windowTitle() == "Desk Buddy Studio"
 
     workspaces = window.workspaces
-    assert len(workspaces) == 6, f"expected 6 workspaces, got {len(workspaces)}"
+    assert len(workspaces) == 5, f"expected 5 workspaces, got {len(workspaces)}"
     assert window.stack.count() == len(workspaces), "workspace missing"
+    assert "logs" not in [workspace.key for workspace in workspaces]
+    check_theme_menu(window)
+    check_debug_tray(window)
 
     total_pages = 0
     for index, workspace in enumerate(workspaces):
@@ -124,6 +129,114 @@ def check_actions(window, workspace, page) -> None:
     assert len(primaries) <= 1, f"{page.key}: {len(primaries)} primaries"
 
 
+def check_theme_menu(window) -> None:
+    """Bundled themes stay reachable without filling the View dropdown."""
+    bundled = {
+        name for name in window.theme_actions if name.startswith("omarchy-")
+    }
+    submenu = next(
+        (action.menu() for action in window.view_menu.actions()
+         if action.text() == "Omarchy Themes"),
+        None,
+    )
+    assert submenu is not None, "View has no Omarchy Themes submenu"
+
+    nested = {
+        name for name, action in window.theme_actions.items()
+        if action in submenu.actions()
+    }
+    assert nested == bundled, f"nested themes {nested} != bundled {bundled}"
+    assert not any(
+        window.theme_actions[name] in window.view_menu.actions()
+        for name in bundled
+    ), "a bundled Omarchy theme leaked into the top-level View menu"
+
+
+def check_debug_tray(window) -> None:
+    """The activity log is a bottom tray, not a sixth workspace."""
+    assert window.debug_dock.allowedAreas() == Qt.BottomDockWidgetArea
+    assert window.debug_toggle.text() == "Debug Tray"
+    assert window.debug_tray.tabs.count() == 4
+    assert [window.debug_tray.tabs.tabText(index) for index in range(4)] == [
+        "MQTT Activity",
+        "App Errors",
+        "Flash Firmware",
+        "Serial Monitor",
+    ]
+    flash = window.debug_tray.firmware_tab
+    assert flash.board_label.text() == "ESP32-S3-CAM (N16R8)"
+    assert flash.port.isEditable()
+    assert flash.flash_button.text() == "Flash Firmware"
+    assert flash.output.isReadOnly()
+    assert flash.output.lineWrapMode() == QPlainTextEdit.NoWrap
+    flash.wrap_lines.click()
+    assert flash.output.lineWrapMode() == QPlainTextEdit.WidgetWidth
+    serial = window.debug_tray.serial_tab
+    assert "115200" in serial.baud.currentText()
+    assert serial.port.isEditable()
+    assert serial.connect_button.text() == "Connect"
+    assert serial.output.isReadOnly()
+    assert serial.output.lineWrapMode() == QPlainTextEdit.NoWrap
+    serial.wrap_lines.click()
+    assert serial.output.lineWrapMode() == QPlainTextEdit.WidgetWidth
+    assert serial.wifi_button.text() == "Set Wi-Fi…"
+
+    assert window.debug_tray.output.lineWrapMode() == QPlainTextEdit.NoWrap
+    window.debug_tray.message_wrap.click()
+    assert window.debug_tray.output.lineWrapMode() == QPlainTextEdit.WidgetWidth
+    assert window.debug_tray.error_output.lineWrapMode() == QPlainTextEdit.NoWrap
+    window.debug_tray.error_wrap.click()
+    assert window.debug_tray.error_output.lineWrapMode() == QPlainTextEdit.WidgetWidth
+
+    wifi_dialog = WifiDialog(serial, on_save=lambda _ssid, _password: None)
+    assert wifi_dialog.password.echoMode() == QLineEdit.Password
+    assert wifi_dialog.password_toggle.toolTip() == "Show password"
+    wifi_dialog.password_toggle.click()
+    assert wifi_dialog.password.echoMode() == QLineEdit.Normal
+    assert wifi_dialog.password_toggle.toolTip() == "Hide password"
+    wifi_dialog.password_toggle.click()
+    assert wifi_dialog.password.echoMode() == QLineEdit.Password
+    assert window.debug_tray.close_button.text() == "×"
+    assert window.restart_action.text() == "Restart App…"
+
+    # Saying No must never spawn a process or close the current window.
+    with (
+        mock.patch(
+            "studio.ui.main_window.QMessageBox.question",
+            return_value=QMessageBox.No,
+        ) as question,
+        mock.patch("studio.ui.main_window.QProcess.startDetached") as start,
+    ):
+        window.restart_action.trigger()
+        assert question.call_count == 1
+        start.assert_not_called()
+
+    # Saying Yes launches a replacement before closing this process. Patch
+    # both edges so the smoke test proves the order without restarting itself.
+    with (
+        mock.patch(
+            "studio.ui.main_window.QMessageBox.question",
+            return_value=QMessageBox.Yes,
+        ),
+        mock.patch(
+            "studio.ui.main_window.QProcess.startDetached",
+            return_value=(True, 12345),
+        ) as start,
+        mock.patch.object(window, "close") as close,
+    ):
+        assert window.restart_app()
+        start.assert_called_once()
+        close.assert_called_once()
+
+    if window.debug_dock.isVisible():
+        window.debug_toggle.trigger()
+    assert not window.debug_dock.isVisible()
+    window.debug_toggle.trigger()
+    assert window.debug_dock.isVisible()
+    window.debug_toggle.trigger()
+    assert not window.debug_dock.isVisible()
+
+
 def check_diagnostics(window) -> None:
     """The report must never be the thing that breaks when something breaks."""
     from .diagnostics import text
@@ -151,7 +264,11 @@ def check_persistence(window) -> None:
 
     # Calibration, and its third step: workspace index and page key both have
     # to come back, so the workspace under test is one with several pages.
-    window.select_workspace(3)
+    calibration_index = next(
+        index for index, workspace in enumerate(window.workspaces)
+        if workspace.key == "calibration"
+    )
+    window.select_workspace(calibration_index)
     window.workspace.go_to("visual")
     window.zoom_in()
     window.set_theme("dark")
@@ -159,7 +276,9 @@ def check_persistence(window) -> None:
 
     saved = Settings(QSettings(path, QSettings.IniFormat))
     assert saved.get(keys.THEME) == "dark", saved.get(keys.THEME)
-    assert saved.get(keys.LAST_WORKSPACE) == 3, saved.get(keys.LAST_WORKSPACE)
+    assert saved.get(keys.LAST_WORKSPACE) == calibration_index, (
+        saved.get(keys.LAST_WORKSPACE)
+    )
     assert saved.get(keys.LAST_PAGE) == "visual", saved.get(keys.LAST_PAGE)
     assert saved.get(keys.ZOOM_INDEX) == DEFAULT_ZOOM_INDEX + 1, (
         saved.get(keys.ZOOM_INDEX)

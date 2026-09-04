@@ -38,6 +38,12 @@ class NavBar(QToolBar):
             self._group.addAction(action)
             self.addAction(action)
             self.actions_by_index.append(action)
+            # QSS has no `cursor` property — Qt cursors are only set through
+            # QWidget.setCursor(), so the actual QToolButton addAction()
+            # creates has to be fetched and given one directly.
+            button = self.widgetForAction(action)
+            if button is not None:
+                button.setCursor(Qt.PointingHandCursor)
 
         self.addWidget(spacer())
 

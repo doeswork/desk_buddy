@@ -1,10 +1,10 @@
-"""Model tests: the records themselves, with no broker involved.
+"""Model tests: JSON configuration and SQLite history, with no broker involved.
 
     python -m studio.models.tests.tests
 
-Everything here runs against a throwaway JSON file. What needs a real
-Mosquitto to mean anything — that a recorded credential actually connects —
-lives in `studio.services.network.tests.account_tests` instead.
+Everything here runs against throwaway storage. What needs a real Mosquitto to
+mean anything — that credentials connect and traffic is observed — lives in
+`studio.services.network.tests.account_tests` instead.
 """
 
 from __future__ import annotations
@@ -16,9 +16,13 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from ...storage.store import Store
-from ..calibrations import Calibration, Calibrations
-from ..mqtt_topics import TOPIC_PATTERN, default_topics, validate_topic
-from ..mqtt_users import STUDIO_NAME, MqttUser, Users
+from ..config.calibrations import Calibration, Calibrations
+from ..config.mqtt_topics import TOPIC_PATTERN, default_topics, validate_topic
+from ..config.mqtt_users import STUDIO_NAME, MqttUser, Users
+from ..config.robots import Robots
+from ..data.app_errors import AppErrors
+from ..data.database import Database, SCHEMA_VERSION
+from ..data.mqtt_messages import MqttMessages
 
 
 def fresh_users() -> tuple[Users, Path]:
@@ -184,6 +188,99 @@ def test_an_unreadable_file_does_not_stop_the_app() -> None:
     assert Users(Store("mqtt_users", directory=directory)).all() == []
 
 
+# ---- MQTT history --------------------------------------------------------
+
+def fresh_messages() -> MqttMessages:
+    directory = Path(tempfile.mkdtemp())
+    return MqttMessages(Database(directory / "studio.sqlite3"))
+
+
+def test_mqtt_messages_round_trip_raw_payloads() -> None:
+    messages = fresh_messages()
+    saved = messages.append(
+        "black/telemetry", b"\x00\xffcamera", qos=1, retained=True,
+        received_at="2026-09-03T12:34:56+00:00",
+    )
+
+    found = messages.recent(include_heartbeats=True)
+    assert found == [saved]
+    assert found[0].payload == b"\x00\xffcamera"
+    assert "8 bytes" in found[0].payload_text
+    assert found[0].qos == 1 and found[0].retained
+
+
+def test_heartbeats_are_stored_even_when_hidden_from_the_tray() -> None:
+    messages = fresh_messages()
+    messages.append("black/status", '{"sender":"firmware","log":"heartbeat"}')
+    normal = messages.append("black/status", '{"status":"completed"}')
+
+    assert messages.count() == 2
+    assert messages.recent() == [normal]
+    assert len(messages.recent(include_heartbeats=True)) == 2
+
+
+def test_mqtt_history_is_bounded_only_when_read_and_can_be_cleared() -> None:
+    messages = fresh_messages()
+    for number in range(5):
+        messages.append("test/topic", str(number))
+
+    assert [message.payload_text for message in messages.recent(2)] == ["3", "4"]
+    assert messages.count() == 5
+    messages.clear()
+    assert messages.count() == 0
+
+
+def test_database_starts_at_the_current_schema() -> None:
+    messages = fresh_messages()
+    with messages.database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+# ---- Application errors -------------------------------------------------
+
+def fresh_errors() -> AppErrors:
+    directory = Path(tempfile.mkdtemp())
+    return AppErrors(Database(directory / "studio.sqlite3"))
+
+
+def test_app_errors_round_trip_with_context() -> None:
+    errors = fresh_errors()
+    saved = errors.append(
+        "ValueError",
+        "bad angle",
+        "Traceback...\nValueError: bad angle\n",
+        source="thread:motion",
+        occurred_at="2026-09-03T12:34:56+00:00",
+    )
+
+    assert errors.recent() == [saved]
+    assert "thread:motion" in saved.heading
+    assert "ValueError: bad angle" in saved.display
+
+
+def test_app_error_records_a_real_traceback() -> None:
+    errors = fresh_errors()
+    try:
+        raise RuntimeError("camera unavailable")
+    except RuntimeError as exception:
+        saved = errors.record_exception(
+            type(exception), exception, exception.__traceback__
+        )
+
+    assert "RuntimeError: camera unavailable" in saved.traceback
+    assert errors.count() == 1
+
+
+def test_app_error_history_can_be_bounded_and_cleared() -> None:
+    errors = fresh_errors()
+    for number in range(4):
+        errors.append("Problem", str(number))
+
+    assert [error.message for error in errors.recent(2)] == ["2", "3"]
+    errors.clear()
+    assert errors.count() == 0
+
+
 def test_account_describes_its_own_reach() -> None:
     assert MqttUser("black", topics=("black/#",)).topics == ("black/#",)
     assert MqttUser("vision", topics=("#",)).full_access
@@ -212,6 +309,65 @@ def test_a_calibration_round_trips_and_replaces() -> None:
     assert len(store.all()) == 2
     store.clear("black")
     assert [c.robot for c in store.all()] == ["silver"]
+
+
+# ---- Robots ----------------------------------------------------------------
+
+def fresh_robots() -> tuple[Robots, Users, Path]:
+    directory = Path(tempfile.mkdtemp())
+    return (
+        Robots(Store("robots", directory=directory)),
+        Users(Store("mqtt_users", directory=directory)),
+        directory,
+    )
+
+
+def test_a_robot_must_be_an_existing_non_studio_account() -> None:
+    bots, users, _ = fresh_robots()
+
+    robot, problem = bots.add("ghost")
+    assert robot is None and "Create it on Network" in problem
+
+    users.ensure_studio()
+    robot, problem = bots.add(STUDIO_NAME)
+    assert robot is None and "not a robot" in problem
+
+    users.add("black")
+    robot, problem = bots.add("black", "Black Buddy")
+    assert robot is not None and not problem
+    assert robot.display_name == "Black Buddy"
+
+
+def test_a_robot_round_trips_and_falls_back_to_its_account_name() -> None:
+    bots, users, directory = fresh_robots()
+    users.add("black")
+    bots.add("black")
+
+    reloaded = Robots(Store("robots", directory=directory))
+    found = reloaded.find("black")
+    assert found is not None
+    assert found.display_name == "black", "an unlabeled robot shows its account name"
+
+
+def test_a_robot_cannot_be_marked_twice() -> None:
+    bots, users, _ = fresh_robots()
+    users.add("black")
+    bots.add("black")
+
+    robot, problem = bots.add("black")
+    assert robot is None and "already marked" in problem
+
+
+def test_unmarking_a_robot_leaves_its_account_alone() -> None:
+    bots, users, _ = fresh_robots()
+    users.add("black")
+    bots.add("black")
+
+    assert bots.remove("black") == ""
+    assert bots.find("black") is None
+    assert users.find("black") is not None, "unmarking must not touch the account"
+
+    assert "not marked" in bots.remove("black")
 
 
 def main() -> int:

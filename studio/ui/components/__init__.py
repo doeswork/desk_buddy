@@ -14,7 +14,9 @@ from .card import Card
 from .command_card import CommandCard
 from .column import Column
 from .context_bar import ContextBar, ContextButton
+from .debug_tray import DebugTray
 from .nav_bar import NavBar
+from .serial_monitor import SerialMonitor
 from .side_panel import SidePanel
 from .spacer import spacer
 
@@ -25,7 +27,9 @@ __all__ = [
     "Column",
     "ContextBar",
     "ContextButton",
+    "DebugTray",
     "NavBar",
+    "SerialMonitor",
     "Separator",
     "SidePanel",
     "spacer",

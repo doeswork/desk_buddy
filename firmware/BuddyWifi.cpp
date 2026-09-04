@@ -1,6 +1,7 @@
 #include "BuddyWifi.h"
 #include "WebServerForStartup.h"
 #include "FactoryReset.h"
+#include "SerialProvisioning.h"
 #include <WiFi.h>
 #include <LED.h>
 #include <Preferences.h>
@@ -94,6 +95,7 @@ void BuddyWifi::maintain() {
   while (WiFi.status() != WL_CONNECTED && millis() - start < TIMEOUT_MS) {
     // Keep the connection-reset gesture responsive while waiting for the station connection.
     FactoryReset::maintain();
+    SerialProvisioning::maintain();
     delay(10);
 
     unsigned long now = millis();

@@ -5,7 +5,7 @@ same reasoning as Add Account: a step in a task, not a place to browse into.
 
 Topics take effect as they are added or removed rather than behind a Save —
 each one is already a live edit to the ACL file (see
-`studio.services.network.accounts.add_topic` / `remove_topic`), so a separate
+`studio.models.config.mqtt_users.Users.add_topic` / `remove_topic`), so a separate
 save step would be a promise the page cannot actually keep: the account is
 already different the moment a topic is added, whether or not the user then
 leaves by Cancel. Done is offered because leaving needs a way to leave, not
@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.mqtt_topics import TOPIC_RULE, validate_topic
-from ....models.mqtt_users import users
+from ....models.config.mqtt_topics import TOPIC_RULE, validate_topic
+from ....models.config.mqtt_users import users
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -36,7 +36,7 @@ from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 
 class EditAccountPage(Page):
     key = "edit_account"
-    label = "Edit Account"
+    label = "Edit User"
 
     def __init__(self, workspace=None) -> None:
         super().__init__(workspace)
@@ -49,11 +49,11 @@ class EditAccountPage(Page):
 
     @property
     def title(self) -> str:
-        return f"Edit {self._name}" if self._name else "Edit Account"
+        return f"Edit {self._name}" if self._name else "Edit User"
 
     @property
     def subtitle(self) -> str:
-        return "Add or remove the topics this account may publish and subscribe to."
+        return "Add or remove the topics this user may publish and subscribe to."
 
     # ---- body ------------------------------------------------------------
     def build_page(self) -> QWidget:
@@ -63,7 +63,7 @@ class EditAccountPage(Page):
             # — another tab of the same Studio, say. Nothing to edit; back out
             # rather than show a form for something that no longer exists.
             return Column(Card(
-                "This account no longer exists",
+                "This user no longer exists",
                 "It may have been removed. Go back to see who is left.",
             ))
 
@@ -159,7 +159,7 @@ class TopicForm(QWidget):
             layout.addWidget(TopicList(topics, on_remove))
         else:
             empty = QLabel(
-                "No topics yet. This account can connect but cannot publish "
+                "No topics yet. This user can connect but cannot publish "
                 "or subscribe anywhere until one is added below."
             )
             empty.setObjectName("CardBody")

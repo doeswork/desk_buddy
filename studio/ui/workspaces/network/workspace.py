@@ -8,9 +8,9 @@ wants to know whether the broker is up.
 
 from __future__ import annotations
 
-from ....models.mqtt_users import users
+from ....models.config.mqtt_users import users
 from ....services.network import broker_commands as commands
-from ....services.network import report
+from ....services.network import lan_address, report
 from ....services.network import sync_accounts
 from ...components import ActionSpec
 from ..base import Workspace
@@ -18,6 +18,8 @@ from .accounts import AccountsPage
 from .add_account import AddAccountPage
 from .broker import BrokerPage
 from .edit_account import EditAccountPage
+from .robots import RobotsPage
+from .test_message import TestMessagePage
 from .topics import TopicsPage
 
 
@@ -28,13 +30,15 @@ class NetworkWorkspace(Workspace):
     page_classes = [
         BrokerPage,
         AccountsPage,
+        RobotsPage,
         TopicsPage,
+        TestMessagePage,
         AddAccountPage,
         EditAccountPage,
     ]
     # Add Account and Edit Account are reached from buttons on Accounts, not
     # from the panel: both are a step in a task, not a place to go.
-    link_keys = ["broker", "accounts", "topics"]
+    link_keys = ["broker", "accounts", "robots", "topics", "test_message"]
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,6 +47,34 @@ class NetworkWorkspace(Workspace):
         # Set when applying records to the broker fails, so the page can say
         # so rather than looking as though the change took.
         self.account_problem = ""
+        # Off by default: a robot on the network cannot reach 127.0.0.1 on
+        # this machine, so exposing the broker beyond localhost is a
+        # deliberate choice the user makes on the Broker page, not a
+        # default — see services/network/broker/commands.py's DEFAULT_HOST.
+        self._bind_lan = False
+        # The host the *running* broker was actually started on — separate
+        # from the toggle above, which is next start's intent. A toggle
+        # flipped after the broker is already up must not claim a host it
+        # is not really listening on.
+        self._bound_host = ""
+
+    # ---- LAN bind choice ---------------------------------------------------
+    @property
+    def bind_lan(self) -> bool:
+        return self._bind_lan
+
+    def set_bind_lan(self, value: bool) -> None:
+        if value == self._bind_lan:
+            return
+        self._bind_lan = value
+        self.refresh()
+
+    def broker_host(self) -> str:
+        """The host the running broker actually listens on, or "" if it is
+        not running. What anything that wants to *reach* the broker — the
+        MQTT provisioning dialog, say — should read, instead of assuming a
+        host from the toggle above."""
+        return self._bound_host if self.running() else ""
 
     # ---- shared state ----------------------------------------------------
     def broker(self):
@@ -135,6 +167,20 @@ class NetworkWorkspace(Workspace):
     def restart_broker(self) -> None:
         self._run(commands.restart)
 
+    def _chosen_host(self) -> str:
+        """The host to start on, resolving the toggle to an address.
+
+        Falls back to localhost-only if the LAN toggle is on but no LAN
+        address could be found (no network) — the broker still starts and
+        is still reachable from this machine, just not from a robot, which
+        is a better failure than not starting at all.
+        """
+        if self._bind_lan:
+            address = lan_address()
+            if address:
+                return address
+        return commands.DEFAULT_HOST
+
     def _run(self, command) -> None:
         """Run a broker command, then show whatever it says.
 
@@ -146,6 +192,13 @@ class NetworkWorkspace(Workspace):
         it was started from config files that may be older than them, or
         absent entirely on a machine where the broker directory was cleared.
         """
-        self.last_result = command()
+        host = self._chosen_host()
+        # start/restart take (port, host); stop takes neither. Calling every
+        # command the same way would pass stop() a host it does not accept.
+        self.last_result = (
+            command(host=host) if command in (commands.start, commands.restart)
+            else command()
+        )
+        self._bound_host = host if self.last_result else ""
         self.apply_to_broker()
         self.refresh()
