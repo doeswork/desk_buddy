@@ -14,14 +14,13 @@ from ...components import ActionSpec, Column, Separator, SidePanel
 from ..base import Page
 from .pipeline import PipelineCallbacks, capture_card, worker_controls_card
 from .results import operation_card, preview_card
-from .services import ServiceCallbacks, services_tabs
+from .services import ServiceCallbacks, services_dashboard
 from .state import ProviderOption, VisionPageState, provider_options, selected_option
 from .training import TrainingCallbacks, model_builder_card, review_card, trainer_runtime_card
 from .widgets import EventSink
 from .access_widgets import (
     AccessCallbacks,
     service_access_card,
-    vision_access_overview,
 )
 
 
@@ -143,28 +142,29 @@ class VisionPage(Page):
         tabs.setObjectName("VisionWorkspace")
         tabs.addTab(
             Column(
-                vision_access_overview(
-                    access_states.values(), access_callbacks,
-                    setup_enabled=self.service.access.can_manage_broker,
-                ),
-                service_access_card(controller_access, controller_state, access_callbacks),
-                services_tabs(
-                detector_options=detector_options,
-                depth_options=depth_options,
-                detector_candidate=detector_candidate,
-                depth_candidate=depth_candidate,
-                managed_states=self.state.managed_services,
-                manifests=manifests,
-                learned_models=models,
-                mlp_candidate=str(self.state.managed_services.get("mlp", {}).get("candidate_model_id") or ""),
-                external_workers=worker_controls_card(self.service.launcher, external_callbacks),
-                callbacks=service_callbacks,
-                access_callbacks=access_callbacks,
-                detector_access=detector_access,
-                depth_access=depth_access,
-                mlp_access=mlp_access,
-                current_tab=self.state.service_tab,
-                tab_changed=lambda index: setattr(self.state, "service_tab", index),
+                services_dashboard(
+                    detector_options=detector_options,
+                    depth_options=depth_options,
+                    detector_candidate=detector_candidate,
+                    depth_candidate=depth_candidate,
+                    managed_states=self.state.managed_services,
+                    manifests=manifests,
+                    learned_models=models,
+                    mlp_candidate=str(self.state.managed_services.get("mlp", {}).get("candidate_model_id") or ""),
+                    external_workers=worker_controls_card(self.service.launcher, external_callbacks),
+                    external_worker_count=len(self.service.launcher.workers),
+                    callbacks=service_callbacks,
+                    access_callbacks=access_callbacks,
+                    controller_access=(controller_access, controller_state),
+                    detector_access=detector_access,
+                    depth_access=depth_access,
+                    mlp_access=mlp_access,
+                    access_states=tuple(access_states.values()),
+                    controller_connected=self.service.connected,
+                    broker_running=broker_commands.is_ours(),
+                    setup_access_enabled=self.service.access.can_manage_broker,
+                    expanded_service=self.state.expanded_service,
+                    expansion_changed=lambda value: setattr(self.state, "expanded_service", value),
                 ),
             ),
             "Services",

@@ -64,6 +64,7 @@ class ManagedServiceState:
     active_model_id: str = ""
     active_worker_id: str = ""
     installed: bool = False
+    active_installed: bool = False
     runtime_installed: bool = False
     process_state: str = "stopped"
     mqtt_state: str = "offline"
@@ -663,8 +664,13 @@ class VisionServiceManager(QObject):
         if family in {"detection", "depth"}:
             manifest = self.manifest(state.candidate_model_id, family)
             state.installed = bool(runtime and manifest and self._model_installed(manifest))
+            active_manifest = self.manifest(state.active_model_id, family)
+            state.active_installed = bool(
+                runtime and active_manifest and self._model_installed(active_manifest)
+            )
         else:
             state.installed = runtime
+            state.active_installed = runtime
 
     def _model_installed(self, manifest: ProviderManifestV1) -> bool:
         marker = self._marker_path(manifest)

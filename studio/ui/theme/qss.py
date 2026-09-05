@@ -157,6 +157,22 @@ QFrame#CardMuted {{
     border-radius: {RADIUS};
 }}
 
+/* Compact service rows reveal their heavier configuration only on demand. */
+QFrame#DisclosureSummary {{
+    background: {p.panel};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+}}
+QWidget#DisclosureDetails {{
+    background: transparent;
+    border: none;
+    padding-top: {px(6)};
+}}
+QLabel#ServiceName {{ font-size: {px(13)}; font-weight: 600; color: {p.text}; }}
+QLabel#ServiceFieldLabel {{ font-size: {px(10)}; color: {p.muted}; }}
+QLabel#ServiceFieldValue {{ font-size: {px(12)}; color: {p.text}; }}
+QPushButton#DisclosureToggle {{ min-width: {px(58)}; }}
+
 /* Labels must not paint their own background over cards. */
 QLabel {{ background: transparent; }}
 QLabel#Title {{ font-size: {px(18)}; font-weight: 600; color: {p.text}; }}

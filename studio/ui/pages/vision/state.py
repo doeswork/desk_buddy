@@ -43,7 +43,7 @@ class VisionPageState:
     managed_services: dict[str, dict[str, Any]] = field(default_factory=dict)
     health: dict[str, Any] = field(default_factory=dict)
     top_tab: int = 0
-    service_tab: int = 0
+    expanded_service: str = ""
 
 
 def provider_options(

@@ -52,10 +52,12 @@ Anything V2 Small. The ensemble OWLv2 model is also cataloged on its own worker
 route.
 
 The page is organized as Services, Capture, Results, and Model Builder. Services
-contains separate Detection, Depth, and Custom MLP tabs. A built-in or imported
-provider is only a candidate until **Use & Start** sees an exact retained MQTT
-status for its model ID, immutable revision, and capability. Switching failure
-stops the candidate and restores the previous local service when possible.
+shows Detection, Depth, and Custom MLP together as compact status rows. Model,
+runtime, logs, configuration, and MQTT credentials stay hidden until one row is
+expanded; opening a row closes the previous one. A built-in or imported provider
+is only a candidate until **Use & Start** sees an exact retained MQTT status for
+its model ID, immutable revision, and capability. Switching failure stops the
+candidate and restores the previous local service when possible.
 
 **Download** creates the family virtual environment and pinned model snapshot.
 **Repair** rebuilds them through staging, **Remove Download** removes only that

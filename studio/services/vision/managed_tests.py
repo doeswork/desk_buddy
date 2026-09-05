@@ -662,6 +662,16 @@ class ManagedLifecycleTests(unittest.TestCase):
             self.assertTrue(runtime.exists())
             self.assertFalse(manager.state("detection").installed)
 
+    def test_active_installation_is_independent_of_a_different_candidate(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            manager = self.manager(Path(temporary))
+            self.mark_installed(manager, "owlv2-base")
+            self.assertTrue(manager.state("detection").active_installed)
+            manager.set_candidate("detection", "owlv2-base-ensemble")
+            state = manager.state("detection")
+            self.assertTrue(state.active_installed)
+            self.assertFalse(state.installed)
+
     def test_start_with_studio_is_persistent(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary)

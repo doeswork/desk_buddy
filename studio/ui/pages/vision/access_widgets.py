@@ -45,24 +45,6 @@ def vision_access_card(
     return Column(card, *sections)
 
 
-def vision_access_overview(
-    states: Iterable[ManagedCredentialState], callbacks: AccessCallbacks, *, setup_enabled: bool = True
-) -> QWidget:
-    values = tuple(states)
-    ready = sum(item.ready for item in values)
-    errors = [f"{item.role}: {item.error}" for item in values if item.error]
-    detail = f"{ready} of {len(values)} managed identities ready on 127.0.0.1."
-    if errors:
-        detail += "\n" + "\n".join(errors)
-    card = Card("Vision MQTT Access", detail, muted=ready != len(values))
-    setup = QPushButton("Set Up/Repair All")
-    setup.setObjectName("VisionAccessSetupAll")
-    setup.setEnabled(setup_enabled)
-    setup.clicked.connect(callbacks.setup_all)
-    card.layout().addWidget(setup)
-    return card
-
-
 def service_access_card(
     identity: VisionAccessIdentity,
     state: ManagedCredentialState,
