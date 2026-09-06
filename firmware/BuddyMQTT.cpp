@@ -3,6 +3,8 @@
 #include "ActionController.h"
 #include "ActionOTA.h"
 #include "Heartbeat.h"
+#include "SerialHeartbeat.h"
+#include "SerialProvisioning.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // secure TCP
 #include <PubSubClient.h>
@@ -32,15 +34,25 @@ namespace {
   String USER;
   String PASS;
   String CLIENT_ID;
+  bool USE_TLS = true;
   String STATUS_TOPIC;       // Built from USER/test
   String HEARTBEAT_TOPIC;    // Built from USER/HEARTBEAT
 
 
-  WiFiClientSecure netClient;     // TLS client
-  PubSubClient     mqttClient(netClient);
+  // Both transports exist; ensureInited() points PubSubClient at whichever
+  // the saved `tls` preference calls for. A TLS client against a plaintext
+  // broker fails the TCP handshake outright and reports rc=-2, which reads
+  // as "broker unreachable" rather than "wrong transport" — so Studio's own
+  // local broker, which has no certificates to offer, needs the plain one.
+  WiFiClientSecure tlsClient;     // TLS transport (cloud broker)
+  WiFiClient       plainClient;   // Plaintext transport (local broker)
+  PubSubClient     mqttClient(tlsClient);
 
   bool inited = false;
   String receivedMessage;
+
+  // Action id of the command currently executing; "" when idle.
+  String activeActionId;
 
   // Workflow context — persists until overwritten or cleared
   int currentWorkflowId      = -1;
@@ -51,11 +63,8 @@ namespace {
     if (currentWorkflowEventId >= 0) doc["workflow_event_id"] = currentWorkflowEventId;
   }
 
-  constexpr unsigned long PUBLISH_INTERVAL = 3000;
   constexpr unsigned long RECONNECT_INTERVAL_MS = 5000;
   constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 2;
-  unsigned long lastPublish = 0;
-  int publishCount = 0;
   constexpr unsigned long OTA_ENFORCE_INTERVAL_MS = 60000;
 
   // Forward declarations
@@ -105,6 +114,7 @@ namespace {
       USER = prefs.getString("user", DEFAULT_USER);
       PASS = prefs.getString("password", DEFAULT_PASS);
       CLIENT_ID = prefs.getString("client_id", DEFAULT_CLIENT_ID);
+      USE_TLS = prefs.getBool("tls", true);
       prefs.end();
     } else {
       // Use defaults if Preferences not available
@@ -113,6 +123,7 @@ namespace {
       USER = DEFAULT_USER;
       PASS = DEFAULT_PASS;
       CLIENT_ID = DEFAULT_CLIENT_ID;
+      USE_TLS = true;
     }
 
     // Build topics from username
@@ -124,12 +135,19 @@ namespace {
     Serial.println("  Port: " + String(PORT));
     Serial.println("  User: " + USER);
     Serial.println("  Client ID: " + CLIENT_ID);
+    Serial.println("  TLS: " + String(USE_TLS ? "yes" : "no"));
     Serial.println("  Status Topic: " + STATUS_TOPIC);
     Serial.println("  Heartbeat Topic: " + HEARTBEAT_TOPIC);
 
-    // TODO: load cert from Preferences/web UI for proper TLS verification
-    netClient.setInsecure();
-    netClient.setTimeout(2000);
+    if (USE_TLS) {
+      // TODO: load cert from Preferences/web UI for proper TLS verification
+      tlsClient.setInsecure();
+      tlsClient.setTimeout(2000);
+      mqttClient.setClient(tlsClient);
+    } else {
+      plainClient.setTimeout(2000);
+      mqttClient.setClient(plainClient);
+    }
     mqttClient.setKeepAlive(30);
 
     // MQTT setup
@@ -155,8 +173,6 @@ namespace {
     String msg;
     msg.reserve(length);
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-
-    if (msg.startsWith("{\"count\":")) return;
 
     StaticJsonDocument<128> doc;
     if (deserializeJson(doc, msg) == DeserializationError::Ok) {
@@ -188,7 +204,10 @@ void BuddyMQTT::maintain() {
     }
 
     sentReadyMessage = false;  // Reset flag on disconnect
-    Serial.print("Connecting MQTT (TLS)… ");
+    // Says which transport is actually in use. Hardcoding "TLS" here once
+    // sent hours chasing a transport switch that had in fact worked — the
+    // line claimed TLS while the settings dump above said "TLS: no".
+    Serial.print(USE_TLS ? "Connecting MQTT (TLS)… " : "Connecting MQTT… ");
     LED::Blink(0.5);
 
     mqttClient.setCallback(messageCallback);
@@ -202,8 +221,22 @@ void BuddyMQTT::maintain() {
       mqttClient.subscribe(STATUS_TOPIC.c_str());
       Heartbeat::send(true);
     } else {
+      const int state = mqttClient.state();
       Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());   // -4 timeout, 5 not authorized, etc.
+      Serial.print(state);   // -4 timeout, 5 not authorized, etc.
+      // rc=-2 is a socket that never opened, which says nothing about MQTT
+      // itself — the causes are all one layer down, and are worth naming
+      // because the bare number reads as "the broker rejected us".
+      if (state == -2) {
+        Serial.print(" (no TCP connection to ");
+        Serial.print(SERVER);
+        Serial.print(':');
+        Serial.print(PORT);
+        Serial.print(USE_TLS ? " — wrong address, firewall, or the broker is "
+                               "plaintext while this is set to TLS)"
+                             : " — wrong address, firewall, or the broker is "
+                               "TLS while this is set to plaintext)");
+      }
       Serial.print("; retrying in ");
       Serial.print(RECONNECT_INTERVAL_MS / 1000);
       Serial.println("s (hold BOOT 3s to reset WiFi/MQTT)");
@@ -232,21 +265,6 @@ void BuddyMQTT::maintain() {
   //     }
   //   }
   // }
-
-  if (Heartbeat::isEnabled()) {
-    unsigned long now = millis();
-    if (now - lastPublish >= PUBLISH_INTERVAL) {
-      lastPublish = now;
-      ++publishCount;
-      String payload = String("{\"count\":") + publishCount +
-                       ",\"time\":\"" + getTimestamp() + "\"}";
-      if (publishInternal(STATUS_TOPIC.c_str(), payload)) {
-        Serial.println("Published → " + payload);
-      } else {
-        Serial.println("Publish failed");
-      }
-    }
-  }
 
   // Send "ready to play" message once per connection session
   if (mqttClient.connected() && !sentReadyMessage) {
@@ -293,13 +311,17 @@ void BuddyMQTT::listen() {
 
   if (Heartbeat::isEnabled()) {
     while (mqttClient.connected() && receivedMessage == "") {
+      SerialHeartbeat::maintain();
       BuddyWifi::maintain();
+      SerialProvisioning::maintain();
       mqttClient.loop();
       if (Heartbeat::shouldSend()) { Heartbeat::send(true); Heartbeat::markSent(); }
     }
   } else {
     while (mqttClient.connected() && receivedMessage == "") {
+      SerialHeartbeat::maintain();
       BuddyWifi::maintain();
+      SerialProvisioning::maintain();
       mqttClient.loop();
       delay(10);
     }
@@ -715,6 +737,37 @@ void BuddyMQTT::sendDebug(const String& component, const String& message) {
   serializeJson(doc, payload);
 
   publishInternal(STATUS_TOPIC.c_str(), payload);
+}
+
+void BuddyMQTT::sendProgress(const String& actionId, const String& type, const String& detailsJson) {
+  ensureInited();
+  if (!mqttClient.connected()) return;
+
+  DynamicJsonDocument doc(1024);
+  doc["sender"]    = "firmware";
+  doc["status"]    = "progress";
+  if (actionId.length()) doc["action_id"] = actionId;
+  if (type.length())     doc["type"] = type;
+  if (detailsJson.length()) doc["progress"] = serialized(detailsJson);
+  doc["uptime_ms"]  = millis();
+  doc["free_heap"]  = ESP.getFreeHeap();
+  injectWorkflow(doc);
+
+  String out;
+  serializeJson(doc, out);
+  publishInternal(STATUS_TOPIC.c_str(), out);
+
+  // The caller is inside a multi-minute blocking action, so listen() is not
+  // pumping the client. Service it here or the broker drops us mid-calibration.
+  mqttClient.loop();
+}
+
+const String& BuddyMQTT::currentActionId() {
+  return activeActionId;
+}
+
+void BuddyMQTT::setCurrentActionId(const String& actionId) {
+  activeActionId = actionId;
 }
 
 void BuddyMQTT::setResetReason(const char* reason, uint32_t freeHeap, uint32_t minFreeHeap) {

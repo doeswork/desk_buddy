@@ -15,4 +15,5 @@ ToDo.md
 *.crt
 *.cert
 *.sqlite3
-*.db
+*.db__pycache__/
+*.pyc

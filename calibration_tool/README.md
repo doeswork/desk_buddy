@@ -5,6 +5,7 @@ Launch from the repository root:
 ```bash
 python3 -m pip install -r calibration_tool/requirements.txt
 python3 calibration_tool/app.py
+# /usr/bin/python3 calibration_tool/app.py
 ```
 
 The wizard stores local MQTT settings in `calibration_tool/.env` and captures
@@ -32,7 +33,7 @@ The interface is organized around the calibration flow:
   preview to the controller pane's current width without cropping.
 
 Use the `−` and `+` buttons in the header to zoom the interface from 75% to
-150%, or use `Ctrl+-`, `Ctrl++`, and `Ctrl+0`. The controller scrolls when the
+300%, or use `Ctrl+-`, `Ctrl++`, and `Ctrl+0`. The controller scrolls when the
 window is compact. The in-app **Maximize** button also works on WSL window
 managers that do not expose Tk's native maximize state.
 

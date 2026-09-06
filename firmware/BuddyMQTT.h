@@ -34,6 +34,16 @@ namespace BuddyMQTT {
   // Debug message publishing
   void sendDebug(const String& component, const String& message);
 
+  // Progress telemetry for long blocking actions (base rotation calibration).
+  // A blocking action starves listen()/maintain(), so this also pumps the MQTT
+  // client to keep the session alive across a multi-minute run.
+  void sendProgress(const String& actionId, const String& type, const String& detailsJson);
+
+  // Action id of the command currently being executed, or "" when idle. Set by
+  // ActionController::dispatch so deep code can attribute its own telemetry.
+  const String& currentActionId();
+  void setCurrentActionId(const String& actionId);
+
   // Reset diagnostics - call from setup() before maintain()
   void setResetReason(const char* reason, uint32_t freeHeap, uint32_t minFreeHeap);
 }

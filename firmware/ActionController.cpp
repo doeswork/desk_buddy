@@ -1,48 +1,13 @@
 // ActionController.cpp
+//
+// Parses the inbound MQTT envelope and hands the action to ActionRouter, which
+// owns the action name -> handler mapping. Reply publishing is driven by each
+// route's declared ReplyStyle.
 #include "ActionController.h"
-#include "ActionCalibrate.h"
-#include "ActionPhoto.h"
-#include "ActionGripper.h"
-#include "ActionBaseRotate.h"
-#include "ActionServo.h"
-#include "ActionInverseKinematics.h"
-#include "ActionStencilCalibrate.h"
-#include "ActionPerch.h"
-#include "ActionOTA.h"
+#include "ActionRouter.h"
 #include "BuddyMQTT.h"
 #include <ArduinoJson.h>
 #include <Arduino.h>
-
-enum class ActionType {
-    Calibrate,
-    CalibrationValues,
-    Photo,
-    Gripper,
-    BaseRotate,
-    Servo,
-    ControlIK,
-    StencilCalibrate,
-    Perch,
-    OTAUpdate,
-    Unknown
-};
-
-static ActionType parseAction(const char* act) {
-    if      (strcmp(act, "gripper")     == 0) return ActionType::Gripper;
-    else if (strcmp(act, "baseRotate")  == 0) return ActionType::BaseRotate;
-    else if (strcmp(act, "servo")       == 0) return ActionType::Servo;
-    else if (strcmp(act, "controlik")   == 0) return ActionType::ControlIK;
-    else if (strcmp(act, "stencilCalibrate") == 0) return ActionType::StencilCalibrate;
-    else if (strcmp(act, "perch")       == 0) return ActionType::Perch;
-    else if (strcmp(act, "calibrate") == 0) return ActionType::Calibrate;
-    else if (strcmp(act, "calibrationvalues") == 0) return ActionType::CalibrationValues;
-    else if (strcmp(act, "photo") == 0) return ActionType::Photo;
-    else if (strcmp(act, "detect_object") == 0) return ActionType::Photo;
-    else if (strcmp(act, "detect_color") == 0) return ActionType::Photo;
-    else if (strcmp(act, "calibrate_depth") == 0) return ActionType::Photo;
-    else if (strcmp(act, "ota_update") == 0) return ActionType::OTAUpdate;
-    else                                      return ActionType::Unknown;
-}
 
 void ActionController::dispatch(const String& message) {
     DynamicJsonDocument doc(512);
@@ -78,21 +43,23 @@ void ActionController::dispatch(const String& message) {
         Serial.println(message);
         return;
     }
+
+    const ActionRouter::Route* route = ActionRouter::find(act);
+    if (!route) {
+        Serial.print("[Unknown Action] ");
+        Serial.println(message);
+        return;
+    }
+
     String actionName = act;
-    ActionType type = parseAction(act);
-    bool isPhotoAction = (type == ActionType::Photo);
-    bool isCalibrateAction = (type == ActionType::Calibrate);
     const char* calibrationTypeField = doc["calibration_type"].as<const char*>();
     String actionType;
-    if (isPhotoAction) {
-        actionType = actionName;
-    } else if (isCalibrateAction && calibrationTypeField && calibrationTypeField[0]) {
+    if (route->typeFromCalibrationField && calibrationTypeField && calibrationTypeField[0]) {
         actionType = calibrationTypeField;
-    } else if (type == ActionType::CalibrationValues) {
+    } else if (route->typeFromActionName) {
         actionType = actionName;
-    } else {
-        actionType = "";
     }
+
     JsonVariantConst phrase = doc["phrase"];
 
     JsonVariantConst useModelRaw = doc["use_model"];
@@ -102,87 +69,48 @@ void ActionController::dispatch(const String& message) {
     String useModelJson;
     if (!useModelRaw.isNull()) {
         serializeJson(useModelRaw, useModelJson);
-    }
-
-    if (!useModelRaw.isNull()) {
         Serial.printf("[ActionController] use_model found in doc, raw value: %s\n", useModelJson.c_str());
     } else {
         Serial.println("[ActionController] use_model NOT found in doc");
     }
 
     // publish in_progress for known actions
-    if (type != ActionType::Unknown && actionId.length()) {
+    if (actionId.length()) {
         BuddyMQTT::sendInProgress(actionId, actionType, phrase, nullptr, -1, useModelJson);
     }
 
-    // dispatch and then send completed
-    switch (type) {
-      case ActionType::Gripper:
-        {
-          bool success = ActionGripper::run(message);
-          BuddyMQTT::sendCompleted(actionId, "", success ? "completed" : "failed");
-        }
+    ActionRouter::Context ctx{message, actionId, actionType, phrase, useModelJson};
+    String detailsJson;
+    // Long blocking handlers publish their own progress telemetry and need to
+    // know which action they are running under.
+    BuddyMQTT::setCurrentActionId(actionId);
+    bool ok = ActionRouter::run(*route, ctx, detailsJson);
+    BuddyMQTT::setCurrentActionId("");
+    const char* status = ok ? "completed" : "failed";
+
+    switch (route->reply) {
+      case ActionRouter::ReplyStyle::Completed:
+        BuddyMQTT::sendCompleted(actionId, "", status, phrase);
         break;
 
-      case ActionType::BaseRotate:
-        {
-          String jsonOut;
-          bool ok = ActionBaseRotate::run(message, jsonOut);
-          BuddyMQTT::sendCompletedDetails(actionId, "base_rotation", jsonOut, "", ok ? "completed" : "failed", phrase);
-        }
+      case ActionRouter::ReplyStyle::CompletedNoPhrase:
+        BuddyMQTT::sendCompleted(actionId, "", status);
         break;
 
-      case ActionType::Servo:
-        {
-          bool ok = ActionServo::run(message);
-          BuddyMQTT::sendCompleted(actionId, "", ok ? "completed" : "failed", phrase);
-        }
+      case ActionRouter::ReplyStyle::CompletedNamed:
+        BuddyMQTT::sendCompleted(actionId, route->replyLabel, status);
         break;
 
-      case ActionType::ControlIK:
-        {
-          bool ok = ActionInverseKinematics::run(message);
-          BuddyMQTT::sendCompleted(actionId, "", ok ? "completed" : "failed", phrase);
-        }
+      case ActionRouter::ReplyStyle::CompletedDetails:
+        BuddyMQTT::sendCompletedDetails(actionId, route->replyLabel, detailsJson, "", status, phrase);
         break;
 
-      case ActionType::StencilCalibrate:
-        {
-          String jsonOut;
-          bool ok = ActionStencilCalibrate::run(message, jsonOut);
-          BuddyMQTT::sendCompletedDetails(actionId, "stencil_calibration", jsonOut, "", ok ? "completed" : "failed", phrase);
-        }
-        break;
-
-      case ActionType::Perch:
-        ActionPerch::run(message);
-        BuddyMQTT::sendCompleted(actionId);
-        break;
-
-      case ActionType::Calibrate:
-        ActionCalibrate::run(message);
-        break;
-
-      case ActionType::CalibrationValues:
-        BuddyMQTT::sendCalibrationValues(actionId);
-        break;
-
-      case ActionType::Photo:
-        ActionPhoto::run(message, -1);
+      case ActionRouter::ReplyStyle::PhotoInProgress:
         BuddyMQTT::sendInProgress(actionId, actionType, phrase, "sent", -1, useModelJson);
         break;
 
-      case ActionType::OTAUpdate:
-        {
-          bool success = ActionOTA::run(message);
-          BuddyMQTT::sendCompleted(actionId, "ota_update", success ? "completed" : "failed");
-          // Note: If successful, ESP32 will reboot and won't reach here
-        }
-        break;
-
-      default:
-        Serial.print("[Unknown Action] ");
-        Serial.println(message);
+      case ActionRouter::ReplyStyle::HandlerOwned:
+      case ActionRouter::ReplyStyle::None:
         break;
     }
 }

@@ -3,6 +3,8 @@
 #include "BuddyMQTT.h"
 #include "ActionServo.h"
 #include "FactoryReset.h"
+#include "SerialHeartbeat.h"
+#include "SerialProvisioning.h"
 #include <LED.h>
 #include <esp_system.h>
 #include "soc/rtc_cntl_reg.h"
@@ -78,6 +80,8 @@ void setup() {
 }
 
 void loop() {
+  SerialHeartbeat::maintain();  // "the board is alive", independent of Wi-Fi/MQTT
+  SerialProvisioning::maintain();
   BuddyWifi::maintain();  // keep Wi-Fi alive
   BuddyMQTT::maintain();  // bounded connection attempt with retry backoff
   BuddyMQTT::listen();    // blocking until MQTT message arrives
