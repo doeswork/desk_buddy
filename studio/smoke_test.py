@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,22 +18,24 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPlainTextEd
 from .storage import keys
 from .storage.settings import Settings
 from .ui.components import ActionSpec
-from .ui.components.serial_monitor import WifiDialog
+from .ui.components.serial_monitor import MqttDialog, WifiDialog
 from .ui.main_window import MainWindow
 from .ui.menus.view import DEFAULT_ZOOM_INDEX
 
 
 def main() -> int:
     app = QApplication([])
+    # Studio no longer starts a broker at launch — it uses the machine's —
+    # so the only thing to assert about startup is that it touches nothing.
     with (
         mock.patch(
-            "studio.ui.workspaces.network.workspace.NetworkWorkspace.start_on_startup"
-        ) as start_broker,
+            "studio.services.network.broker.system.create_account"
+        ) as create_account,
         mock.patch("studio.ui.main_window.preferences") as preferences,
     ):
         preferences.return_value.mqtt_broker_auto_start = True
         window = MainWindow()
-    start_broker.assert_called_once()
+    create_account.assert_not_called()
     window.show()
 
     assert window.windowTitle() == "Desk Buddy Studio"
@@ -203,12 +206,25 @@ def check_debug_tray(window) -> None:
 
     wifi_dialog = WifiDialog(serial, on_save=lambda _ssid, _password: None)
     assert wifi_dialog.password.echoMode() == QLineEdit.Password
+    assert wifi_dialog.password_toggle.text() == ""
+    assert wifi_dialog.password_toggle.cursor().shape() == Qt.PointingHandCursor
     assert wifi_dialog.password_toggle.toolTip() == "Show password"
     wifi_dialog.password_toggle.click()
     assert wifi_dialog.password.echoMode() == QLineEdit.Normal
     assert wifi_dialog.password_toggle.toolTip() == "Hide password"
     wifi_dialog.password_toggle.click()
     assert wifi_dialog.password.echoMode() == QLineEdit.Password
+
+    mqtt_dialog = MqttDialog(
+        serial,
+        accounts=[SimpleNamespace(name="robot-1", password="secret")],
+        broker_host="192.168.1.2",
+        broker_port=1883,
+        on_save=lambda *_args: None,
+    )
+    assert mqtt_dialog.password_toggle.isEnabled()
+    mqtt_dialog.password_toggle.click()
+    assert mqtt_dialog.password.echoMode() == QLineEdit.Normal
     assert window.debug_tray.close_button.text() == "×"
     assert window.restart_action.text() == "Restart App…"
     assert window.preferences_action.text() == "Preferences…"

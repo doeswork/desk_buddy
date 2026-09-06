@@ -5,7 +5,8 @@ history for the debug tray — it never sends anything. This is the other half:
 one shared connection any part of Studio can use to publish a command and
 wait for a specific reply, without opening a socket of its own.
 
-Studio connects as itself (`users().ensure_studio()`, full topic access) the
+Studio connects with the account for whichever broker is in use — its
+own record for a managed broker, the recorded system account otherwise — the
 same way the recorder does, and follows the broker the same way — reconcile()
 connects or disconnects to match whether Studio's own broker is up.
 """
@@ -18,8 +19,7 @@ from collections import defaultdict
 from threading import Lock
 from typing import Callable
 
-from ....models.config.mqtt_users import users
-from ..broker import commands
+from ..broker.finder import studio_credentials, studio_endpoint
 
 Callback = Callable[[str, dict], None]
 
@@ -36,6 +36,7 @@ class MqttClient:
         # a set: callbacks are usually bound methods/closures, which are not
         # hashable in a way that would dedupe usefully anyway.
         self._subscribers: dict[str, list[Callback]] = defaultdict(list)
+        self._host = ""
 
     @property
     def status(self) -> str:
@@ -47,49 +48,63 @@ class MqttClient:
         return self._client is not None
 
     def reconcile(self) -> None:
-        """Start or stop the connection to match Studio's managed broker."""
-        port = commands.our_port() if commands.is_ours() else 0
-        if port and (self._client is None or port != self._port):
-            self.start(port)
+        """Start or stop the connection to match the broker Studio uses."""
+        # Where the machine's broker is, asked of the service rather than
+        # assumed: it binds one interface, so "up" does not mean loopback
+        # reaches it.
+        host, port = studio_endpoint()
+        if port and (
+            self._client is None or port != self._port or host != self._host
+        ):
+            self.start(port, host)
         elif not port and self._client is not None:
             self.stop()
         elif not port:
             self._set_status("Broker is not running")
 
-    def start(self, port: int) -> None:
+    def start(self, port: int, host: str = "") -> None:
         self.stop()
+        host = host or "127.0.0.1"
         try:
             import paho.mqtt.client as mqtt
         except ImportError:
             self._set_status("MQTT client unavailable (paho-mqtt is missing)")
             return
 
-        account = users().ensure_studio()
+        name, password = studio_credentials()
+        if not name:
+            self._set_status(
+                "No broker account yet — set one on Network → Broker."
+            )
+            return
         try:
             client = mqtt.Client(
                 mqtt.CallbackAPIVersion.VERSION2,
                 client_id="desk-buddy-studio-commands",
                 protocol=mqtt.MQTTv311,
             )
-            client.username_pw_set(account.name, account.password)
+            client.username_pw_set(name, password)
             client.on_connect = self._on_connect
             client.on_disconnect = self._on_disconnect
             client.on_message = self._on_message
             client.reconnect_delay_set(min_delay=1, max_delay=10)
-            client.connect_async("127.0.0.1", port, keepalive=30)
+            client.connect_async(host, port, keepalive=30)
             self._client = client
             self._port = port
-            self._set_status(f"Connecting to broker on {port}…")
+            self._host = host
+            self._set_status(f"Connecting to broker on {host}:{port}…")
             client.loop_start()
         except (OSError, ValueError) as error:
             self._client = None
             self._port = 0
+            self._host = ""
             self._set_status(f"Could not start the command client: {error}")
 
     def stop(self) -> None:
         client = self._client
         self._client = None
         self._port = 0
+        self._host = ""
         if client is not None:
             try:
                 client.disconnect()
@@ -144,7 +159,7 @@ class MqttClient:
             topics = list(self._subscribers.keys())
         for topic in topics:
             client.subscribe(topic, qos=1)
-        self._set_status(f"Connected on {self._port}")
+        self._set_status(f"Connected on {self._host}:{self._port}")
 
     def _on_disconnect(
         self, _client, _userdata, _flags, reason_code, _properties

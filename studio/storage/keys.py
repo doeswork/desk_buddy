@@ -39,6 +39,32 @@ LAST_PAGE = Key("window/last_page", str, "")
 # ---- Network ------------------------------------------------------------
 MQTT_BROKER_AUTO_START = Key("network/mqtt_broker_auto_start", bool, True)
 
+# Where the broker is. Not ours to choose — the user's mosquitto is wherever
+# they configured it, so both are recorded rather than assumed.
+SYSTEM_BROKER_HOST = Key("network/system_broker_host", str, "")
+SYSTEM_BROKER_PORT = Key("network/system_broker_port", int, 1883)
+
+# The account Studio itself uses on a system broker. Studio cannot write to
+# /etc/mosquitto — that needs root — so it is told these rather than
+# generating them, and the Broker page prints the commands to create them.
+SYSTEM_BROKER_USER = Key("network/system_broker_user", str, "")
+SYSTEM_BROKER_PASSWORD = Key("network/system_broker_password", str, "")
+
+# Whether those credentials have actually connected. Studio cannot read
+# /etc/mosquitto/passwd, so recording a password proves nothing about
+# whether the account exists — only a successful CONNACK does.
+SYSTEM_BROKER_VERIFIED = Key("network/system_broker_verified", bool, False)
+
+# Whether Studio installed the polkit rule that lets it reload the broker
+# without a password prompt on every account edit.
+#
+# Recorded here because it cannot be read back: /etc/polkit-1/rules.d is
+# root:polkitd 0750 on a normal system, so an unprivileged process cannot
+# even stat a file inside it — `Path.exists()` raises PermissionError rather
+# than returning False. Checking the filesystem would therefore report "no
+# rule" forever, including immediately after successfully writing one.
+SYSTEM_BROKER_RELOAD_RULE = Key("network/system_broker_reload_rule", bool, False)
+
 ALL = (
     THEME,
     ZOOM_INDEX,
@@ -47,4 +73,10 @@ ALL = (
     LAST_WORKSPACE,
     LAST_PAGE,
     MQTT_BROKER_AUTO_START,
+    SYSTEM_BROKER_HOST,
+    SYSTEM_BROKER_PORT,
+    SYSTEM_BROKER_USER,
+    SYSTEM_BROKER_PASSWORD,
+    SYSTEM_BROKER_VERIFIED,
+    SYSTEM_BROKER_RELOAD_RULE,
 )

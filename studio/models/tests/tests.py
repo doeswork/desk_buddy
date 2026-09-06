@@ -390,6 +390,45 @@ def test_unmarking_a_robot_leaves_its_account_alone() -> None:
     assert "not marked" in bots.remove("black")
 
 
+def test_record_keeps_a_password_for_an_account_made_elsewhere() -> None:
+    """The broker hashes a password; this is where the original survives.
+
+    Without it, provisioning a robot means asking the user for a secret
+    Studio generated for them and showed once.
+    """
+    store, _ = fresh_users()
+    store.record("black", "s3cret")
+    assert store.find("black").password == "s3cret"
+
+    # Recording again replaces rather than duplicating: a password reset
+    # must not leave the old one findable beside the new one.
+    store.record("black", "newer")
+    assert [u.name for u in store.all()] == ["black"]
+    assert store.find("black").password == "newer"
+
+
+def test_forget_drops_a_record_for_a_deleted_account() -> None:
+    """A password for an account that no longer exists is worse than none —
+    a later account reusing the name would inherit a dead credential."""
+    store, _ = fresh_users()
+    store.record("black", "s3cret")
+    store.forget("black")
+    assert store.find("black") is None
+
+    store.forget("never-existed")  # silent, not an error
+
+
+def test_forget_may_drop_studio_where_remove_may_not() -> None:
+    """`remove()` guards Studio's account because removing it would cut
+    Studio off. `forget()` is called after the broker has already deleted
+    it, so refusing there would strand a record of a dead credential."""
+    store, _ = fresh_users()
+    store.ensure_studio()
+    assert store.remove(STUDIO_NAME)  # refused, returns a reason
+    store.forget(STUDIO_NAME)
+    assert store.find(STUDIO_NAME) is None
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:

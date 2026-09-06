@@ -1,7 +1,7 @@
-"""Mosquitto discovery, lifecycle, accounts, and topic catalog."""
+"""Mosquitto discovery, the system broker Studio uses, and the topic catalog."""
 
 from __future__ import annotations
 
-from . import commands
+from . import system
 
-__all__ = ["commands"]
+__all__ = ["system"]

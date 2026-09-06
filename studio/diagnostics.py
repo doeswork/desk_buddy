@@ -34,12 +34,14 @@ def _environment() -> list[str]:
 
 
 def _broker() -> list[str]:
-    from .services.network import broker_commands as commands
-    from .services.network import detect, report
-    from .services.network.broker.finder import DEFAULT_PORT, SYSTEM_PORT, port_open
+    from .services.network import detect, report, robot_endpoint, studio_endpoint
+    from .services.network.broker import system
+    from .services.network.broker.finder import SYSTEM_PORT, port_open
 
     status = detect()
     live = report()
+    box = system.describe()
+    access = system.write_access()
 
     lines = [
         f"mosquitto    {status.broker.path or 'NOT FOUND'}",
@@ -47,10 +49,23 @@ def _broker() -> list[str]:
         f"passwd tool  {status.passwd_tool.path or 'NOT FOUND'}",
         f"installed    {status.installed}   partial={status.partial}",
         "",
-        f"our port     {DEFAULT_PORT}  open={port_open(DEFAULT_PORT)}",
-        f"system port  {SYSTEM_PORT}  open={port_open(SYSTEM_PORT)}",
-        f"running_port {live.port or 0}",
-        f"is_ours      {commands.is_ours()}",
+        f"port {SYSTEM_PORT}    open={port_open(SYSTEM_PORT)}",
+        f"host         {box.host or '(none)'}:{box.port}",
+        f"state        reachable={box.reachable} service={box.service_active}",
+        f"account      {box.user or '(none)'} recorded={box.recorded} "
+        f"verified={box.verified}",
+        f"studio →     {studio_endpoint()}",
+        f"robot   →    {robot_endpoint()}",
+        "",
+        f"may write    {access.allowed}",
+        f"  passwd     {system.PASSWD_FILE} writable={access.passwd_writable}",
+        f"  acl        {system.ACL_FILE} writable={access.acl_writable}",
+        f"  dir        {system.CONFIG_DIR} writable={access.dir_writable}",
+    ]
+    if access.reason:
+        lines.append(f"  why not    {access.reason}")
+
+    lines += [
         "",
         f"headline     {live.headline!r}",
         f"detail       {live.detail!r}",
@@ -58,10 +73,11 @@ def _broker() -> list[str]:
     ]
 
     try:
-        config = commands.config_path()
-        lines += ["", f"config       {config}", f"config exists {config.exists()}"]
+        lines += ["", f"accounts     {len(system.accounts())} on the broker"]
+        for account in system.accounts():
+            lines.append(f"  {account.name:16} {account.topics_display}")
     except OSError as error:
-        lines += ["", f"config       unavailable: {error}"]
+        lines += ["", f"accounts     unavailable: {error}"]
 
     return _section("Broker", lines)
 
@@ -80,16 +96,16 @@ def _paths() -> list[str]:
         lines.append(f"preferences  unavailable: {error}")
 
     try:
-        from .services.network.broker.commands import broker_dir
+        from .services.network.broker import system
 
-        directory = broker_dir()
-        lines.append(f"broker dir   {directory}")
-        if directory.exists():
-            for child in sorted(directory.iterdir()):
-                mode = oct(child.stat().st_mode)[-3:]
-                lines.append(f"  {child.name:16} {mode}  {child.stat().st_size}b")
+        for path in (system.CONFIG_FILE, system.PASSWD_FILE, system.ACL_FILE):
+            if path.exists():
+                mode = oct(path.stat().st_mode)[-3:]
+                lines.append(f"  {path.name:16} {mode}  {path.stat().st_size}b")
+            else:
+                lines.append(f"  {path.name:16} missing")
     except OSError as error:
-        lines.append(f"broker dir   unavailable: {error}")
+        lines.append(f"broker files unavailable: {error}")
 
     try:
         from .models.data import app_errors, mqtt_messages

@@ -12,6 +12,7 @@ from __future__ import annotations
 from .action_spec import ActionSpec, Separator
 from .card import Card
 from .command_card import CommandCard
+from .steps_card import StepsCard
 from .column import Column
 from .context_bar import ContextBar, ContextButton
 from .debug_tray import DebugTray
@@ -25,6 +26,7 @@ __all__ = [
     "ActionSpec",
     "Card",
     "CommandCard",
+    "StepsCard",
     "Column",
     "ContextBar",
     "ContextButton",

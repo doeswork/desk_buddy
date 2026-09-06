@@ -41,6 +41,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r studio/requirements.txt
 
+      - name: Unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m studio.storage.tests
+          python -m studio.models.tests.tests
+          python -m studio.services.error_reporter_tests
+          python -m studio.services.network.tests.tests
+          python -m studio.services.network.tests.system_tests
+          python -m studio.ui.components.serial_tests
+          python -m studio.ui.workspaces.network.tests
+
       - name: Smoke test
         env:
           QT_QPA_PLATFORM: offscreen

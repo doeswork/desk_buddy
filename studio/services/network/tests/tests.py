@@ -14,6 +14,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from ..broker import finder as install
 from ..broker.finder import BrokerStatus, Tool
@@ -186,111 +187,77 @@ def test_port_open_finds_a_real_listener() -> None:
         server.close()
 
 
-def test_running_port_prefers_ours_over_the_system_one() -> None:
-    """If both are up, the broker Studio started is the one it manages."""
-    seen = []
-
-    def fake_open(port, host="127.0.0.1"):
-        seen.append(port)
-        return True
-
-    original = install.port_open
-    install.port_open = fake_open
-    try:
-        assert install.running_port() == install.DEFAULT_PORT
-    finally:
-        install.port_open = original
-    assert seen[0] == install.DEFAULT_PORT, "ours must be checked first"
-
-
-def test_running_port_is_zero_when_nothing_listens() -> None:
-    original = install.port_open
-    install.port_open = lambda port, host="127.0.0.1": False
-    try:
-        assert install.running_port() == 0
-    finally:
-        install.port_open = original
-
-
-def test_our_port_is_not_the_mosquitto_default() -> None:
-    """Studio must never collide with a broker the user already runs."""
-    assert install.DEFAULT_PORT != install.SYSTEM_PORT
-
-
 # ---- The strings the UI renders ----------------------------------------
 # The point of these: a view should never have to branch on `partial` or
 # assemble a sentence. If the wording is wrong, it is wrong here.
 
 
-def report_for(broker: bool, passwd: bool, port: int, ours: bool = True) -> install.BrokerReport:
+def report_for(broker: bool, passwd: bool, port: int) -> install.BrokerReport:
     return install.BrokerReport(
         status=install.BrokerStatus(
             broker=Tool("mosquitto", "/usr/bin/mosquitto" if broker else "", "2.1.2" if broker else ""),
             passwd_tool=Tool("mosquitto_passwd", "/usr/bin/mosquitto_passwd" if passwd else ""),
         ),
         port=port,
-        ours=ours,
     )
 
 
 def test_report_running_ours() -> None:
-    r = report_for(True, True, 18830, ours=True)
+    r = report_for(True, True, 1883)
     assert r.running and r.installed
     assert r.headline == "Mosquitto 2.1.2 — running"
-    assert "Studio's broker is listening on port 18830" in r.detail
+    assert "listening on port 1883" in r.detail
     assert r.install_command == "", "nothing to install when it is running"
-    assert r.chip == "● broker on 18830"
-
-
-def test_report_running_but_not_ours() -> None:
-    """The bug that shipped: a system broker on 1883 made the page claim it was
-    running and left the action bar empty, with no way to start our own."""
-    r = report_for(True, True, 1883, ours=False)
-    assert r.running, "something IS listening"
-    assert not r.ours
-    assert "another broker" in r.headline
-    assert "did not start" in r.detail
-    assert "not ours" in r.chip
-    assert str(install.DEFAULT_PORT) in r.detail, "must say where ours would go"
+    assert r.chip == "● broker on 1883"
 
 
 def test_report_installed_but_stopped() -> None:
-    r = report_for(True, True, 0, ours=False)
+    r = report_for(True, True, 0)
     assert r.installed and not r.running
     assert r.headline == "Mosquitto 2.1.2"
     assert "Not running yet" in r.detail
+    assert "mosquitto" in r.detail, "must name the service to start"
     assert r.install_command == ""
     assert r.chip == install.NO_BROKER_CHIP
 
 
 def test_report_not_installed_offers_a_command() -> None:
-    r = report_for(False, False, 0, ours=False)
+    r = report_for(False, False, 0)
     assert not r.installed
     assert r.headline == "Mosquitto is not installed"
     assert r.install_command, "must tell the user what to run"
 
 
 def test_report_split_package_is_not_installed() -> None:
-    r = report_for(True, False, 0, ours=False)
+    r = report_for(True, False, 0)
     assert not r.installed
     assert "mosquitto_passwd missing" in r.headline
     assert r.install_command, "still needs an install command"
 
 
 def test_chip_wording_has_one_source() -> None:
-    """chip_text() and BrokerReport.chip must never drift apart."""
-    original = install.running_port
-    install.running_port = lambda: 0
+    """chip_text() and BrokerReport.chip must never drift apart.
+
+    They did once: BrokerReport.chip dropped an argument on the way to
+    chip_for(), so the bar and the page disagreed about the same broker.
+    """
+    from ..broker import system
+
+    down = system.SystemBroker(
+        host="", port=1883, reachable=False, user="", has_password=False,
+        installed=True, service_active=False,
+    )
+    original = system.describe
+    system.describe = lambda *a, **k: down
     try:
-        assert install.chip_text() == report_for(True, True, 0, ours=False).chip
+        assert install.chip_text() == report_for(True, True, 0).chip
     finally:
-        install.running_port = original
+        system.describe = original
 
 
-def test_chip_marks_a_broker_that_is_not_ours() -> None:
-    assert install.chip_for(0, False) == install.NO_BROKER_CHIP
-    assert install.chip_for(18830, True) == "● broker on 18830"
-    assert "not ours" in install.chip_for(1883, False)
+def test_chip_says_where_the_broker_is() -> None:
+    assert install.chip_for(0) == install.NO_BROKER_CHIP
+    assert install.chip_for(1883) == "● broker on 1883"
 
 
 # ---- Firewall detection --------------------------------------------------
@@ -310,6 +277,144 @@ def test_active_firewall_reports_a_name_or_nothing() -> None:
     """Never raises, whatever the host looks like — it runs on every build
     of the Broker page, and a machine without systemd must not break it."""
     assert install.active_firewall() in ("", "ufw", "firewalld")
+
+
+# ---- Reading the firewall's rules ---------------------------------------
+# `ufw status` needs root; the file it reads does not. These use a real
+# rules file in a temp dir rather than the machine's own, so the suite
+# passes the same way on a developer box with no firewall at all.
+
+RULES = """*filter
+:ufw-user-input - [0:0]
+### RULES ###
+
+### tuple ### allow tcp 1883 0.0.0.0/0 any 192.168.0.0/16 in
+-A ufw-user-input -p tcp --dport 1883 -s 192.168.0.0/16 -j ACCEPT
+
+### tuple ### allow tcp 8080 0.0.0.0/0 any 0.0.0.0/0 in
+-A ufw-user-input -p tcp --dport 8080 -j ACCEPT
+
+### tuple ### allow tcp 9000:9100 0.0.0.0/0 any 0.0.0.0/0 in
+-A ufw-user-input -p tcp --dport 9000:9100 -j ACCEPT
+
+### tuple ### allow udp 5353 0.0.0.0/0 any 0.0.0.0/0 in
+-A ufw-user-input -p udp --dport 5353 -j ACCEPT
+
+### tuple ### allow tcp 2222 0.0.0.0/0 any 0.0.0.0/0 out
+-A ufw-user-output -p tcp --dport 2222 -j ACCEPT
+### END RULES ###
+COMMIT
+"""
+
+
+def with_ufw(rules: str = RULES, *, enabled: bool = True, policy: str = "DROP"):
+    """Point the reader at a throwaway ufw config. Used as a context manager."""
+    import tempfile
+
+    directory = Path(tempfile.mkdtemp())
+    (directory / "user.rules").write_text(rules)
+    (directory / "ufw.conf").write_text(
+        f"ENABLED={'yes' if enabled else 'no'}\n"
+    )
+    (directory / "default").write_text(f'DEFAULT_INPUT_POLICY="{policy}"\n')
+    return mock.patch.multiple(
+        install,
+        UFW_RULES=directory / "user.rules",
+        UFW_CONF=directory / "ufw.conf",
+        UFW_DEFAULTS=directory / "default",
+        active_firewall=lambda: "ufw",
+    )
+
+
+def test_an_allowed_port_is_read_from_the_rules() -> None:
+    """The whole point: this used to be assumed unknowable without root."""
+    with with_ufw():
+        verdict = install.firewall_allows(1883)
+    assert verdict.allowed and verdict.known
+    assert not verdict.blocked
+    # The matching rule is quoted back, so the card can show its reasoning.
+    assert "1883" in verdict.rule
+    assert "192.168.0.0/16" in verdict.rule
+
+
+def test_a_port_with_no_rule_is_blocked() -> None:
+    with with_ufw():
+        verdict = install.firewall_allows(1884)
+    assert verdict.known
+    assert not verdict.allowed
+    assert verdict.blocked
+
+
+def test_a_port_range_covers_the_ports_inside_it() -> None:
+    with with_ufw():
+        assert install.firewall_allows(9000).allowed
+        assert install.firewall_allows(9050).allowed
+        assert install.firewall_allows(9100).allowed
+        assert install.firewall_allows(9101).blocked
+
+
+def test_only_inbound_tcp_rules_count() -> None:
+    """A UDP rule or an outbound one does not let a robot in.
+
+    Counting either would produce a false "allowed", which is worse than no
+    answer: it sends the user looking for a fault somewhere else entirely.
+    """
+    with with_ufw():
+        assert install.firewall_allows(5353).blocked   # udp only
+        assert install.firewall_allows(2222).blocked   # outbound only
+
+
+def test_a_disabled_firewall_blocks_nothing() -> None:
+    with with_ufw(enabled=False):
+        verdict = install.firewall_allows(1884)
+    assert verdict.allowed
+    assert not verdict.blocked
+
+
+def test_a_default_accept_policy_blocks_nothing() -> None:
+    """A firewall that accepts by default drops nothing, so an absent rule
+    is not a problem worth reporting."""
+    with with_ufw(policy="ACCEPT"):
+        verdict = install.firewall_allows(1884)
+    assert verdict.allowed
+    assert not verdict.blocked
+
+
+def test_unreadable_rules_are_unknown_never_blocked() -> None:
+    """The distinction that keeps this honest: "could not tell" is not
+    "blocked". Claiming a block Studio cannot see sends the user to fix
+    something that may be fine."""
+    with with_ufw() as _:
+        with mock.patch.object(install, "UFW_RULES", Path("/nonexistent/rules")):
+            verdict = install.firewall_allows(1883)
+    assert verdict.firewall == "ufw"
+    assert not verdict.known
+    assert not verdict.allowed
+    assert not verdict.blocked, "unknown must never present as blocked"
+
+
+def test_firewalld_is_reported_as_unknown() -> None:
+    """Its state spans zones, runtime-vs-permanent rules and interfaces.
+    Guessing wrong is worse than saying so, so it is deliberately not
+    parsed."""
+    with mock.patch.object(install, "active_firewall", lambda: "firewalld"):
+        verdict = install.firewall_allows(1883)
+    assert verdict.firewall == "firewalld"
+    assert not verdict.known
+    assert not verdict.blocked
+
+
+def test_no_firewall_means_no_verdict() -> None:
+    with mock.patch.object(install, "active_firewall", lambda: ""):
+        verdict = install.firewall_allows(1883)
+    assert verdict.firewall == ""
+    assert not verdict.blocked
+
+
+def test_firewall_allows_never_raises_on_this_machine() -> None:
+    """It runs on every Broker page build, against whatever this host has."""
+    verdict = install.firewall_allows(1883)
+    assert verdict.firewall in ("", "ufw", "firewalld")
 
 
 def main() -> int:

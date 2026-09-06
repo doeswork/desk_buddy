@@ -60,6 +60,21 @@ class Workspace:
         # Set by the window: lets a workspace whose state changed ask for the
         # chrome — BAR 2, the side panel, the status — to catch up with it.
         self.on_rebuilt = None
+        # Also set by the window: say one transient line in the status strip.
+        # For the outcome of an action the user just took, where the result
+        # is worth confirming but not worth a permanent place on a page — a
+        # connection that worked, a permission that was granted. A workspace
+        # with no window attached simply says nothing.
+        self.announce = None
+
+    def say(self, message: str) -> None:
+        """Put one line in the status strip, if there is a window to take it.
+
+        Call *after* any refresh(): a rebuild repaints the status strip from
+        the page's own `status`, so announcing first would be overwritten.
+        """
+        if self.announce is not None and message:
+            self.announce(message)
 
     # ---- the current page ------------------------------------------------
     @property

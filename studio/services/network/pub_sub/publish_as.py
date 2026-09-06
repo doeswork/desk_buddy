@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from threading import Event
 
 from ....models.config.mqtt_users import MqttUser
-from ..broker.commands import DEFAULT_HOST, is_ours, our_port
+from ..broker.finder import studio_endpoint
 
 CONNECT_TIMEOUT = 5.0
 
@@ -51,15 +51,17 @@ def publish_as(account: MqttUser, topic: str, payload: str, *, qos: int = 1) -> 
     ACL let the message onto the topic. See the module docstring; there is no
     MQTT-level way to tell the two apart from the publishing side.
     """
-    if not is_ours():
-        return PublishResult(False, "Studio's broker is not running.")
+    # Whichever broker Studio is set to use, at the address it actually
+    # listens on — a managed broker binds a single interface, so loopback is
+    # refused once the user has put it on the LAN for the robot to reach.
+    host, port = studio_endpoint()
+    if not port:
+        return PublishResult(False, "No broker is running.")
 
     try:
         import paho.mqtt.client as mqtt
     except ImportError:
         return PublishResult(False, "paho-mqtt is not installed.")
-
-    port = our_port()
     outcome: dict = {}
     done = Event()
     pending_mid: dict = {}
@@ -103,7 +105,7 @@ def publish_as(account: MqttUser, topic: str, payload: str, *, qos: int = 1) -> 
     client.on_publish = on_publish
 
     try:
-        client.connect(DEFAULT_HOST, port, keepalive=10)
+        client.connect(host, port, keepalive=10)
         client.loop_start()
         finished = done.wait(timeout=CONNECT_TIMEOUT)
         client.disconnect()

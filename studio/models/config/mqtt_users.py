@@ -55,6 +55,25 @@ STUDIO_NAME = "studio"
 STUDIO_DESCRIPTION = "Studio itself — created automatically"
 
 
+def validate_name(name: str, taken: set[str] | frozenset[str] = frozenset()) -> str:
+    """Empty string when the name is usable on a broker, else why it is not.
+
+    A free function because the check is about MQTT and about a name, not
+    about any particular list of accounts — the caller passes whichever
+    names are already in use, which is now the broker's own set rather than
+    a record file of Studio's.
+    """
+    if not name or not name.strip():
+        return "A name is required."
+    if name != name.strip():
+        return "No leading or trailing spaces."
+    if not NAME_PATTERN.match(name):
+        return NAME_RULE
+    if name in taken:
+        return f"An account called {name!r} already exists."
+    return ""
+
+
 def generate_password() -> str:
     return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(PASSWORD_LENGTH))
 
@@ -201,6 +220,28 @@ class Users:
         )
         self._save([*self.all(), user])
         return user
+
+    def record(self, name: str, password: str) -> None:
+        """Remember one account's password, replacing any earlier record.
+
+        For accounts created against a broker Studio does not own the files
+        of: the broker hashes the password and cannot give it back, so
+        unless it is written down here at the moment it is generated, it is
+        gone. Deliberately not `add()` — there is no name validation and no
+        topic list, because the account already exists on the broker and
+        this is only the secret catching up.
+        """
+        kept = [user for user in self.all() if user.name != name]
+        self._save([*kept, MqttUser(name=name, password=password)])
+
+    def forget(self, name: str) -> None:
+        """Drop one account's record. Silent when there is nothing to drop.
+
+        Unlike `remove()` this does not refuse Studio's own account: it is
+        called when the broker has already deleted the account, and a record
+        of a credential that no longer exists is worse than none.
+        """
+        self._save([user for user in self.all() if user.name != name])
 
     def reset_password(self, name: str) -> tuple[str, str]:
         """Give an account a new password. Returns (password, "")."""

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ....models.config.mqtt_topics import TOPIC_RULE, validate_topic
-from ....models.config.mqtt_users import users
+from ....services.network.broker import system
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -108,11 +108,10 @@ class EditAccountPage(Page):
             self._fail(problem)
             return
 
-        _, problem = users().add_topic(self._name, topic)
+        problem = self._set_topics((*account.topics, topic) if account else (topic,))
         if problem:
             self._fail(problem)
             return
-        self.workspace.apply_to_broker()
 
         self._new_topic = ""
         self._problem = ""
@@ -121,12 +120,21 @@ class EditAccountPage(Page):
             self._form.focus_topic()
 
     def remove_topic(self, topic: str) -> None:
-        _, problem = users().remove_topic(self._name, topic)
+        account = self._account()
+        if account is None:
+            return
+        remaining = tuple(t for t in account.topics if t != topic)
+        problem = self._set_topics(remaining)
         if problem:
             QMessageBox.warning(self.widget(), "Could not remove the topic", problem)
             return
-        self.workspace.apply_to_broker()
         self.rebuild()
+
+    def _set_topics(self, topics) -> str:
+        """Write the ACL and refresh the workspace's cached account list."""
+        problem = system.set_topics(self._name, topics)
+        self.workspace.refresh()
+        return problem
 
     def done(self) -> None:
         self.workspace.go_to("accounts")

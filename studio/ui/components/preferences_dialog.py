@@ -20,13 +20,17 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        self.auto_start_broker = QCheckBox("Start MQTT broker when Studio opens")
+        # Studio no longer starts a broker, so this only says whether it
+        # should connect to the machine's one at launch. The wording is the
+        # honest version of the old "start the broker" checkbox.
+        self.auto_start_broker = QCheckBox("Connect to the MQTT broker when Studio opens")
         self.auto_start_broker.setChecked(model.mqtt_broker_auto_start)
         self.auto_start_broker.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.auto_start_broker)
 
         detail = QLabel(
-            "Uses Studio's managed local broker. Changes apply the next time Studio opens."
+            "Uses this machine's Mosquitto. Studio never starts or stops it — "
+            "see Network → Broker."
         )
         detail.setObjectName("CardBody")
         detail.setWordWrap(True)

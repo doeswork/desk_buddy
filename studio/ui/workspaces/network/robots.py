@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.mqtt_users import STUDIO_NAME, users
+from ....services.network import studio_credentials
+from ....services.network.broker import system
 from ....models.config.robots import robots
 from ...components import Card, Column
 from ...pages.base import Page
@@ -78,9 +79,10 @@ class RobotsPage(Page):
     def _candidates(self) -> list[str]:
         """Accounts that could still be marked as a robot."""
         marked = {robot.name for robot in robots().all()}
+        studio_account, _ = studio_credentials()
         return [
-            user.name for user in users().all()
-            if user.name != STUDIO_NAME and user.name not in marked
+            account.name for account in system.accounts()
+            if account.name != studio_account and account.name not in marked
         ]
 
     def _name_changed(self, name: str) -> None:

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from ..models.data import app_errors, mqtt_messages
 from ..models.config.prefrences import preferences
 from ..services import ErrorReporter
-from ..services.network import TrafficRecorder, chip_text, shutdown_broker
+from ..services.network import TrafficRecorder, chip_text
 from ..storage import keys
 from ..storage.settings import settings
 from .menus import build_menu_bar
@@ -148,8 +148,18 @@ class MainWindow(QMainWindow):
             # asks the chrome to catch up: its actions, its side panel and its
             # status line may no longer be the ones showing.
             workspace.on_rebuilt = self._workspace_changed
+            workspace.announce = self._announce
             self.stack.addWidget(workspace.widget())
         self.setCentralWidget(self.stack)
+
+    def _announce(self, message: str) -> None:
+        """One transient line in the status strip, for a finished action.
+
+        `showMessage` paints over `status_label` rather than replacing its
+        text, so a rebuild that resets the label — which every refresh does —
+        leaves this standing until it times out on its own.
+        """
+        self.statusBar().showMessage(message, 6000)
 
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
@@ -180,11 +190,13 @@ class MainWindow(QMainWindow):
         self._traffic_recorder.reconcile()
 
     def _start_network_broker(self) -> None:
-        """Give Studio's managed broker one start attempt on launch."""
-        if not self._preferences.mqtt_broker_auto_start:
-            return
-        network = next(workspace for workspace in self.workspaces if workspace.key == "network")
-        network.start_on_startup()
+        """Nothing to start: Studio uses the broker the machine runs.
+
+        Kept as the launch hook rather than deleted so the startup sequence
+        keeps its shape, and so there is one obvious place to look for
+        "does Studio touch the broker on launch?" — it does not.
+        """
+        return
 
     def open_preferences(self) -> None:
         PreferencesDialog(self._preferences, self).exec()
@@ -269,12 +281,13 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:
-        """Save preferences and stop our broker on the way out."""
+        """Save preferences and drop the broker connection on the way out.
+
+        No broker is stopped: Studio does not start one. The machine's
+        Mosquitto outlives the app, which is the point of using it.
+        """
         self.debug_tray.shutdown()
         self._traffic_recorder.stop()
-        # A broker Studio started belongs to this session; leaving it running
-        # would orphan a process holding a port nothing will ever reclaim.
-        shutdown_broker()
 
         self._settings.set(keys.THEME, self._theme)
         self._settings.set(keys.ZOOM_INDEX, self._zoom_index)

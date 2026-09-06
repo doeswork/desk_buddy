@@ -8,8 +8,8 @@ import os
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QPainter, QPainterPath, QPalette, QPen, QTextCursor
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,9 +27,87 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...models.config.mqtt_users import users
+from ...models.config.mqtt_users import STUDIO_NAME
 from ...services.firmware import mqtt_provisioning_command, wifi_provisioning_command
-from ...services.network import active_firewall, our_port
+from ...services.network.broker import system as broker_system
+from ...services.network import (
+    SYSTEM_PORT,
+    active_firewall,
+    lan_address,
+    robot_endpoint,
+)
+
+
+class PasswordEyeButton(QToolButton):
+    """A palette-aware vector eye, without relying on an emoji font asset."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("PasswordEye")
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Show password")
+        self.setAccessibleName("Show password")
+
+    def paintEvent(self, event) -> None:
+        # Let the active Qt style paint the themed button chrome first, then
+        # add an outline icon in the same palette color as its label would use.
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        color = self.palette().color(QPalette.ButtonText)
+        pen = QPen(color)
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+
+        rect = QRectF(self.rect()).adjusted(7, 8, -7, -8)
+        center = rect.center()
+        path = QPainterPath()
+        path.moveTo(rect.left(), center.y())
+        path.cubicTo(
+            rect.left() + rect.width() * 0.27,
+            rect.top(),
+            rect.right() - rect.width() * 0.27,
+            rect.top(),
+            rect.right(),
+            center.y(),
+        )
+        path.cubicTo(
+            rect.right() - rect.width() * 0.27,
+            rect.bottom(),
+            rect.left() + rect.width() * 0.27,
+            rect.bottom(),
+            rect.left(),
+            center.y(),
+        )
+        painter.drawPath(path)
+        pupil_radius = min(rect.width(), rect.height()) * 0.16
+        painter.setBrush(color)
+        painter.drawEllipse(
+            QRectF(
+                center.x() - pupil_radius,
+                center.y() - pupil_radius,
+                pupil_radius * 2,
+                pupil_radius * 2,
+            )
+        )
+        painter.setBrush(Qt.NoBrush)
+
+        # Checked means the password is visible, so draw the familiar
+        # eye-slash affordance to say the next click will hide it again.
+        if self.isChecked():
+            painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.top())
+
+
+def password_eye(on_toggled) -> PasswordEyeButton:
+    """One consistent eye control for every secret field in the serial tools."""
+    button = PasswordEyeButton()
+    button.toggled.connect(on_toggled)
+    return button
 
 
 class SerialMonitor(QWidget):
@@ -294,14 +372,32 @@ class SerialMonitor(QWidget):
                 continue
 
             kind = response.get("serial_provisioning")
-            if kind not in ("wifi", "mqtt"):
+            # SerialProvisioning.cpp replies with kind "error" — not "wifi" or
+            # "mqtt" — when the command never got as far as being identified:
+            # malformed JSON, an unknown command name, or one over the 512-byte
+            # cap. Those are exactly the transport failures, so leaving them out
+            # meant the one class of error most likely to happen was the one
+            # class Studio could not report. A robot that answered "Command
+            # must be valid JSON" looked like a successful save.
+            if kind not in ("wifi", "mqtt", "error"):
                 continue
-            label = "Wi-Fi" if kind == "wifi" else "MQTT settings"
+            if kind == "wifi":
+                label = "Wi-Fi"
+            elif kind == "mqtt":
+                label = "MQTT settings"
+            else:
+                label = "Provisioning"
+
             if response.get("status") == "saved":
                 self.status.setText(f"{label} saved; robot restarting…")
             elif response.get("status") == "error":
                 detail = str(response.get("error") or f"Robot rejected {label}")
                 self.status.setText(f"{label} setup failed: {detail}")
+                # Also into the log. The status bar is one line that the next
+                # heartbeat's board-status tick sits beside and that a later
+                # message overwrites; a rejection is worth keeping where the
+                # user is already reading the robot's own output.
+                self._append_line(f"ROBOT REJECTED {label.upper()}: {detail}")
 
     def _refresh_board_status(self) -> None:
         """The board chip: alive/stale/silent, from SerialHeartbeat.cpp lines.
@@ -330,9 +426,10 @@ class SerialMonitor(QWidget):
         if not text:
             return
         ending = str(self.line_ending.currentData())
-        written = self.serial.write((text + ending).encode("utf-8"))
-        if written < 0:
-            self._append_line(f"ERROR: Could not write to serial port: {self.serial.errorString()}")
+        payload = (text + ending).encode("utf-8")
+        error = self._write_all(payload)
+        if error:
+            self._append_line(f"ERROR: Could not write to serial port: {error}")
             return
         self.send_text.clear()
 
@@ -366,16 +463,15 @@ class SerialMonitor(QWidget):
         if answer != QMessageBox.Yes:
             return None
 
-        written = self.serial.write(command)
-        if written < 0:
-            error = self.serial.errorString()
+        error = self._write_all(command)
+        if error:
             self._append_line(f"ERROR: Could not send Wi-Fi settings: {error}")
             self.status.setText("Wi-Fi setup failed")
             return f"Could not send Wi-Fi settings: {error}"
-        self.serial.flush()
         self.status.setText("Saving Wi-Fi; waiting for robot restart…")
         self._append_line(
-            f'Sent Wi-Fi setup for “{ssid}”. Password omitted. The robot will restart.'
+            f'Sent Wi-Fi setup for “{ssid}”. Password omitted. '
+            "Waiting for the robot to confirm."
         )
         return ""
 
@@ -383,11 +479,26 @@ class SerialMonitor(QWidget):
         if not self.serial.isOpen():
             self._append_line("ERROR: Connect the serial monitor before setting MQTT.")
             return
+        # One question — "where does a robot reach our broker?" — asked of
+        # the service rather than assembled here. our_port() alone was 0
+        # whenever Studio had not started the broker in *this* process, so a
+        # broker left running by an earlier launch made this dialog refuse to
+        # save and show its cloud placeholders instead.
+        host, port = robot_endpoint()
+        # Studio's own account is not offered. It is the credential this app
+        # connects with, and it reaches every topic — handing it to a robot
+        # would give that robot the run of the bus and make two clients share
+        # one client ID, which brokers resolve by disconnecting one of them.
+        # A robot gets its own account, scoped to its own topics.
         dialog = MqttDialog(
             self,
-            accounts=users().all(),
-            broker_host=self._broker_host(),
-            broker_port=our_port(),
+            accounts=[
+                account
+                for account in broker_system.accounts()
+                if account.name != STUDIO_NAME
+            ],
+            broker_host=host or self._broker_host(),
+            broker_port=port,
             on_save=self._send_mqtt,
         )
         dialog.exec()
@@ -420,17 +531,63 @@ class SerialMonitor(QWidget):
         if answer != QMessageBox.Yes:
             return None
 
-        written = self.serial.write(command)
-        if written < 0:
-            error = self.serial.errorString()
+        error = self._write_all(command)
+        if error:
             self._append_line(f"ERROR: Could not send MQTT settings: {error}")
             self.status.setText("MQTT setup failed")
             return f"Could not send MQTT settings: {error}"
-        self.serial.flush()
         self.status.setText("Saving MQTT settings; waiting for robot restart…")
+        # "Sent", not "saved". Writing the bytes says nothing about the robot
+        # accepting them — it answers on the same port a moment later, and
+        # _inspect_protocol_lines turns that answer into the real outcome.
         self._append_line(
-            f'Sent MQTT setup for “{server}”. Password omitted. The robot will restart.'
+            f'Sent MQTT setup for “{server}”. Password omitted. '
+            "Waiting for the robot to confirm."
         )
+        return ""
+
+    # How long to wait for the port to drain between write attempts. A local
+    # USB serial link takes microseconds; a second is only ever hit when the
+    # port has stopped accepting bytes at all.
+    WRITE_TIMEOUT_MS = 1000
+
+    def _write_all(self, payload: bytes) -> str:
+        """Put every byte of `payload` on the wire. "" when it all went.
+
+        QSerialPort.write() returns how many bytes it *accepted*, which can
+        be fewer than asked for — a short write is a count, not the -1 that
+        signals an error. Checking only for -1 let a truncated command pass
+        as a success: the robot received a fragment and answered "Command
+        must be valid JSON" while Studio reported the settings as sent. The
+        144-byte MQTT command hit this where the 77-byte Wi-Fi one did not.
+
+        So the remainder is written rather than merely detected. A partial
+        command is worse than none — it reaches the robot as garbage — and
+        the caller gets a real reason when the port genuinely stops.
+        """
+        sent = 0
+        while sent < len(payload):
+            # PySide6 6.11 advertises memoryview in QIODevice.write()'s
+            # signature but rejects it at runtime. Keep this as bytes; these
+            # provisioning payloads are tiny, and bytes is accepted reliably
+            # across the supported PySide6 releases.
+            written = self.serial.write(payload[sent:])
+            if written < 0:
+                return self.serial.errorString() or "the port rejected the write"
+            if written == 0:
+                # Nothing accepted: wait for the buffer to drain before
+                # trying again, so this cannot spin.
+                if not self.serial.waitForBytesWritten(self.WRITE_TIMEOUT_MS):
+                    return (
+                        f"only {sent} of {len(payload)} bytes reached the port "
+                        f"({self.serial.errorString() or 'it stopped accepting data'})"
+                    )
+                continue
+            sent += written
+
+        if not self.serial.flush() and self.serial.error() != QSerialPort.NoError:
+            return self.serial.errorString()
+        self.serial.waitForBytesWritten(self.WRITE_TIMEOUT_MS)
         return ""
 
     def _serial_error(self, error) -> None:
@@ -513,14 +670,7 @@ class WifiDialog(QDialog):
         password_row = QHBoxLayout()
         password_row.setSpacing(0)
         password_row.addWidget(self.password, 1)
-        self.password_toggle = QToolButton()
-        self.password_toggle.setObjectName("PasswordEye")
-        self.password_toggle.setText("👁")
-        self.password_toggle.setCheckable(True)
-        self.password_toggle.setCursor(Qt.PointingHandCursor)
-        self.password_toggle.setToolTip("Show password")
-        self.password_toggle.setAccessibleName("Show password")
-        self.password_toggle.toggled.connect(self._set_password_visible)
+        self.password_toggle = password_eye(self._set_password_visible)
         password_row.addWidget(self.password_toggle)
         layout.addLayout(password_row)
 
@@ -624,13 +774,22 @@ class MqttDialog(QDialog):
 
         self.server = QLineEdit()
         self.server.setObjectName("SerialCredential")
-        self.server.setPlaceholderText("mqtt.deskbuddy.ai")
+        # A LAN address, not the cloud host. This dialog points a robot at
+        # the broker Studio runs on this machine; showing mqtt.deskbuddy.ai
+        # in the empty field read as a suggestion to use it, which is the
+        # one thing a robot on the local network cannot reach.
+        self.server.setPlaceholderText(
+            broker_host or lan_address() or "This machine's address on the network"
+        )
         layout.addWidget(QLabel("Broker address"))
         layout.addWidget(self.server)
 
         self.port = QLineEdit()
         self.port.setObjectName("SerialCredential")
-        self.port.setPlaceholderText("8883")
+        # The port of whichever broker Studio is set to use, not the managed
+        # broker's — on a system broker that is 1883, and showing 18830
+        # would be a suggestion to type the wrong thing.
+        self.port.setPlaceholderText(str(broker_port or SYSTEM_PORT))
         layout.addWidget(QLabel("Port"))
         layout.addWidget(self.port)
 
@@ -650,14 +809,7 @@ class MqttDialog(QDialog):
         password_row = QHBoxLayout()
         password_row.setSpacing(0)
         password_row.addWidget(self.password, 1)
-        self.password_toggle = QToolButton()
-        self.password_toggle.setObjectName("PasswordEye")
-        self.password_toggle.setText("👁")
-        self.password_toggle.setCheckable(True)
-        self.password_toggle.setCursor(Qt.PointingHandCursor)
-        self.password_toggle.setToolTip("Show password")
-        self.password_toggle.setAccessibleName("Show password")
-        self.password_toggle.toggled.connect(self._set_password_visible)
+        self.password_toggle = password_eye(self._set_password_visible)
         password_row.addWidget(self.password_toggle)
         layout.addLayout(password_row)
 
@@ -694,9 +846,17 @@ class MqttDialog(QDialog):
 
     def _account_changed(self, name: str) -> None:
         custom = name == CUSTOM_ACCOUNT
-        for field in (self.server, self.port, self.user, self.password, self.client_id):
+        # The password stays editable even for an account Studio manages.
+        # Usually it is prefilled from the record written when the account
+        # was created, but Studio only has that for accounts it made itself
+        # — one created by hand with mosquitto_passwd, or whose password was
+        # changed behind its back, leaves the field empty and someone has to
+        # type it. Read-only here was the bug that provisioned robots with
+        # no password at all: the firmware ignores an empty field, so the
+        # robot kept a username alone and every connect returned rc=5.
+        for field in (self.server, self.port, self.user, self.client_id):
             field.setReadOnly(not custom)
-        self.password_toggle.setEnabled(custom)
+        self.password.setReadOnly(False)
 
         if custom:
             self.server.clear()
@@ -736,22 +896,41 @@ class MqttDialog(QDialog):
             self.server.setText(self._broker_host)
             self.port.setText(str(self._broker_port))
             self.save_button.setEnabled(True)
-            # Not an error — the port may well be open, and Studio cannot
-            # tell without root. But a firewall is the most likely reason a
-            # robot provisioned from here still never connects, and this is
-            # the moment the user is pointing one at the broker.
+            # Neither of these is an error, and both can be true at once —
+            # so they are gathered rather than racing to own the one label.
+            # A firewall is the likeliest reason a robot provisioned from
+            # here never connects, and on a system broker the password
+            # filled in below is a guess Studio cannot check.
+            notes = []
+            if not getattr(account, "password", ""):
+                # Studio records the password of every account it creates,
+                # so an empty one here means this account came from
+                # somewhere else — created by hand, or changed since.
+                notes.append(
+                    f"Studio has no password recorded for “{account.name}”, "
+                    "so it was not created here or has been changed since. "
+                    "Type it below — it is required. To set a new one: "
+                    f"mosquitto_passwd {broker_system.PASSWD_FILE} "
+                    f"{account.name}"
+                )
             firewall = active_firewall()
             if firewall:
-                self.broker_note.setText(
+                notes.append(
                     f"{firewall} is running. If the robot never connects, "
                     f"open port {self._broker_port} for your network — see "
                     "Network → Broker for the command."
                 )
+
+            if notes:
+                self.broker_note.setText("\n\n".join(notes))
                 self._show_note(blocking=False)
             else:
                 self.broker_note.hide()
         self.user.setText(account.name)
-        self.password.setText(account.password)
+        # The broker stores a hash, not a password, so there is nothing to
+        # prefill: `getattr` rather than `.password` because the account came
+        # from the broker's own passwd file, which has no readable secret.
+        self.password.setText(getattr(account, "password", "") or "")
         self.client_id.setText(account.name)
 
     def _show_note(self, *, blocking: bool) -> None:
@@ -770,10 +949,55 @@ class MqttDialog(QDialog):
         self.password_toggle.setAccessibleName(label)
 
     def save(self) -> None:
-        # A Studio-managed broker serves plaintext — it has no certificates,
-        # by design. Custom leaves the transport alone: the robot's own
-        # default is TLS, which is what a cloud broker needs.
+        # The transport follows the port Studio is handing over, not who
+        # owns the broker. Studio's managed broker is plaintext by design
+        # (no certificates to manage for a no-root install), and a system
+        # broker's plain listener — 1883, the one Studio uses — is too. A
+        # TLS client against either fails the handshake with an opaque
+        # rc=-2, which reads as "broker unreachable".
+        #
+        # Custom leaves the transport alone: the robot's own default is
+        # TLS, which is what a cloud broker, or a system broker's 8883
+        # listener, needs.
         custom = self.account.currentText() == CUSTOM_ACCOUNT
+
+        # An account Studio manages needs its password typed here, because
+        # nothing else can supply it. Sending the robot a username with no
+        # password provisions it into a state that cannot authenticate, and
+        # the failure surfaces minutes later on the robot's own serial log
+        # as rc=5 — far from the dialog that caused it. Custom is exempt: a
+        # blank field there means "keep whatever the robot already has",
+        # which is a real thing to want when only the server is changing.
+        # Tried against the broker before it is handed over, because a
+        # password that fails here fails on the robot too — except there it
+        # surfaces as rc=5 on a five-second retry loop, minutes later, with
+        # nothing pointing back at this dialog. One local CONNECT is a
+        # cheaper way to learn the same thing.
+        if not custom and self.password.text():
+            if not broker_system.password_works(
+                self.user.text(), self.password.text()
+            ):
+                self.error.setText(
+                    f"The broker refuses this password for "
+                    f"“{self.user.text()}”, so the robot would be refused "
+                    "too (rc=5). Set a known one with: mosquitto_passwd "
+                    f"{broker_system.PASSWD_FILE} {self.user.text()}"
+                )
+                self.error.show()
+                self.password.setFocus()
+                self.password.selectAll()
+                return
+
+        if not custom and not self.password.text():
+            self.error.setText(
+                f"Type the password for “{self.user.text()}”. Studio cannot"
+                "read it back from the broker, and a robot sent a username "
+                "with no password is refused (rc=5, not authorized)."
+            )
+            self.error.show()
+            self.password.setFocus()
+            return
+
         error = self._on_save(
             self.server.text(),
             self.port.text(),

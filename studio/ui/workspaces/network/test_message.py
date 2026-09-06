@@ -20,6 +20,8 @@ instead of going out bare.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import json
 
 from PySide6.QtCore import Qt
@@ -35,7 +37,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.mqtt_users import users
+from ....services.network import studio_credentials
+from ....services.network.broker import system
 from ....services.network import PublishResult, publish_as
 from ...components import Column
 from ...pages.base import Page
@@ -69,7 +72,11 @@ class TestMessagePage(Page):
         self._result: PublishResult | None = None
 
     def build_page(self) -> QWidget:
-        accounts = users().all()
+        # Every account on the broker can be *named* as the sender, but only
+        # Studio's own has a password Studio knows — the broker keeps hashes.
+        # So the list is the broker's and the connection is always Studio's;
+        # see send().
+        accounts = system.accounts()
         if not accounts:
             return Column(QLabel("No users yet. Create one on Users first."))
 
@@ -100,10 +107,17 @@ class TestMessagePage(Page):
         self._body = body
 
     def send(self) -> None:
-        account = users().find(self._name)
-        if account is None:
+        # Published as Studio, whichever account the form names: Studio has
+        # no password for anyone else, and inventing one would only produce
+        # an authentication failure dressed up as an ACL result.
+        name, password = studio_credentials()
+        if not name:
             return
-        self._result = publish_as(account, self._topic, envelope(self._body))
+        self._result = publish_as(
+            SimpleNamespace(name=name, password=password),
+            self._topic,
+            envelope(self._body),
+        )
         self.rebuild()
 
 

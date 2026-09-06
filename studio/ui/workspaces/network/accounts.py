@@ -32,9 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.mqtt_users import STUDIO_DESCRIPTION, users
-from ....services.network import broker_commands as commands
-from ....services.network import lan_address
+from ....services.network import SYSTEM_PORT, lan_address
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import (
@@ -59,14 +57,13 @@ class AccountsPage(Page):
 
     # ---- body ------------------------------------------------------------
     def build_page(self) -> QWidget:
-        # Accounts are Studio's own records, so they are listed whether or not
-        # the broker is up. What a stopped broker changes is that nothing can
-        # connect with them yet, which the card below says.
+        # Read from the broker's own files, so an account made by hand with
+        # mosquitto_passwd is as visible as one Studio created.
         entries = self.workspace.accounts()
-        port = self.workspace.broker().port or commands.DEFAULT_PORT
+        port = self.workspace.system_broker().port or SYSTEM_PORT
         # The address a client actually connects on, which is the LAN one
         # the broker binds to — not loopback, which no robot can reach.
-        host = self.workspace.broker_host() or lan_address() or commands.DEFAULT_HOST
+        host = self.workspace.broker_host() or lan_address() or "127.0.0.1"
         sections = []
 
         if self._credentials is not None:
@@ -93,16 +90,24 @@ class AccountsPage(Page):
         else:
             sections.append(Card(
                 "The broker is not running",
-                "These users are saved, but nothing can connect with them "
-                "until the broker is started on the Broker page.",
+                "Nothing can connect until this machine's Mosquitto is "
+                "started — see the Broker page.",
+            ))
+
+        access = self.workspace.write_access()
+        if not access.allowed:
+            sections.append(Card(
+                "Studio cannot change these users",
+                f"{access.reason} Add User and Remove are unavailable until "
+                "Studio is given access — Network → Broker has the two "
+                "commands that grant it. Accounts can still be created by "
+                "hand with mosquitto_passwd.",
             ))
 
         sections.append(AccountTable(
             entries,
-            on_edit=self.edit_account,
-            on_reset=self.reset_password,
-            on_remove=self.remove_account,
-            on_show=self.show_credentials,
+            on_edit=self.edit_account if access.allowed else None,
+            on_remove=self.remove_account if access.allowed else None,
         ))
         return Column(*sections)
 
@@ -113,17 +118,39 @@ class AccountsPage(Page):
         up in the workspace's bar would make Add Account exist even on pages
         that have no account list to add to. Hidden while there is nothing
         to add to yet, or a password already claiming the page's attention.
+
+        Disabled rather than hidden when Studio may not write the broker's
+        files: the action still exists and is the right one to want, so the
+        page says it is unavailable and why instead of quietly omitting it.
+        The card in the body carries the two commands that enable it.
         """
         if not self.workspace.running() or self._credentials is not None:
             return None
 
         add = QPushButton("Add User")
         add.setObjectName("ContextPrimary")
-        add.setCursor(Qt.PointingHandCursor)
-        add.clicked.connect(self.workspace.add_account)
+        access = self.workspace.write_access()
+        if access.allowed:
+            add.setCursor(Qt.PointingHandCursor)
+            add.clicked.connect(self.workspace.add_account)
+        else:
+            add.setEnabled(False)
+            add.setToolTip(
+                f"{access.reason} See Network → Broker to grant access."
+            )
         return add
 
     # ---- actions ---------------------------------------------------------
+    def enter(self) -> None:
+        """Re-stat the broker's files on the way in.
+
+        The user may have run the grant commands in a terminal since this
+        workspace last built, and a chown is invisible to a running app.
+        Without this the page keeps saying Studio cannot write files it can
+        write, with Add User disabled beside the proof it should not be.
+        """
+        self.workspace.recheck_access()
+
     def created(self, name: str, password: str) -> None:
         """Called by the Add Account page once the account exists."""
         self._show(name, password)
@@ -133,29 +160,6 @@ class AccountsPage(Page):
         edit = self.workspace.find("edit_account")
         edit.open_for(name)
         self.workspace.go_to("edit_account")
-
-    def show_credentials(self, name: str) -> None:
-        """Show one account's details, password included.
-
-        Possible at all because Studio keeps its own record of the password —
-        Mosquitto's file holds only a hash. Before that record existed this
-        could be offered exactly once, at creation, and never again.
-        """
-        user = users().find(name)
-        if user is None:
-            return
-        self._show(user.name, user.password)
-
-    def reset_password(self, name: str) -> None:
-        password, problem = users().reset_password(name)
-        if problem:
-            QMessageBox.warning(
-                self.widget(), "Could not reset the user's password", problem
-            )
-            return
-
-        self.workspace.apply_to_broker()
-        self._show(name, password)
 
     def remove_account(self, name: str) -> None:
         parent = self.widget()
@@ -171,13 +175,9 @@ class AccountsPage(Page):
         if confirm != QMessageBox.Yes:
             return
 
-        problem = users().remove(name)
+        problem = self.workspace.remove_account(name)
         if problem:
             QMessageBox.warning(parent, "Could not remove the user", problem)
-            return
-
-        self.workspace.apply_to_broker()
-        self.rebuild()
 
     def _show(self, name: str, password: str) -> None:
         self._credentials = (name, password)
@@ -211,8 +211,7 @@ class AccountTable(QTableWidget):
 
 
 
-    def __init__(self, entries: list, *, on_edit, on_reset, on_remove,
-                 on_show) -> None:
+    def __init__(self, entries: list, *, on_edit, on_remove) -> None:
         super().__init__(len(entries), len(self.COLUMNS))
         self.setObjectName("AccountTable")
         self.setHorizontalHeaderLabels(self.COLUMNS)
@@ -230,27 +229,22 @@ class AccountTable(QTableWidget):
             values = (account.name, account.topics_display)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if account.is_studio:
-                    # Studio's own row reads as chrome rather than as one of
-                    # the user's: it is there, but it is not theirs to manage.
-                    item.setToolTip(STUDIO_DESCRIPTION)
-                elif column in (0, 2):
-                    # Username and Topics are the two columns capped below
-                    # their content's natural width, so a long value can be
-                    # elided — the tooltip is where the rest of it still is.
-                    item.setToolTip(value)
+                # Username and Topics can both be elided when long, so the
+                # tooltip is where the rest of the value still is.
+                item.setToolTip(value)
                 self.setItem(row, column, item)
 
-            if account.is_studio:
-                note = QLabel("Managed")
+            if on_edit is None and on_remove is None:
+                # Studio has not been granted write access. The rows are
+                # still worth showing — this is the broker's real account
+                # list — but there is nothing here to click.
+                note = QLabel("Read only")
                 note.setObjectName("CardBody")
                 self.setCellWidget(row, self.ACTIONS, self._pad(note))
             else:
                 self.setCellWidget(
                     row, self.ACTIONS,
-                    self._row_actions(
-                        account.name, on_edit, on_reset, on_remove, on_show
-                    ),
+                    self._row_actions(account.name, on_edit, on_remove),
                 )
 
         # Topics is the one genuinely open-ended value — an account can carry
@@ -307,8 +301,7 @@ class AccountTable(QTableWidget):
         layout.addWidget(widget)
         return holder
 
-    def _row_actions(self, name: str, on_edit, on_reset, on_remove,
-                     on_show) -> QWidget:
+    def _row_actions(self, name: str, on_edit, on_remove) -> QWidget:
         holder = QWidget()
         layout = QHBoxLayout(holder)
         # Several actions share this row, so the padding between them is
@@ -319,17 +312,15 @@ class AccountTable(QTableWidget):
 
         # Compact row actions, not BAR-2-style buttons: the row already says
         # whose account this is, so the control only needs to name the verb.
-        show = self._button("Show", "RowAction", f"Show {name}'s password")
-        show.mousePressEvent = lambda event: on_show(name)
-        layout.addWidget(show)
-
+        #
+        # Show and Reset are gone with the managed broker. Both read a
+        # password back, and the broker stores only a hash — Studio kept its
+        # own copy before, which is exactly the private list that could
+        # disagree with the broker. Changing a password is mosquitto_passwd's
+        # job now.
         edit = self._button("Edit", "RowAction", f"Edit {name}'s topics")
         edit.mousePressEvent = lambda event: on_edit(name)
         layout.addWidget(edit)
-
-        reset = self._button("Reset", "RowAction", f"Reset {name}'s password")
-        reset.mousePressEvent = lambda event: on_reset(name)
-        layout.addWidget(reset)
 
         remove = self._button("Remove", "RowActionBad", f"Remove {name}", last=True)
         remove.mousePressEvent = lambda event: on_remove(name)

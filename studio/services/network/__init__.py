@@ -1,48 +1,53 @@
 """Networking services. No Qt in here.
 
     broker/finder.py     is Mosquitto installed, is it running, what next?
-    broker/commands.py   start / stop / restart the broker Studio owns
-    broker/accounts.py   applies account records to the broker's own files
+    broker/system.py     the machine's own broker: where it is, whether
+                         Studio may edit its accounts, and what to run
     pub_sub/traffic.py   records every observed publication to SQLite
 
-These are the objects the UI asks questions of. They return data and finished
-strings; the pages under ui/workspaces/network/ decide only how that looks. Keeping
-Qt out means they are testable without a window and reusable from a CLI or a
-future headless mode.
+Studio does not run a broker. It uses the one the machine has — Mosquitto on
+1883, installed and owned by the user — because a second broker beside a
+working one is only a second place for a message to be, and one of them to be
+wrong. What Studio cannot do without permission (editing /etc/mosquitto) it
+asks for rather than assumes; see `broker/system.py`.
 
-Coming with the later steps in mosquitto_plan: account creation (step 3).
+These are the objects the UI asks questions of. They return data and finished
+strings; the pages under ui/workspaces/network/ decide only how that looks.
+Keeping Qt out means they are testable without a window and reusable from a
+CLI or a future headless mode.
 """
 
 from __future__ import annotations
 
-from .broker import commands as broker_commands
-from .broker.accounts import sync as sync_accounts
-from .broker.commands import (
-    CommandResult,
-    broker_dir,
-    config_path,
-    is_ours,
-    our_port,
-    restart,
-    shutdown as shutdown_broker,
-    start,
-    stop,
-)
+from .broker import system as broker_system
 from .broker.finder import (
+    SERVICE_NAME,
+    SYSTEM_PORT,
     BrokerReport,
-    chip_text,
     BrokerStatus,
     Tool,
-    detect,
+    FirewallVerdict,
     active_firewall,
+    chip_text,
+    detect,
+    firewall_allows,
     firewall_hint,
     install_command,
     lan_address,
     port_open,
     report,
-    running_port,
+    robot_endpoint,
+    studio_credentials,
+    studio_endpoint,
 )
-from .broker.topics import Topic, TOPICS
+from .broker.system import (
+    WriteAccess,
+    create_account,
+    grant_instructions,
+    remove_account,
+    write_access,
+)
+from .broker.topics import TOPICS, Topic
 from .pub_sub import (
     MqttClient,
     PublishResult,
@@ -54,28 +59,29 @@ from .pub_sub import (
 
 __all__ = [
     "BrokerReport",
-    "broker_commands",
-    "sync_accounts",
-    "CommandResult",
-    "broker_dir",
-    "config_path",
-    "is_ours",
-    "our_port",
-    "restart",
-    "shutdown_broker",
-    "start",
-    "stop",
-    "chip_text",
     "BrokerStatus",
+    "SERVICE_NAME",
+    "SYSTEM_PORT",
     "Tool",
-    "detect",
+    "FirewallVerdict",
     "active_firewall",
+    "broker_system",
+    "chip_text",
+    "detect",
+    "firewall_allows",
     "firewall_hint",
     "install_command",
     "lan_address",
     "port_open",
     "report",
-    "running_port",
+    "robot_endpoint",
+    "studio_credentials",
+    "studio_endpoint",
+    "WriteAccess",
+    "create_account",
+    "grant_instructions",
+    "remove_account",
+    "write_access",
     "Topic",
     "TOPICS",
     "TrafficRecorder",

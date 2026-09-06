@@ -23,7 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.mqtt_users import NAME_RULE, users
+from ....models.config.mqtt_users import (
+    NAME_RULE,
+    generate_password,
+    validate_name,
+)
+from ....services.network.broker import system
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -82,27 +87,28 @@ class AddAccountPage(Page):
 
         # Asked before doing: being told the rule while still on the form
         # beats being told after the attempt.
-        problem = users().validate(name)
+        taken = {account.name for account in system.accounts()}
+        problem = validate_name(name, taken)
         if problem:
             self._fail(problem)
             return
 
-        created, problem = users().add(name, full_access=self._full_access)
+        # Generated here rather than typed: the password is written straight
+        # into the broker and shown once, so there is nothing for the user to
+        # invent and nothing weak to pick.
+        password = generate_password()
+        topics = "#" if self._full_access else f"{name}/#"
+        problem = self.workspace.create_account(name, password, topics)
         if problem:
             self._fail(problem)
             return
 
-        # Saved first, then pushed at the broker: the record is the thing that
-        # must survive, and a broker that is down must not lose the account.
-        self.workspace.apply_to_broker()
-
-        # The password exists only in what add() just returned, so handing it
-        # straight to the page that shows it is the only way it survives.
-        # Set before navigating: Accounts is already built by this point (the
-        # workspace builds every page up front), so rebuild() takes effect
-        # immediately either way, but state-then-navigate is the clearer order.
+        # The password exists only in the variable above — the broker keeps a
+        # hash — so handing it straight to the page that shows it is the only
+        # way it survives. Set before navigating: Accounts is already built by
+        # this point, but state-then-navigate is the clearer order.
         accounts = self.workspace.find("accounts")
-        accounts.created(created.name, created.password)
+        accounts.created(name, password)
         self.workspace.go_to("accounts")
 
     def cancel(self) -> None:
