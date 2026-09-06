@@ -71,7 +71,11 @@ class MainWindow(QMainWindow):
         self._watch_system_theme()
         self._watch_broker()
 
-        self.select_workspace(self._restored_workspace())
+        # Restoring a workspace is not a user action. In particular, restoring
+        # Network must not bypass a disabled automatic-setup preference. The
+        # launch hook below decides whether setup starts; later BAR 1 clicks
+        # still activate Network explicitly.
+        self.select_workspace(self._restored_workspace(), activate=False)
         self.workspace.go_to(self._restored_page())
         self._restore_window()
         self._start_network_broker()
@@ -190,13 +194,19 @@ class MainWindow(QMainWindow):
         self._traffic_recorder.reconcile()
 
     def _start_network_broker(self) -> None:
-        """Nothing to start: Studio uses the broker the machine runs.
+        """Schedule automatic broker setup after the first window paint.
 
-        Kept as the launch hook rather than deleted so the startup sequence
-        keeps its shape, and so there is one obvious place to look for
-        "does Studio touch the broker on launch?" — it does not.
+        The timer fires only once Qt's event loop is running, so a package
+        install or authorization prompt never appears before Studio itself.
+        Network's coordinator deduplicates this against a quick user click.
         """
-        return
+        if not self._preferences.mqtt_broker_auto_start:
+            return
+        network = next(
+            workspace for workspace in self.workspaces
+            if workspace.key == "network"
+        )
+        QTimer.singleShot(0, network.activate)
 
     def open_preferences(self) -> None:
         PreferencesDialog(self._preferences, self).exec()
@@ -286,6 +296,10 @@ class MainWindow(QMainWindow):
         No broker is stopped: Studio does not start one. The machine's
         Mosquitto outlives the app, which is the point of using it.
         """
+        if any(getattr(workspace, "setup", None) and workspace.setup.running for workspace in self.workspaces):
+            self.statusBar().showMessage("Broker setup is still running. Finish the system authorization prompt before closing.", 8000)
+            event.ignore()
+            return
         self.debug_tray.shutdown()
         self._traffic_recorder.stop()
 
@@ -415,11 +429,15 @@ class MainWindow(QMainWindow):
         self._show_workspace(self.workspace)
         self.refresh_broker()
 
-    def select_workspace(self, index: int) -> None:
+    def select_workspace(self, index: int, *, activate: bool = True) -> None:
         """The one thing that happens on a BAR 1 click."""
         self.nav_bar.check(index)
         self.stack.setCurrentIndex(index)
         self._show_workspace(self.workspaces[index])
+        workspace = self.workspaces[index]
+        if activate and hasattr(workspace, "activate"):
+            # Setup is an activation effect, never a hidden-widget build effect.
+            QTimer.singleShot(0, workspace.activate)
 
     def _show_workspace(self, workspace) -> None:
         """Put a workspace's chrome on screen: BAR 2, the dock, the status.

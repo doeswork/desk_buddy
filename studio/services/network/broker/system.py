@@ -1,29 +1,8 @@
-"""The broker the machine runs, which Studio uses rather than replaces.
+"""System broker state, credentials and account management.
 
-Studio used to be able to start its own Mosquitto on another port. It no
-longer does, and that is the point: the machine's broker is on 1883 where
-every MQTT client looks by default, it is up whether or not Studio is, and a
-robot flashed with stock firmware is already pointed at it. A second broker
-beside a working one is only a second place for a message to be, and one of
-them to be wrong.
-
-Studio does not start, stop, or reconfigure the broker — all three need root, and a broker the user set up for
-their own reasons is not Studio's to rewrite. It *connects* to it, and where
-setup is needed it prints the commands for the user to run.
-
-That division is the whole design:
-
-    Studio owns          knowing where the broker is, connecting to it,
-                         recording the credentials it was given, and
-                         telling the user exactly what to run
-
-    The user owns        installing mosquitto, creating accounts in
-                         /etc/mosquitto/passwd, editing the ACL, and
-                         starting the service
-
-Nothing here runs `sudo`. A tool that edits a system service's config as root
-without being asked is a tool that has to be trusted much more than this one
-needs to be — the same rule `finder.install_command()` already follows.
+Network activation delegates installation and privileged configuration to the
+asynchronous setup coordinator. This module supplies the existing account APIs
+and manual fallback instructions; OS prompts own administrator authentication.
 """
 
 from __future__ import annotations
@@ -31,6 +10,7 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -56,9 +36,7 @@ COMMAND_TIMEOUT = 10
 # because the wait is a human reading a password prompt, not a file edit.
 GRANT_TIMEOUT = 120
 
-# Where a distribution's mosquitto keeps the files an account lives in. Only
-# read to *report* on them — Studio never writes here, and does not need to
-# for the paths it prints to be correct.
+# Default account files shared with the authorized setup helper.
 CONFIG_DIR = Path("/etc/mosquitto")
 PASSWD_FILE = CONFIG_DIR / "passwd"
 ACL_FILE = CONFIG_DIR / "acl"
@@ -202,6 +180,9 @@ def set_connection(
     store.set(keys.SYSTEM_BROKER_PORT, int(port_value) or SYSTEM_PORT)
     store.set(keys.SYSTEM_BROKER_USER, user.strip())
     store.set(keys.SYSTEM_BROKER_PASSWORD, password)
+    store.set(keys.SYSTEM_BROKER_VERIFIED, False)
+    store.set(keys.SYSTEM_BROKER_ROBOT_HOST, "")
+    store.set(keys.SYSTEM_BROKER_NETWORK_READY, False)
     store.sync()
 
 
@@ -273,8 +254,7 @@ def describe(backend: Settings | None = None, *, connect: bool = True) -> System
 
 
 # ---- What the user has to run -------------------------------------------
-# Printed, never run. Studio has no business holding root, and these are
-# short enough to read before pasting — which is the point.
+# Manual fallback commands. Normal setup uses the authorized helper instead.
 
 
 def install_instructions() -> list[tuple[str, str]]:
@@ -488,16 +468,19 @@ def account_instructions(user: str, password: str, *, topics: str = "#") -> list
     `mosquitto_passwd` anyway; hiding it here would only mean they have to
     fetch it from somewhere else in the UI to complete the same step.
     """
-    name = user or "studio"
-    secret = password or "<password>"
+    name = shlex.quote(user or "studio")
+    secret = shlex.quote(password or "<password>")
+    prepare = f"test -e {PASSWD_FILE} || install -m 640 -g mosquitto /dev/null {PASSWD_FILE}"
+    acl = shlex.quote(f"user {user or 'studio'}\ntopic readwrite {topics}\n")
     return [
+        ("Prepare the password file if missing", "sudo sh -c " + shlex.quote(prepare)),
         (
             "Create the account",
             f"sudo mosquitto_passwd -b {PASSWD_FILE} {name} {secret}",
         ),
         (
             "Let it reach every topic",
-            f"printf 'user {name}\\ntopic readwrite {topics}\\n' "
+            f"printf '%s' {acl} "
             f"| sudo tee -a {ACL_FILE}",
         ),
         (
@@ -514,11 +497,21 @@ def listener_instructions(number: int = SYSTEM_PORT) -> list[tuple[str, str]]:
     for Studio and useless for a robot. This is the one edit that turns it
     into a broker the rest of the network can use.
     """
+    directory = CONFIG_DIR / "conf.d"
+    fragment = directory / "desk-buddy.conf"
+    text = ("# Managed by Desk Buddy Studio\n"
+            f"listener {int(number)} 0.0.0.0\nallow_anonymous false\n"
+            f"password_file {PASSWD_FILE}\nacl_file {ACL_FILE}\n")
+    include = f"include_dir {directory}"
+    enable = (f"grep -Fqx {shlex.quote(include)} {CONFIG_FILE} || "
+              f"printf '%s\\n' {shlex.quote(include)} >> {CONFIG_FILE}")
     return [
+        ("Create the configuration directory", f"sudo install -d -m 755 {directory}"),
         (
-            "Listen on every interface",
-            f"printf 'listener {number} 0.0.0.0\\n' | sudo tee -a {CONFIG_FILE}",
+            "Configure an authenticated LAN listener",
+            f"printf '%s' {shlex.quote(text)} | sudo tee {fragment}",
         ),
+        ("Include the configuration once", "sudo sh -c " + shlex.quote(enable)),
         ("Apply it", f"sudo systemctl restart {SERVICE}"),
     ]
 
@@ -529,11 +522,8 @@ def listener_instructions(number: int = SYSTEM_PORT) -> list[tuple[str, str]]:
 # "write two files in /etc/mosquitto", and whether Studio may do that is a
 # filesystem question, asked fresh every time rather than assumed.
 #
-# Studio never elevates. It does not call sudo or pkexec, and it does not ask
-# for a password — a GUI that collects a root password to run a shell command
-# is a habit worth not teaching. Either the user has granted access to those
-# two files, in which case editing them is ordinary unprivileged work, or
-# they have not, in which case Studio says so and shows how to grant it.
+# Account edits use the existing grant. Privileged setup runs separately;
+# administrator passwords are handled exclusively by system authorization.
 
 
 @dataclass(frozen=True)
@@ -1188,22 +1178,21 @@ def reload() -> str:
     leaves the accounts correctly written and only not yet live, which the
     caller reports as such rather than as a lost change.
     """
-    if not shutil.which("systemctl"):
-        return ""
+    from .setup_platform import detect, service_commands
+    store = settings()
+    store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, True)
+    store.sync()
     try:
-        result = subprocess.run(
-            ["systemctl", "reload", SERVICE],
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-        )
+        commands = service_commands(detect().service_manager, "reload")
+    except RuntimeError as error:
+        return f"Accounts written, but the broker could not be reloaded: {error}"
+    try:
+        for command in commands:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
+            if result.returncode:
+                return "Accounts written, but the service manager refused the reload. Open Network → Broker and retry setup to apply them."
     except (OSError, subprocess.SubprocessError) as error:
         return f"Accounts written, but the broker could not be reloaded: {error}"
-    if result.returncode != 0:
-        detail = (result.stderr or "").strip()
-        return (
-            "Accounts written, but the broker could not be reloaded"
-            + (f": {detail}" if detail else ".")
-            + f" Run: sudo systemctl reload {SERVICE}"
-        )
+    store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, False)
+    store.sync()
     return ""

@@ -37,6 +37,8 @@ LAST_WORKSPACE = Key("window/last_workspace", int, 0)
 LAST_PAGE = Key("window/last_page", str, "")
 
 # ---- Network ------------------------------------------------------------
+# Keep the established key name for settings compatibility. It now controls
+# the complete idempotent setup/connect pass, not only service startup.
 MQTT_BROKER_AUTO_START = Key("network/mqtt_broker_auto_start", bool, True)
 
 # Where the broker is. Not ours to choose — the user's mosquitto is wherever
@@ -54,6 +56,12 @@ SYSTEM_BROKER_PASSWORD = Key("network/system_broker_password", str, "")
 # /etc/mosquitto/passwd, so recording a password proves nothing about
 # whether the account exists — only a successful CONNACK does.
 SYSTEM_BROKER_VERIFIED = Key("network/system_broker_verified", bool, False)
+
+# Robot address may be the Windows LAN address while Studio uses WSL loopback.
+SYSTEM_BROKER_ROBOT_HOST = Key("network/system_broker_robot_host", str, "")
+SYSTEM_BROKER_NETWORK_READY = Key("network/system_broker_network_ready", bool, False)
+SYSTEM_BROKER_SETUP_PAUSED = Key("network/system_broker_setup_paused", bool, False)
+SYSTEM_BROKER_RELOAD_PENDING = Key("network/system_broker_reload_pending", bool, False)
 
 # Whether Studio installed the polkit rule that lets it reload the broker
 # without a password prompt on every account edit.
@@ -78,5 +86,9 @@ ALL = (
     SYSTEM_BROKER_USER,
     SYSTEM_BROKER_PASSWORD,
     SYSTEM_BROKER_VERIFIED,
+    SYSTEM_BROKER_ROBOT_HOST,
+    SYSTEM_BROKER_NETWORK_READY,
+    SYSTEM_BROKER_SETUP_PAUSED,
+    SYSTEM_BROKER_RELOAD_PENDING,
     SYSTEM_BROKER_RELOAD_RULE,
 )

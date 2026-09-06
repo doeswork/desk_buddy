@@ -308,7 +308,11 @@ def test_robot_endpoint_is_the_machines_broker() -> None:
     """
     from ..broker import finder
 
-    with mock.patch.object(system, "describe", lambda *a, **k: broker_state()):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: broker_state()),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         assert finder.robot_endpoint() == ("192.168.1.50", 1883)
 
 
@@ -317,7 +321,11 @@ def test_robot_endpoint_is_empty_when_the_broker_is_down() -> None:
     from ..broker import finder
 
     down = broker_state(reachable=False, service_active=False)
-    with mock.patch.object(system, "describe", lambda *a, **k: down):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: down),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         assert finder.robot_endpoint() == ("", 0)
 
 
@@ -326,7 +334,11 @@ def test_a_loopback_broker_is_never_given_to_a_robot() -> None:
     from ..broker import finder
 
     local = broker_state(host="127.0.0.1")
-    with mock.patch.object(system, "describe", lambda *a, **k: local):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: local),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         with mock.patch.object(finder, "lan_address", lambda: "192.168.1.50"):
             assert finder.robot_endpoint() == ("192.168.1.50", 1883)
 
