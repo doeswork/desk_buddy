@@ -419,7 +419,10 @@ class MainWindow(QMainWindow):
         """The one thing that happens on a BAR 1 click."""
         self.nav_bar.check(index)
         self.stack.setCurrentIndex(index)
-        self._show_workspace(self.workspaces[index])
+        workspace = self.workspaces[index]
+        if hasattr(workspace, "enter"):
+            workspace.enter()
+        self._show_workspace(workspace)
 
     def _show_workspace(self, workspace) -> None:
         """Put a workspace's chrome on screen: BAR 2, the dock, the status.
