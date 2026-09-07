@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import subprocess
@@ -17,7 +18,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from ..broker import setup, setup_helper as helper, setup_platform as platforms, setup_windows as windows
+from ..broker import (
+    setup,
+    setup_helper as helper,
+    setup_platform as platforms,
+    system,
+)
+from ..wsl import windows_host as windows
 
 LINUX = platforms.Environment(True, "ubuntu", "apt-get", "systemd", False, "")
 WSL = platforms.Environment(True, "ubuntu", "apt-get", "systemd", True, "Ubuntu")
@@ -258,7 +265,64 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(coordinator.status.state, "failed")
         self.assertIn("Invalid account details", coordinator.status.detail)
 
-    def test_existing_wsl_broker_is_ready_without_windows_networking(self):
+    def test_account_reload_uses_direct_success_without_authorization(self):
+        with (
+            mock.patch.object(
+                setup, "detect", return_value=LINUX
+            ),
+            mock.patch(
+                "studio.services.network.broker.system.reload",
+                return_value=system.AccountChange(changed=True, applied=True),
+            ),
+            mock.patch.object(setup, "authorize") as authorize,
+        ):
+            result = setup.apply_account_reload(
+                {"user": "studio", "password": "secret", "port": 1883},
+                lambda *a, **kw: None,
+            )
+        self.assertEqual(result.state, "ready")
+        authorize.assert_not_called()
+
+    def test_account_reload_uses_the_narrow_privileged_action(self):
+        request = {
+            "user": "studio", "password": "secret", "port": 1883,
+            "direct_attempted": True,
+        }
+        with (
+            mock.patch.object(setup, "detect", return_value=WSL),
+            mock.patch.object(system, "reload") as direct,
+            mock.patch.object(
+                setup, "authorize", return_value={"state": "complete"}
+            ) as authorize,
+        ):
+            result = setup.apply_account_reload(
+                request, lambda *a, **kw: None
+            )
+        self.assertEqual(result.state, "ready")
+        direct.assert_not_called()
+        self.assertEqual(authorize.call_args.args[0]["action"], "reload")
+
+    def test_account_reload_coordinator_serializes_and_redacts_failures(self):
+        release = threading.Event()
+
+        def operation(request, emit):
+            release.wait(1)
+            raise RuntimeError("reload failed with secret-password")
+
+        coordinator = setup.AccountReloadCoordinator(operation)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertTrue(coordinator.start({"password": "secret-password"}))
+            self.assertFalse(
+                coordinator.start({"password": "secret-password"}, retry=True)
+            )
+            release.set()
+            self.finish(coordinator)
+        self.assertEqual(coordinator.status.state, "failed")
+        self.assertNotIn("secret-password", coordinator.status.detail)
+        self.assertNotIn("secret-password", output.getvalue())
+
+    def test_existing_wsl_broker_is_ready_without_implicit_windows_networking(self):
         def verify(host, number, user, secret):
             return "" if secret == "existing-password" else "Credentials refused"
 
@@ -269,24 +333,21 @@ class CoordinatorTests(unittest.TestCase):
             mock.patch.object(setup, "firewall_ready", return_value=True),
             mock.patch.object(helper, "FRAGMENT", Path("/nonexistent/desk-buddy.conf")),
             mock.patch.object(setup, "authorize") as authorize,
-            mock.patch.object(windows, "prepare", side_effect=RuntimeError("Windows unavailable")) as prepare,
             mock.patch.object(windows, "powershell") as powershell,
         ):
             result = setup.perform(
                 dict(host="", user="studio", password="existing-password", port=1883,
                      robot_host="192.168.1.10", network_ready=True),
                 lambda *a, **kw: None,
-            )
+        )
         authorize.assert_not_called()
-        prepare.assert_not_called()
         powershell.assert_not_called()
         self.assertEqual(result.state, "ready")
         self.assertTrue(result.connected)
         self.assertFalse(result.network_ready)
         self.assertEqual(result.robot_host, "")
         self.assertIn("127.0.0.1:1883", result.message)
-        self.assertIn("172.20.0.2:1883", result.detail)
-        self.assertIn("Windows forwarding is managed separately", result.detail)
+        self.assertEqual(result.detail, "")
 
     def test_new_wsl_broker_uses_configured_port_without_windows_setup(self):
         with (
@@ -294,20 +355,18 @@ class CoordinatorTests(unittest.TestCase):
             mock.patch.object(setup, "verify_connection", side_effect=["Not answering", ""]) as verify,
             mock.patch.object(setup, "local_network", return_value=("172.20.0.2", "172.20.0.0/24")),
             mock.patch.object(setup, "authorize", return_value={"user": "studio-2", "reload_rule": True}) as authorize,
-            mock.patch.object(windows, "prepare") as prepare,
         ):
             result = setup.perform(dict(host="", user="studio", password="secret", port=1884), lambda *a, **kw: None)
         self.assertEqual(authorize.call_args.args[0]["action"], "setup")
         self.assertEqual(authorize.call_args.args[0]["port"], 1884)
         verify.assert_called_with("127.0.0.1", 1884, "studio-2", "secret")
-        prepare.assert_not_called()
         self.assertEqual(result.state, "ready")
         self.assertTrue(result.connected)
         self.assertTrue(result.reload_rule)
         self.assertEqual(result.user, "studio-2")
         self.assertEqual(result.robot_host, "")
         self.assertFalse(result.network_ready)
-        self.assertIn("172.20.0.2:1884", result.detail)
+        self.assertEqual(result.detail, "")
 
     def test_wsl_still_reports_linux_firewall_failure(self):
         with (
@@ -315,10 +374,8 @@ class CoordinatorTests(unittest.TestCase):
             mock.patch.object(setup, "verify_connection", side_effect=["Not answering", ""]),
             mock.patch.object(setup, "local_network", return_value=("172.20.0.2", "172.20.0.0/24")),
             mock.patch.object(setup, "authorize", return_value={"user": "studio", "network_problem": "Linux firewall failed"}),
-            mock.patch.object(windows, "prepare") as prepare,
         ):
             result = setup.perform(dict(host="", user="studio", password="secret", port=1883), lambda *a, **kw: None)
-        prepare.assert_not_called()
         self.assertEqual(result.state, "failed")
         self.assertTrue(result.connected)
         self.assertFalse(result.network_ready)
@@ -359,6 +416,7 @@ class WindowsTests(unittest.TestCase):
         self.assertIn("Another Windows application", script)
         self.assertIn("$old.Target", script)
         self.assertIn("$needs -and $apply", script)
+        self.assertIn("ConnectAsync($hostAddress, $port)", script)
 
     def test_mirrored_mode_uses_scoped_hyperv_rule(self):
         script = self.script("mirrored", True)
@@ -366,11 +424,34 @@ class WindowsTests(unittest.TestCase):
         self.assertIn("-LocalPorts $port -RemoteAddresses $subnet", script)
         self.assertNotIn("DefaultInboundAction", script)
 
+    def test_public_profile_and_custom_port_are_scoped(self):
+        script = windows.network_script(
+            name="DeskBuddy-abc123", mode="nat", host="192.168.1.10",
+            target="172.20.0.2", subnet="192.168.1.0/24", port=1884,
+            profile="Public", apply=True,
+        )
+        self.assertIn("$port = 1884", script)
+        self.assertIn("$profile = 'Public'", script)
+        self.assertIn("-RemoteAddress $subnet -Profile $profile", script)
+
+    def test_nat_does_not_require_hyperv_firewall_cmdlets(self):
+        script = self.script("nat", True)
+        self.assertIn("$hyperAvailable", script)
+        self.assertIn("$old.Mode -eq 'mirrored'", script)
+        self.assertIn("-Name $hyperName", script)
+
     def test_bad_addresses_and_modes_never_reach_powershell(self):
         with self.assertRaises(ValueError):
             windows.network_script(name="DeskBuddy-abc", mode="nat", host="'; bad", target="172.20.0.2", subnet="192.168.1.0/24", port=1883, apply=True)
         with self.assertRaises(ValueError):
             self.script("unknown")
+
+    def test_removal_requires_ownership_and_matches_the_recorded_proxy(self):
+        script = windows.remove_script(name="DeskBuddy-abc123")
+        self.assertIn("and -not $old", script)
+        self.assertIn("$listenAddress -eq $old.HostAddress", script)
+        self.assertIn("$targetValue -eq \"$($old.Target)/$($old.Port)\"", script)
+        self.assertIn("Remove-Item -Path $key", script)
 
     def windows_mock(self, *, needed=False, denied=False, mode="nat"):
         calls = []
@@ -381,14 +462,21 @@ class WindowsTests(unittest.TestCase):
             calls.append(script)
             if "Get-NetIPConfiguration" in script:
                 data = dict(address="192.168.1.10", prefix=24, profile="Private", temp=str(root))
-            elif "Start-Process powershell.exe" in script:
+            elif "Start-Process -FilePath" in script:
                 if denied:
-                    return subprocess.CompletedProcess([], 1223, "", "")
+                    data = {"error": "The operation was canceled by the user.", "nativeCode": 1223}
+                    return subprocess.CompletedProcess([], 0, json.dumps(data), "")
                 # Simulate only the authorized helper's output file.
                 (next(root.iterdir()) / "result.json").write_text(json.dumps({"needed": False}))
-                data = {}
+                data = {"exitCode": 0}
             else:
-                data = {"needed": needed if len(calls) == 2 else False, "host": "192.168.1.10"}
+                pending = needed if len(calls) == 2 else False
+                data = {
+                    "needed": pending,
+                    "owned": pending,
+                    "host": "192.168.1.10",
+                    "reachable": not pending,
+                }
             return subprocess.CompletedProcess([], 0, json.dumps(data), "")
         def command(argv, **kwargs):
             result = mode if argv[-1] == "--networking-mode" else argv[-1]
@@ -403,13 +491,16 @@ class WindowsTests(unittest.TestCase):
 
     def test_existing_windows_network_needs_no_uac(self):
         calls = self.windows_mock()
-        self.assertEqual(windows.prepare(WSL, 1883, lambda *a, **kw: None), "192.168.1.10")
+        result = windows.enable(WSL, 1883, lambda *a, **kw: None)
+        self.assertTrue(result.ready)
+        self.assertEqual(result.host, "192.168.1.10")
         self.assertEqual(len(calls), 2)
 
     def test_changed_wsl_address_is_repaired_and_checked_again(self):
         calls = self.windows_mock(needed=True)
         progress = []
-        self.assertEqual(windows.prepare(WSL, 1883, lambda *a, **kw: progress.append(a)), "192.168.1.10")
+        result = windows.enable(WSL, 1883, lambda *a, **kw: progress.append(a))
+        self.assertEqual(result.host, "192.168.1.10")
         self.assertIn("172.20.0.9", calls[1])
         self.assertIn("-Verb RunAs", calls[2])
         self.assertEqual(len(calls), 4)
@@ -417,18 +508,93 @@ class WindowsTests(unittest.TestCase):
 
     def test_windows_uac_cancellation_is_reported(self):
         self.windows_mock(needed=True, denied=True)
-        with self.assertRaises(setup.SetupCancelled):
-            windows.prepare(WSL, 1883, lambda *a, **kw: None)
+        with self.assertRaises(windows.AuthorizationCancelled):
+            windows.enable(WSL, 1883, lambda *a, **kw: None)
+
+    def test_missing_windows_interoperability_is_explained(self):
+        with mock.patch.object(windows, "executable", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "interoperability"):
+                windows.powershell("Write-Output test")
+
+    def test_disable_uses_uac_and_returns_disabled(self):
+        with (
+            mock.patch.object(windows, "_windows_info", return_value={"temp": "C:\\Temp"}),
+            mock.patch.object(windows, "_elevated", return_value={"removed": True}) as elevated,
+        ):
+            result = windows.disable(WSL, 1883)
+        self.assertEqual(result.state, "disabled")
+        self.assertFalse(result.ready)
+        self.assertIn("Remove-Item -Path $key", elevated.call_args.args[0])
+
+    def test_elevation_uses_a_script_file_not_a_nested_encoded_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def convert(argv, **kwargs):
+                value = argv[-1]
+                if argv[1] == "-u":
+                    result = str(root)
+                else:
+                    result = "C:\\Temp\\" + Path(value).parent.name + "\\" + Path(value).name
+                return subprocess.CompletedProcess(argv, 0, result, "")
+
+            def launch(script, **kwargs):
+                self.assertIn("Start-Process -FilePath", script)
+                self.assertNotIn("-EncodedCommand", script)
+                program = next(root.rglob("network.ps1"))
+                body = program.read_text(encoding="utf-8-sig")
+                self.assertIn("Out-File -LiteralPath 'C:\\Temp", body)
+                (program.parent / "result.json").write_text(json.dumps({"ok": True}))
+                reply = json.dumps({"exitCode": 0})
+                return subprocess.CompletedProcess([], 0, reply, "")
+
+            with (
+                mock.patch.object(windows, "run", side_effect=convert),
+                mock.patch.object(windows, "powershell", side_effect=launch),
+            ):
+                result = windows._elevated("@{ ok=$true } | ConvertTo-Json", "C:\\Temp")
+        self.assertTrue(result["ok"])
 
     def test_mirrored_network_uses_actual_mode(self):
         calls = self.windows_mock(mode="mirrored")
-        windows.prepare(WSL, 1883, lambda *a, **kw: None)
+        windows.enable(WSL, 1883, lambda *a, **kw: None)
         self.assertIn("$mode = 'mirrored'", calls[1])
+
+    def test_inspection_marks_owned_drift_for_repair(self):
+        self.windows_mock(needed=True)
+        status = windows.inspect(WSL, 1883)
+        self.assertEqual(status.state, "repair")
+        self.assertFalse(status.ready)
+
+    def test_inspection_requires_a_windows_side_tcp_connection(self):
+        self.windows_mock()
+        def unreachable(script, **kwargs):
+            if "Get-NetIPConfiguration" in script:
+                data = dict(address="192.168.1.10", prefix=24, profile="Private", temp="C:\\Temp")
+            else:
+                data = dict(needed=False, owned=True, host="192.168.1.10", reachable=False)
+            return subprocess.CompletedProcess([], 0, json.dumps(data), "")
+        with mock.patch.object(windows, "powershell", side_effect=unreachable):
+            status = windows.inspect(WSL, 1883)
+        self.assertEqual(status.state, "failed")
+        self.assertIn("did not answer", status.detail)
 
     def test_conflict_reason_reaches_the_user(self):
         result = subprocess.CompletedProcess([], 0, json.dumps({"error": "Another Windows application is using the broker port."}), "")
         with self.assertRaisesRegex(RuntimeError, "Another Windows application"):
             windows.decode(result)
+
+    def test_coordinator_keeps_windows_failure_in_its_own_state(self):
+        coordinator = windows.AccessCoordinator()
+        with mock.patch.object(windows, "enable", side_effect=RuntimeError("Windows unavailable")):
+            self.assertTrue(coordinator.start("enable", WSL, 1883))
+            deadline = time.monotonic() + 2
+            while coordinator.running and time.monotonic() < deadline:
+                coordinator.poll()
+                time.sleep(0.005)
+        self.assertFalse(coordinator.status.ready)
+        self.assertEqual(coordinator.status.state, "failed")
+        self.assertIn("Windows unavailable", coordinator.status.detail)
 
 
 @unittest.skipUnless(platforms.executable("mosquitto") and platforms.executable("mosquitto_passwd"), "Mosquitto tools are not installed")

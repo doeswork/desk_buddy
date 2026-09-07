@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
 import shlex
 import subprocess
@@ -28,6 +27,15 @@ class SetupStatus:
     user: str = ""
     reload_rule: bool = False
     access_revoked: bool = False
+
+
+@dataclass(frozen=True)
+class AccountReloadStatus:
+    """Lifecycle of applying already-written passwd and ACL changes."""
+
+    state: str = "idle"
+    message: str = "Broker user changes are up to date."
+    detail: str = ""
 
 
 class SetupCancelled(RuntimeError):
@@ -137,7 +145,12 @@ def authorize(request: dict, env: Environment, emit) -> dict:
             # over their WSL distributions. Run only our narrow, validated
             # Linux broker helper as WSL root. Windows firewall and forwarding
             # are managed separately and are not part of broker setup.
-            emit("checking", "Preparing the broker inside WSL…")
+            emit(
+                "applying" if request.get("action") == "reload" else "checking",
+                "Applying broker user changes inside WSL…"
+                if request.get("action") == "reload"
+                else "Preparing the broker inside WSL…",
+            )
             process = subprocess.Popen(
                 [wsl, "--distribution", env.distribution, "--user", "root",
                  "--exec", *command],
@@ -145,7 +158,12 @@ def authorize(request: dict, env: Environment, emit) -> dict:
                 stderr=subprocess.DEVNULL,
             )
         elif executable("pkexec"):
-            emit("checking", "Approve broker setup in the system authorization dialog…")
+            emit(
+                "applying" if request.get("action") == "reload" else "checking",
+                "Approve applying broker user changes…"
+                if request.get("action") == "reload"
+                else "Approve broker setup in the system authorization dialog…",
+            )
             process = subprocess.Popen([executable("pkexec"), "--disable-internal-agent", *command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             # A desktop-less polkit rejects quickly. Fall back only on failure,
             # never after the user explicitly cancels (126).
@@ -160,11 +178,21 @@ def authorize(request: dict, env: Environment, emit) -> dict:
             if process.poll() not in (None, 0) and not result.exists():
                 process = None
         if process is None:
-            emit("checking", "Approve broker setup in the terminal that opens…")
+            reloading = request.get("action") == "reload"
+            emit(
+                "applying" if reloading else "checking",
+                "Approve applying broker user changes in the terminal that opens…"
+                if reloading
+                else "Approve broker setup in the terminal that opens…",
+            )
             script = root / "approve.sh"
             exit_file = root / "terminal-exit"
             script.write_text("#!/bin/sh\ntrap " + shlex.quote("printf 1 > " + shlex.quote(str(exit_file))) + " HUP INT TERM\n" +
-                              "printf '%s\\n' 'Desk Buddy: install and configure the MQTT broker.'\n" +
+                              "printf '%s\\n' " + shlex.quote(
+                                  "Desk Buddy: apply broker user changes."
+                                  if reloading
+                                  else "Desk Buddy: install and configure the MQTT broker."
+                              ) + "\n" +
                               "sudo -- " + shlex.join(command) + "\ncode=$?\n" +
                               "printf '%s' \"$code\" > " + shlex.quote(str(exit_file)) + "\n")
             script.chmod(0o700)
@@ -249,8 +277,6 @@ def perform(request: dict, emit) -> SetupStatus:
     authenticated = connected and bool(verify_connection(host, number, name, uuid.uuid4().hex))
     network_problem = ""
     reload_rule = False
-    if request.get("reload_pending"):
-        authorize({**request, "action": "reload"}, env, emit)
     # Reuse a working authenticated broker, including a custom configuration.
     # A successful loopback connection alone cannot establish a LAN listener.
     from .setup_helper import FRAGMENT, MARKER
@@ -284,20 +310,13 @@ def perform(request: dict, emit) -> SetupStatus:
     status = SetupStatus("ready", f"Connected as “{name}” at {host}:{number}.", True, address, bool(address) and not network_problem,
                          network_problem, name, reload_rule)
     if env.wsl:
-        # The Linux listener is sufficient for Studio and local services.
-        # Windows forwarding belongs to separate tooling. Do not advertise
-        # WSL's private address (or a stale Windows address) to robots, or
-        # turn unverified external access into a failed broker setup.
+        # The broker lifecycle ends at the Linux boundary.  A separate,
+        # explicitly requested WSL access coordinator inspects or changes the
+        # Windows host, so declining UAC can never turn this successful local
+        # setup into a broker failure.  Never advertise WSL's private address.
         status = replace(status, robot_host="", network_ready=False)
         if not network_problem:
-            target = f"Broker address inside WSL: {address}:{number}. " if address else ""
-            return replace(
-                status,
-                detail=target + "Windows forwarding is managed separately. "
-                "Configure it with your forwarding tool, then use its Windows-facing "
-                "address and port when connecting a robot. External access has not "
-                "been verified by Studio.",
-            )
+            return status
     if not status.network_ready and status.state == "ready":
         status = replace(status, state="failed", message="Studio is connected. Robot network setup is incomplete.",
                          detail=network_problem or "No LAN address is available. Connect to the robot’s network, then retry.")
@@ -352,3 +371,91 @@ class Coordinator:
                 self.running = False
             else:
                 self.status = replace(self.status, state=event[1], message=event[2], **event[3])
+
+
+def apply_account_reload(request: dict, emit) -> AccountReloadStatus:
+    """Apply pending account files without changing broker setup state."""
+    from . import system
+
+    environment = detect()
+    emit("applying", "Applying broker user changes…")
+    if not request.get("direct_attempted"):
+        direct = system.reload()
+        if direct.applied:
+            return AccountReloadStatus(
+                "ready", "Broker user changes are active."
+            )
+
+    print(
+        "[Studio broker accounts] requesting the privileged reload helper",
+        flush=True,
+    )
+    authorize({**request, "action": "reload"}, environment, emit)
+    print("[Studio broker accounts] privileged reload complete", flush=True)
+    return AccountReloadStatus("ready", "Broker user changes are active.")
+
+
+class AccountReloadCoordinator:
+    """A serialized account reload, independent of broker setup health."""
+
+    def __init__(self, operation=apply_account_reload):
+        self.operation = operation
+        self.status = AccountReloadStatus()
+        self.events: queue.Queue = queue.Queue()
+        self.running = False
+        self.attempted = False
+
+    def start(self, request: dict, *, retry: bool = False) -> bool:
+        if self.running or (self.attempted and not retry):
+            return False
+        self.running = self.attempted = True
+        self.status = AccountReloadStatus(
+            "applying", "Applying broker user changes…"
+        )
+
+        def emit(state, message, **fields):
+            self.events.put(("progress", state, message, fields))
+
+        def work():
+            try:
+                result = self.operation(dict(request), emit)
+            except Exception as error:
+                detail = redact(
+                    str(error), str(request.get("password") or "")
+                )
+                state = "cancelled" if isinstance(error, SetupCancelled) else "failed"
+                print(
+                    f"[Studio broker accounts] privileged reload {state}: "
+                    f"{type(error).__name__}: {detail}",
+                    flush=True,
+                )
+                result = AccountReloadStatus(
+                    state,
+                    "Broker user changes still need to be applied.",
+                    detail,
+                )
+            self.events.put(("result", result))
+
+        threading.Thread(
+            target=work, name="broker-account-reload", daemon=True
+        ).start()
+        return True
+
+    def poll(self) -> bool:
+        changed = False
+        while True:
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                return changed
+            changed = True
+            if event[0] == "result":
+                self.status = event[1]
+                self.running = False
+            else:
+                self.status = replace(
+                    self.status,
+                    state=event[1],
+                    message=event[2],
+                    **event[3],
+                )

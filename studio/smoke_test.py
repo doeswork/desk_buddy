@@ -25,6 +25,30 @@ from .ui.menus.view import DEFAULT_ZOOM_INDEX
 
 def main() -> int:
     app = QApplication([])
+    # NetworkWorkspace deliberately invalidates persisted WSL endpoints until
+    # it can inspect Windows again. The smoke test builds that real workspace,
+    # so give every Network settings reader a disposable backend rather than
+    # clearing the developer's verified endpoint merely by running tests.
+    settings_directory = tempfile.TemporaryDirectory()
+    smoke_settings = Settings(QSettings(
+        os.path.join(settings_directory.name, "settings.ini"),
+        QSettings.IniFormat,
+    ))
+    settings_patches = [
+        mock.patch(
+            "studio.ui.workspaces.network.workspace.settings",
+            return_value=smoke_settings,
+        ),
+        mock.patch(
+            "studio.storage.settings.settings", return_value=smoke_settings
+        ),
+        mock.patch(
+            "studio.services.network.broker.system.settings",
+            return_value=smoke_settings,
+        ),
+    ]
+    for patcher in settings_patches:
+        patcher.start()
     # The smoke test builds every page and pumps Qt events. Never launch an
     # authorization prompt on the developer/CI host, including restored Network.
     activation_patch = mock.patch(
@@ -132,6 +156,9 @@ def main() -> int:
 
     print(f"OK: {len(workspaces)} workspaces / {total_pages} pages, "
           f"two bars swap, preferences round-trip, diagnostics render")
+    for patcher in reversed(settings_patches):
+        patcher.stop()
+    settings_directory.cleanup()
     app.quit()
     return 0
 

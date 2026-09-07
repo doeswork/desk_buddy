@@ -60,6 +60,21 @@ GROUP = "mosquitto"
 POLKIT_RULE = Path("/etc/polkit-1/rules.d/49-desk-buddy-mosquitto.rules")
 
 
+@dataclass(frozen=True)
+class AccountChange:
+    """What an account-file mutation achieved.
+
+    ``changed`` means the passwd/ACL files reached the requested state.
+    ``applied`` means Mosquitto also accepted the reload. Keeping those two
+    facts separate prevents a generated password from being stranded because
+    a later service-manager operation needed privilege.
+    """
+
+    changed: bool = False
+    applied: bool = False
+    problem: str = ""
+
+
 
 @dataclass(frozen=True)
 class SystemBroker:
@@ -893,8 +908,8 @@ def _record_reload_rule(installed: bool, backend: Settings | None = None) -> Non
     store.sync()
 
 
-def create_account(user: str, password: str, topics: str = "#") -> str:
-    """Add `user` to the broker and give it `topics`. "" on success.
+def create_account(user: str, password: str, topics: str = "#") -> AccountChange:
+    """Write `user`, then report separately whether Mosquitto reloaded it.
 
     Refuses rather than half-works when Studio has not been granted access:
     the caller is expected to have disabled the button already, and this is
@@ -902,13 +917,15 @@ def create_account(user: str, password: str, topics: str = "#") -> str:
     """
     access = write_access()
     if not access.allowed:
-        return access.reason or "Studio may not edit the broker's accounts."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's accounts."
+        )
 
     name = user.strip()
     if not name:
-        return "A username is required."
+        return AccountChange(problem="A username is required.")
     if not password:
-        return "A password is required."
+        return AccountChange(problem="A password is required.")
 
     try:
         result = subprocess.run(
@@ -918,19 +935,20 @@ def create_account(user: str, password: str, topics: str = "#") -> str:
             timeout=COMMAND_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
+        return AccountChange(problem=str(error))
     if result.returncode != 0:
-        return (result.stderr or result.stdout or "").strip() or (
-            f"{PASSWD_TOOL} failed."
+        return AccountChange(
+            problem=(result.stderr or result.stdout or "").strip()
+            or f"{PASSWD_TOOL} failed."
         )
 
     problem = _rewrite_acl_entry(name, topics)
     if problem:
-        return problem
+        return AccountChange(problem=problem)
 
-    # Written down only once the broker has actually taken it, so a failed
-    # create never leaves a password recorded for an account that does not
-    # exist. This is the only copy: mosquitto_passwd hashed the original.
+    # Record as soon as both account files are written. Reload is a separate
+    # outcome, and this copy is what lets the UI recover from an interrupted
+    # authorization instead of generating a different password.
     _record_password(name, password)
     return reload()
 
@@ -961,11 +979,13 @@ def _forget_password(name: str) -> None:
         pass
 
 
-def remove_account(user: str) -> str:
-    """Delete `user` from the broker. "" on success."""
+def remove_account(user: str) -> AccountChange:
+    """Delete `user` from the files and report whether that is live."""
     access = write_access()
     if not access.allowed:
-        return access.reason or "Studio may not edit the broker's accounts."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's accounts."
+        )
 
     try:
         result = subprocess.run(
@@ -975,17 +995,18 @@ def remove_account(user: str) -> str:
             timeout=COMMAND_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
+        return AccountChange(problem=str(error))
     # -D on an absent user is not a failure worth surfacing: the desired
     # end state is "this account does not exist", which already holds.
     if result.returncode != 0 and "not found" not in (result.stderr or "").lower():
-        return (result.stderr or result.stdout or "").strip() or (
-            f"{PASSWD_TOOL} failed."
+        return AccountChange(
+            problem=(result.stderr or result.stdout or "").strip()
+            or f"{PASSWD_TOOL} failed."
         )
 
     problem = _rewrite_acl_entry(user, topics=None)
     if problem:
-        return problem
+        return AccountChange(problem=problem)
 
     # The account is gone from the broker, so the recorded password is now a
     # secret for nothing. Keeping it would also mean a later account reusing
@@ -1099,19 +1120,21 @@ def _acl_topics() -> dict[str, list[str]]:
     return found
 
 
-def set_topics(user: str, topics: tuple[str, ...] | list[str]) -> str:
-    """Replace `user`'s topic list on the broker. "" on success.
+def set_topics(user: str, topics: tuple[str, ...] | list[str]) -> AccountChange:
+    """Replace topics in the ACL and report whether Mosquitto reloaded it.
 
     Only the ACL is touched — no password is involved, so this works for an
     account Studio did not create and has no secret for.
     """
     access = write_access()
     if not access.acl_writable:
-        return access.reason or "Studio may not edit the broker's ACL."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's ACL."
+        )
 
     problem = _rewrite_acl_entry(user, ",".join(topics) if topics else "")
     if problem:
-        return problem
+        return AccountChange(problem=problem)
     return reload()
 
 
@@ -1169,8 +1192,8 @@ def _topic_list(topics: str) -> list[str]:
     return [part.strip() for part in topics.split(",") if part.strip()] or ["#"]
 
 
-def reload() -> str:
-    """Ask the broker to re-read its account files. "" on success.
+def reload() -> AccountChange:
+    """Try an unprivileged reload, leaving an authorized retry when needed.
 
     SIGHUP via the service manager, so nobody is disconnected. This is the
     one step that may still need privilege — but on a desktop with a polkit
@@ -1182,17 +1205,51 @@ def reload() -> str:
     store = settings()
     store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, True)
     store.sync()
+    environment = detect()
+    if environment.wsl:
+        # A WSLg process is not an active local polkit subject, so systemd
+        # predictably refuses this call even when Studio installed its narrow
+        # reload rule. The workspace immediately uses the WSL-root helper.
+        print("[Studio broker accounts] reload queued for the WSL helper", flush=True)
+        return AccountChange(changed=True)
     try:
-        commands = service_commands(detect().service_manager, "reload")
+        commands = service_commands(environment.service_manager, "reload")
     except RuntimeError as error:
-        return f"Accounts written, but the broker could not be reloaded: {error}"
+        print(f"[Studio broker accounts] direct reload unavailable: {error}", flush=True)
+        return AccountChange(
+            changed=True,
+            problem=f"The broker could not be reloaded: {error}",
+        )
     try:
         for command in commands:
+            print(
+                "[Studio broker accounts] direct reload "
+                + " ".join(str(part) for part in command),
+                flush=True,
+            )
             result = subprocess.run(command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
             if result.returncode:
-                return "Accounts written, but the service manager refused the reload. Open Network → Broker and retry setup to apply them."
+                detail = (result.stderr or result.stdout or "").strip()
+                print(
+                    f"[Studio broker accounts] direct reload refused: "
+                    f"exit={result.returncode}, detail={detail!r}",
+                    flush=True,
+                )
+                return AccountChange(
+                    changed=True,
+                    problem="The service manager refused the broker reload.",
+                )
     except (OSError, subprocess.SubprocessError) as error:
-        return f"Accounts written, but the broker could not be reloaded: {error}"
+        print(
+            f"[Studio broker accounts] direct reload failed: "
+            f"{type(error).__name__}: {error}",
+            flush=True,
+        )
+        return AccountChange(
+            changed=True,
+            problem=f"The broker could not be reloaded: {error}",
+        )
     store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, False)
     store.sync()
-    return ""
+    print("[Studio broker accounts] direct reload complete", flush=True)
+    return AccountChange(changed=True, applied=True)

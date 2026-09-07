@@ -25,8 +25,8 @@ Linux setup has package-manager adapters for Ubuntu/Debian, Arch, Fedora,
 openSUSE, and Alpine, and service adapters for systemd, OpenRC, and installed
 SysV scripts. Desktop authorization uses polkit. Without a desktop agent,
 Studio opens a terminal for `sudo`. WSL runs only the narrow broker helper as
-the distribution's root user. Studio does not configure Windows networking
-or request Windows UAC for forwarding.
+the distribution's root user. Windows robot access is a separate opt-in step,
+so local broker setup never requests Windows UAC.
 
 Studio preserves working credentials and existing accounts. New local setups
 use an authenticated listener on `0.0.0.0:1883` (or the configured port) and a
@@ -37,17 +37,14 @@ under **Advanced / Manual setup**, which starts collapsed and also contains
 fallback commands and diagnostics.
 
 WSL setup is complete once the Linux broker is configured and Studio's MQTT
-connection is verified. Windows forwarding is handled by a separate script or
-tool and is not required for Studio or services running inside WSL. The
-broker's current WSL address and port appear under **Advanced / Manual setup**.
-Point your forwarding tool at that address, and enter its Windows-facing
-address and port when provisioning a robot. `0.0.0.0` is the listener's bind
-address, not an address to enter on a robot. Studio does not claim that a
-working local broker proves external access or a robot connection.
-
-If an earlier Windows setup attempt failed or was cancelled, restart Studio
-and click **Retry setup** once. This rechecks the broker without running
-Windows network setup and clears the pause when the local setup succeeds.
+connection is verified. The Broker page then offers **Enable robot access**.
+That explicit action requests Windows UAC and creates a subnet-scoped firewall
+rule plus either NAT forwarding or a mirrored-network Hyper-V rule. Studio
+rechecks its owned rules whenever Network opens, offers repair after an address
+or networking-mode change, and can remove them again. The shown robot address
+is the Windows LAN address; `0.0.0.0` is only a listener bind address. A ready
+card verifies the Windows-facing TCP port, not a connection from a physical
+robot.
 
 Cancelled or failed setup stays paused until **Retry setup**. Revoking account
 management also pauses automatic setup; the system broker continues running.

@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
 from ....services.network import (
     firewall_allows,
     firewall_hint,
-    lan_address,
 )
 from ....services.network.broker import system
 from ...components import Card, CommandCard, Column, StepsCard
@@ -49,7 +48,11 @@ class BrokerPage(Page):
             "cancelled": "Setup paused",
         }
         card = Card(titles[state.state], state.message)
-        if state.connected and state.network_ready:
+        if (
+            state.connected
+            and state.network_ready
+            and not self.workspace.wsl_robot_access_available()
+        ):
             network = QLabel(
                 f"Robot address: {state.robot_host}:{system.port()}. "
                 "Network configured; robot connection not yet confirmed."
@@ -68,7 +71,122 @@ class BrokerPage(Page):
             retry.setObjectName("ContextPrimary")
             retry.clicked.connect(lambda: self.workspace.start_setup(retry=True))
             card.layout().addWidget(retry)
-        return Column(card, self._advanced())
+        sections = [card]
+        account_reload = self._account_reload()
+        if account_reload is not None:
+            sections.append(account_reload)
+        robot_access = self._wsl_robot_access()
+        if robot_access is not None:
+            sections.append(robot_access)
+        sections.append(self._advanced())
+        return Column(*sections)
+
+    def _account_reload(self) -> QWidget | None:
+        """Pending account files, separate from the connected broker result."""
+        pending = self.workspace.account_reload_pending()
+        state = self.workspace.account_reload.status
+        if self.workspace.account_reload.running:
+            return Card("Applying broker user changes", state.message)
+        if not pending:
+            return None
+
+        card = Card(
+            "Broker user changes need attention",
+            "The user files are saved, but Mosquitto has not reloaded them yet.",
+        )
+        detail = state.detail or self.workspace.account_problem
+        if detail:
+            reason = QLabel(detail)
+            reason.setObjectName("FieldError")
+            reason.setWordWrap(True)
+            card.layout().addWidget(reason)
+        retry = QPushButton("Retry applying changes")
+        retry.setObjectName("ContextPrimary")
+        retry.setEnabled(not self.workspace.setup.running)
+        retry.clicked.connect(
+            lambda: self.workspace.start_account_reload(retry=True)
+        )
+        card.layout().addWidget(retry)
+        return card
+
+    def _wsl_robot_access(self) -> QWidget | None:
+        """The opt-in Windows boundary, separate from local broker health."""
+        broker = self.workspace.setup.status
+        if (
+            not self.workspace.wsl_robot_access_available()
+            or not broker.connected
+            or broker.state != "ready"
+        ):
+            return None
+
+        access = self.workspace.robot_access.status
+        titles = {
+            "idle": "Connect robots on your network",
+            "checking": "Checking robot access…",
+            "disabled": "Connect robots on your network",
+            "repair": "Repair robot access",
+            "enabling": "Enabling robot access…",
+            "disabling": "Disabling robot access…",
+            "ready": "Robot access is ready",
+            "failed": "Robot access needs attention",
+            "cancelled": (
+                "Robot access is still enabled"
+                if access.ready
+                else "Robot access was not changed"
+            ),
+        }
+        message = access.message
+        if access.state in ("idle", "disabled"):
+            message = (
+                "Studio can use MQTT inside WSL. Allow Windows to forward the "
+                "broker port before connecting a robot on your home network."
+            )
+        card = Card(titles.get(access.state, "Connect robots on your network"), message)
+
+        if access.ready and access.host and not access.message.startswith("Robot address:"):
+            address = QLabel(f"Robot address: {access.host}:{system.port()}")
+            address.setObjectName("CardBody")
+            address.setWordWrap(True)
+            card.layout().addWidget(address)
+        if access.detail:
+            detail = QLabel(access.detail)
+            detail.setObjectName(
+                "FieldError" if access.state in ("failed", "cancelled") else "CardBody"
+            )
+            detail.setWordWrap(True)
+            card.layout().addWidget(detail)
+
+        if self.workspace.robot_access.running:
+            return card
+
+        if access.ready:
+            disable = QPushButton("Disable robot access")
+            disable.setObjectName("ContextAction")
+            disable.clicked.connect(
+                lambda: self.workspace.start_robot_access("disable")
+            )
+            card.layout().addWidget(disable)
+            return card
+
+        labels = {
+            "repair": "Repair robot access",
+            "failed": "Retry robot access",
+        }
+        retrying_disable = access.action == "disable"
+        label = (
+            "Retry disabling robot access"
+            if retrying_disable
+            else labels.get(access.state, "Enable robot access")
+        )
+        enable = QPushButton(label)
+        enable.setObjectName("ContextPrimary")
+        enable.clicked.connect(
+            lambda: self.workspace.start_robot_access(
+                "disable" if retrying_disable else "enable"
+            )
+        )
+        card.layout().addWidget(enable)
+        return card
 
     def _advanced(self) -> QWidget:
         panel = QWidget()
