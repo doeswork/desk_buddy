@@ -7,6 +7,7 @@ from .mqtt_topics import TOPIC_RULE, default_topics, validate_topic
 from .mqtt_users import MqttUser, Users, users
 from .prefrences import Preferences, preferences
 from .robots import Robot, Robots, robots
+from .workflows import Workflow, Workflows, workflows
 
 __all__ = [
     "Calibration",
@@ -17,10 +18,13 @@ __all__ = [
     "Robots",
     "TOPIC_RULE",
     "Users",
+    "Workflow",
+    "Workflows",
     "calibrations",
     "default_topics",
     "preferences",
     "robots",
     "users",
     "validate_topic",
+    "workflows",
 ]

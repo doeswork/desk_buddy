@@ -225,6 +225,53 @@ QLabel#Subtitle {{ font-size: {px(12)}; color: {p.muted}; }}
 QLabel#CardTitle {{ font-size: {px(13)}; font-weight: 600; color: {p.text}; }}
 QLabel#CardBody {{ font-size: {px(12)}; color: {p.muted}; }}
 
+/* ---- Workflow Studio ---- */
+QLineEdit#WorkflowSearch {{
+    margin: {px(4)} {px(8)} {px(7)} {px(8)};
+    padding: {TIGHT_V} {px(7)};
+    background: {p.background};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+}}
+QLabel#WorkflowNavEmpty {{ color: {p.muted}; font-size: {px(11)}; }}
+QLabel#WorkflowFactLabel {{
+    color: {p.muted};
+    font-size: {px(10)};
+    font-weight: 600;
+}}
+QLabel#WorkflowFile {{
+    color: {p.text};
+    font-family: "JetBrains Mono", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: {px(11)};
+}}
+QPushButton#WorkflowStepChip {{
+    background: {p.background};
+    color: {p.text};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    padding: {TIGHT_V} {px(9)};
+    font-size: {px(11)};
+}}
+QPushButton#WorkflowStepChip:hover {{
+    background: {p.accent};
+    color: {p.on_accent};
+    border-color: {p.accent};
+}}
+QPushButton#WorkflowStepChip:pressed {{
+    background: {p.accent_dark};
+    border-color: {p.accent_dark};
+}}
+QPlainTextEdit#WorkflowJson {{
+    background: {p.background};
+    color: {p.text};
+    selection-background-color: {p.accent};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    padding: {px(8)};
+    font-family: "JetBrains Mono", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: {px(12)};
+}}
+
 /* ---- Manual controller ---- */
 QLabel#ManualControlLabel {{
     color: {p.text};

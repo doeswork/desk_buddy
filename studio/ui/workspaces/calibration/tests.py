@@ -269,6 +269,65 @@ def test_every_hover_point_has_a_shape_to_aim_at() -> None:
             assert pose.summary and pose.hint, calibration_type
 
 
+def tip_of(pose) -> tuple[float, float]:
+    """Where a pose puts the gripper, in millimetres: (reach, height).
+
+    Mirrors `_draw_arm` exactly, including the screen convention — cos adds
+    height rather than subtracting it. Getting that backwards is what drew
+    the z=0 row above the table and the z=50 row below it, so the test does
+    the arithmetic the same way the paint code does or it proves nothing.
+    """
+    import math
+
+    from .arm_pose import (
+        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView,
+    )
+
+    upper = math.radians(pose.elbow)
+    x = math.sin(upper) * UPPER_ARM
+    z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
+    fore = upper + math.radians(180 - pose.wrist)
+    x += math.sin(fore) * (FOREARM + GRIPPER)
+    z += math.cos(fore) * (FOREARM + GRIPPER)
+    per_mm = ArmPoseView._mm_to_units()
+    return x / per_mm, z / per_mm
+
+
+def test_every_pose_lands_on_its_own_reach_and_height() -> None:
+    """The drawing has to agree with the numbers beside it.
+
+    y is reach out from the base, z is height off the table — so the three
+    table-level points sit *on* the line at 0, 60 and 120 mm, and the raised
+    three sit on the 50 mm plane at 30, 75 and 120 mm. They were drawn
+    swapped once: the z=0 row floating and the z=50 row sunk below the
+    table, which made the two groups indistinguishable.
+    """
+    from .arm_pose import POSES
+
+    for name, pose in POSES.items():
+        reach, height = tip_of(pose)
+        assert abs(reach - pose.distance) < 6, f"{name}: reach {reach:.1f}"
+        assert abs(height - pose.height) < 6, f"{name}: height {height:.1f}"
+
+
+def test_no_pose_draws_the_arm_through_the_table() -> None:
+    """A drawing of the arm buried in the desk is not an instruction."""
+    import math
+
+    from .arm_pose import (
+        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView, POSES,
+    )
+
+    per_mm = ArmPoseView._mm_to_units()
+    for name, pose in POSES.items():
+        upper = math.radians(pose.elbow)
+        elbow_z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
+        fore = upper + math.radians(180 - pose.wrist)
+        wrist_z = elbow_z + math.cos(fore) * FOREARM
+        tip_z = wrist_z + math.cos(fore) * GRIPPER
+        assert min(elbow_z, wrist_z, tip_z) / per_mm > -2, name
+
+
 def test_the_shapes_are_ordered_and_distinct() -> None:
     """Min, mid and max must actually differ, and in the right direction:
     a drawing that showed the same shape three times would be worse than
