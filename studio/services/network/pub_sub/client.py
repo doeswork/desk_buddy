@@ -30,6 +30,10 @@ class MqttClient:
 
     def __init__(self) -> None:
         self._client = None
+        # A detached replacement briefly exists beside the process it is
+        # replacing.  A per-instance id keeps the broker from making those
+        # two clients repeatedly disconnect and reconnect each other.
+        self._client_id = f"desk-buddy-studio-commands-{uuid.uuid4().hex[:12]}"
         self._port = 0
         self._status = "Broker is not running"
         self._lock = Lock()
@@ -87,7 +91,7 @@ class MqttClient:
         try:
             client = mqtt.Client(
                 mqtt.CallbackAPIVersion.VERSION2,
-                client_id="desk-buddy-studio-commands",
+                client_id=self._client_id,
                 protocol=mqtt.MQTTv311,
             )
             client.username_pw_set(name, password)

@@ -255,6 +255,16 @@ def test_manager_requires_exact_launch_model_and_revision_for_ready() -> None:
         assert manager.preferences.get(keys.VISION_ACTIVE_MODEL) == DEFAULT_MODEL_ID
 
 
+def test_manager_does_not_emit_when_state_is_unchanged() -> None:
+    with temporary_manager() as (manager, _client):
+        changes = []
+        manager.changed.connect(changes.append)
+        manager._replace(error="")
+        assert changes == []
+        manager._replace(error="something changed")
+        assert len(changes) == 1
+
+
 def test_manager_defaults_selection_and_persists_separate_active_setting() -> None:
     with temporary_manager() as (manager, _client):
         assert manager.selected.model_id == DEFAULT_MODEL_ID

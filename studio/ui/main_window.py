@@ -333,12 +333,14 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def restart_app(self) -> bool:
-        """Start a replacement process after an explicit confirmation."""
+        """Start a replacement that waits for this process to release its lock."""
+        from ..app import RESTART_WAIT_ARGUMENT
+
         answer = QMessageBox.question(
             self,
             "Restart Desk Buddy Studio?",
-            "Studio will close and reopen. Any running broker will be stopped "
-            "cleanly as the current window closes.",
+            "Studio will close and reopen. The broker will keep running while "
+            "Studio's connections and services restart cleanly.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -347,11 +349,11 @@ class MainWindow(QMainWindow):
 
         if getattr(sys, "frozen", False):
             program = sys.executable
-            arguments = sys.argv[1:]
+            arguments = [RESTART_WAIT_ARGUMENT, *sys.argv[1:]]
             working_directory = str(Path(sys.executable).resolve().parent)
         else:
             program = sys.executable
-            arguments = ["-m", "studio", *sys.argv[1:]]
+            arguments = ["-m", "studio", RESTART_WAIT_ARGUMENT, *sys.argv[1:]]
             working_directory = str(Path(__file__).resolve().parents[2])
 
         result = QProcess.startDetached(program, arguments, working_directory)

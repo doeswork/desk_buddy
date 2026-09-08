@@ -939,5 +939,8 @@ class VisionServiceManager(QObject):
     def _replace(self, **values) -> None:
         current = self._state.as_dict()
         current.update(values)
-        self._state = VisionState(**current)
+        replacement = VisionState(**current)
+        if replacement == self._state:
+            return
+        self._state = replacement
         self.changed.emit(self._state)

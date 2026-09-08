@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ....services.vision.catalog import BUILTIN_MODELS, DEFAULT_MODEL_ID
-from ....services.vision.tests import mark_installed, temporary_manager
+from ....services.vision.tests import mark_installed, ready_status, temporary_manager
 from .detections import DetectionOverlay
 from .workspace import VisionWorkspace
 
@@ -104,6 +104,32 @@ def test_detection_page_offers_robot_and_local_sources() -> None:
         workspace.go_to("models")
         test_photo.on_click()
         assert workspace.page_key == "detections"
+
+
+def test_duplicate_ready_status_does_not_replace_the_prompt_field() -> None:
+    with temporary_manager() as (manager, _client):
+        manager._expected_launch_id = "launch-1"
+        manager._expected_model_id = DEFAULT_MODEL_ID
+        manager._replace(
+            active_model_id=DEFAULT_MODEL_ID,
+            process_state="running",
+            mqtt_state="ready",
+            device="cpu",
+        )
+        workspace = VisionWorkspace(manager=manager)
+        widget = workspace.widget()
+        workspace.go_to("detections")
+        prompt = widget.findChild(QLineEdit, "VisionPrompt")
+        prompt.setText("glasses")
+
+        changes = []
+        manager.changed.connect(changes.append)
+        manager._on_status(ready_status(manager, launch_id="launch-1"))
+        _app.processEvents()
+
+        assert changes == []
+        assert widget.findChild(QLineEdit, "VisionPrompt") is prompt
+        assert prompt.text() == "glasses"
 
 
 def test_local_preview_sends_jpeg_bytes_and_keeps_result_in_memory() -> None:
