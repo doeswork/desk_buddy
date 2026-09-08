@@ -1,26 +1,27 @@
 """Workflow Studio UI.
 
-The Rails app's searchable workflow navigator, ordered step overview, and
-whole-document JSON editor are kept here in a native Qt shape. Step rows are
-read-only for now: there are deliberately no run/edit/delete/reorder buttons
-for individual steps yet.
+The Rails app's searchable workflow navigator and whole-document JSON editor
+are kept here in a native Qt shape.
+
+The JSON *is* the workflow, so the page is the editor and little else: a line
+naming the open document, a strip of facts about it, and then the editor for
+every remaining pixel of the window. The ordered step table that used to sit
+between them is gone — it restated the document it sat above, and charged a
+third of the height to do it. Steps are added from the toolbar, which the
+workspace owns and every page keeps.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from functools import partial
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QFrame,
     QCheckBox,
     QDialog,
     QFormLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,8 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +43,7 @@ from ....models.config.workflows import (
     step_inserted_into_text,
     workflows,
 )
-from ...components import ActionSpec, Card, Column, Separator
+from ...components import ActionSpec, Card, Column, Separator, spacer
 from ...pages.base import Page
 from ...theme.metrics import CARD_GAP, ROW_PADDING
 from ..base import Workspace
@@ -207,170 +207,110 @@ class NewWorkflowDialog(QDialog):
         self.accept()
 
 
-class WorkflowSummaryCard(Card):
-    def __init__(self, workflow: Workflow, path: str) -> None:
-        super().__init__(workflow.name, workflow.description or "No description yet.")
+class WorkflowMetaStrip(QWidget):
+    """One line of facts above the document.
 
-        facts = QHBoxLayout()
-        facts.setContentsMargins(0, CARD_GAP, 0, 0)
-        facts.setSpacing(ROW_PADDING * 2)
-        facts.addWidget(self._fact("FILE", path), 1)
-        facts.addWidget(self._fact("STEPS", str(workflow.step_count)))
-        facts.addWidget(
-            self._fact("VALIDATION", "On" if workflow.validation else "Off")
+    What used to be a summary card and a steps table is a single strip. Both
+    said what the document below them already says — the file the JSON is
+    saved to, how many steps it has — and both cost the editor a third of the
+    window to say it. A row of small facts says the same at the top of the
+    page and gives the height back.
+    """
+
+    def __init__(self, workflow: Workflow, path: str) -> None:
+        super().__init__()
+        self.setObjectName("WorkflowMeta")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(ROW_PADDING)
+
+        layout.addWidget(self._fact(path, mono=True))
+        layout.addWidget(self._dot())
+        layout.addWidget(
+            self._fact(
+                f"{workflow.step_count} step"
+                f"{'s' if workflow.step_count != 1 else ''}"
+            )
         )
-        self.layout().addLayout(facts)
+        layout.addWidget(self._dot())
+        layout.addWidget(
+            self._fact(
+                f"validation {'on' if workflow.validation else 'off'}"
+            )
+        )
+        if workflow.description:
+            layout.addWidget(self._dot())
+            layout.addWidget(self._fact(workflow.description))
+        layout.addStretch(1)
 
     @staticmethod
-    def _fact(label: str, value: str) -> QWidget:
-        holder = QWidget()
-        layout = QVBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        key = QLabel(label)
-        key.setObjectName("WorkflowFactLabel")
-        text = QLabel(value)
-        text.setObjectName("WorkflowFile" if label == "FILE" else "CardBody")
-        text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        text.setWordWrap(True)
-        layout.addWidget(key)
-        layout.addWidget(text)
-        return holder
+    def _fact(text: str, *, mono: bool = False) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("WorkflowFile" if mono else "WorkflowMetaFact")
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        return label
+
+    @staticmethod
+    def _dot() -> QLabel:
+        dot = QLabel("·")
+        dot.setObjectName("WorkflowMetaDot")
+        return dot
 
 
-def step_details(step: dict) -> str:
-    """Compact human description matching the useful Rails step rows."""
-    subject = str(step.get("subject", ""))
-    if subject == "servo":
-        name = str(step.get("servoName", "servo")).title()
-        return f"{name} → {step.get('position', '—')}°"
-    # Firmware names this action "baseRotate"; "rotate" was the Rails spelling
-    # and still appears in older hand-written workflows.
-    if subject in ("baseRotate", "rotate"):
-        control = str(step.get("controlType", "")).upper()
-        direction = str(step.get("direction", "")).lower()
-        if control == "HOME":
-            return f"Home to true north ({direction or 'right'})"
-        if control == "STATUS":
-            return "Report base status"
-        if control in ("ENCODER", "STEPS"):
-            value = step.get("value", step.get("steps", "—"))
-            return f"Rotate {value} steps {direction}".strip()
-    if subject == "gripper":
-        if "position" in step:
-            return f"Gripper → {step['position']}°"
-        command = str(step.get("command", "No command"))
-        return command.replace("SOFTHOLD", "Soft hold").title()
-    if subject == "controlik":
-        height = step.get("z_height") or 0
-        reach = f"Distance {step.get('distance', '—')} mm"
-        return f"{reach} at z={height} mm" if height else reach
-    if subject == "photo":
-        return "Take photo"
-    if subject == "detect_object":
-        phrase = step.get("phrase")
-        if isinstance(phrase, list):
-            phrase = ", ".join(str(item) for item in phrase)
-        return f"Detect: {phrase}" if phrase else "Detect object"
-    if subject == "detect_color":
-        return "Detect color"
-    if subject == "perch":
-        return "Return to perch"
+class JsonDocument(QWidget):
+    """The workflow JSON, given the whole page.
 
-    custom = {key: value for key, value in step.items() if key != "subject"}
-    return json.dumps(custom, separators=(",", ":")) if custom else "Custom step"
+    Not a card. A card frames a block among other blocks, and this is the
+    only thing on the page — the frame would just be a second border drawn
+    around the editor's own. The strip of facts and the error line sit above
+    it; everything left over is the editor.
+    """
 
-
-class StepTable(QTableWidget):
-    COLUMNS = ("#", "Step", "Details")
-
-    def __init__(self, steps: tuple[dict, ...]) -> None:
-        super().__init__(len(steps), len(self.COLUMNS))
-        self.setObjectName("WorkflowSteps")
-        self.setHorizontalHeaderLabels(self.COLUMNS)
-        self.verticalHeader().setVisible(False)
-        self.setShowGrid(False)
-        self.setAlternatingRowColors(True)
-        self.setSelectionMode(QAbstractItemView.NoSelection)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setWordWrap(True)
-
-        for row, step in enumerate(steps):
-            self.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            self.setItem(row, 1, QTableWidgetItem(str(step.get("subject", ""))))
-            self.setItem(row, 2, QTableWidgetItem(step_details(step)))
-
-        header = self.horizontalHeader()
-        header.setHighlightSections(False)
-        header.setSectionResizeMode(QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        self.setColumnWidth(0, 44)
-        self.setColumnWidth(1, 140)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        row_height = self.fontMetrics().height() + 2 * ROW_PADDING
-        for row in range(self.rowCount()):
-            self.setRowHeight(row, row_height)
-        self.setFixedHeight(
-            self.horizontalHeader().sizeHint().height()
-            + row_height * self.rowCount()
-            + 2 * self.frameWidth()
-        )
-
-
-class StepsOverviewCard(Card):
-    def __init__(self, workflow: Workflow) -> None:
-        if workflow.steps:
-            super().__init__(
-                "Ordered steps",
-                "A read-only overview for now. Step controls come later.",
-            )
-            self.layout().addSpacing(CARD_GAP)
-            self.layout().addWidget(StepTable(workflow.steps))
-        else:
-            super().__init__(
-                "No steps yet",
-                "Add step objects in the JSON document below. Individual "
-                "step buttons are intentionally not part of this pass.",
-            )
-
-
-class JsonEditorCard(Card):
     def __init__(self, workspace: "WorkflowsWorkspace", workflow: Workflow) -> None:
-        super().__init__(
-            "Workflow JSON",
-            "This document is the workflow. Saving replaces its individual "
-            "JSON file atomically.",
+        super().__init__()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(CARD_GAP)
+        layout.addWidget(
+            WorkflowMetaStrip(
+                workflow, str(workspace.repository.path_for(workflow.name))
+            )
         )
 
         if workspace.problem:
             problem = QLabel(workspace.problem)
             problem.setObjectName("FieldError")
             problem.setWordWrap(True)
-            self.layout().addSpacing(CARD_GAP)
-            self.layout().addWidget(problem)
+            layout.addWidget(problem)
 
         editor = QPlainTextEdit(workspace.draft_for(workflow))
         editor.setObjectName("WorkflowJson")
         editor.setAccessibleName("Workflow JSON")
         editor.setLineWrapMode(QPlainTextEdit.NoWrap)
-        editor.setMinimumHeight(330)
+        editor.setTabStopDistance(
+            2 * editor.fontMetrics().horizontalAdvance(" ")
+        )
+        # No minimum height any more: the stretch below is what sizes it, and
+        # a minimum tall enough to matter is one that forces a scrollbar on a
+        # short window instead of letting the editor shrink with it.
+        editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         editor.textChanged.connect(
             lambda: workspace.remember_draft(workflow.name, editor.toPlainText())
         )
         workspace.editor = editor
-        self.layout().addSpacing(CARD_GAP)
-        self.layout().addWidget(editor)
+        layout.addWidget(editor, 1)
 
 
 class EditorPage(Page):
     key = "editor"
     label = "Editor"
     title = "Workflow Studio"
-    subtitle = (
-        "One named JSON document per workflow, with an ordered view of its steps."
-    )
+    # No subtitle. The page is one document and a toolbar of steps; a line of
+    # prose above it explains what the document below already shows, and cost
+    # two rows of the height the document wants.
+    fills_height = True
 
     @property
     def status(self) -> str:
@@ -381,6 +321,19 @@ class EditorPage(Page):
             f"{workflow.filename} · {workflow.step_count} "
             f"step{'s' if workflow.step_count != 1 else ''}"
         )
+
+    def build_header(self) -> QWidget:
+        """The open workflow's name, and nothing else.
+
+        A page whose body must fill the window cannot afford a title block
+        that repeats what the side panel's highlighted row and the status
+        strip both already say. One line naming the open document is what is
+        left, and it is the one thing neither of those says at a glance.
+        """
+        workflow = self.workspace.selected
+        title = QLabel(workflow.name if workflow is not None else self.title)
+        title.setObjectName("Title")
+        return title
 
     def build_page(self) -> QWidget:
         workflow = self.workspace.selected
@@ -398,18 +351,14 @@ class EditorPage(Page):
                 0,
                 Qt.AlignLeft,
             )
-            return Column(empty)
+            # The empty state is not a document: it keeps its natural height
+            # and sits at the top rather than stretching down the window.
+            return Column(empty, spacer())
 
-        return Column(
-            WorkflowSummaryCard(
-                workflow, str(self.workspace.repository.path_for(workflow.name))
-            ),
-            StepsOverviewCard(workflow),
-            # The step palette is the toolbar now, not a card here: adding steps is
-            # the work of this workspace, and a palette below the document is
-            # one the user scrolls past to reach the thing it edits.
-            JsonEditorCard(self.workspace, workflow),
-        )
+        # The step palette is the toolbar, not a card here: adding steps is
+        # the work of this workspace, and a palette below the document is one
+        # the user scrolls past to reach the thing it edits.
+        return JsonDocument(self.workspace, workflow)
 
 
 class WorkflowsWorkspace(Workspace):

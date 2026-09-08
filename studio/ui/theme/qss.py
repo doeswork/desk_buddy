@@ -242,16 +242,13 @@ QLineEdit#WorkflowSearch {{
     border-radius: {RADIUS};
 }}
 QLabel#WorkflowNavEmpty {{ color: {p.muted}; font-size: {px(11)}; }}
-QLabel#WorkflowFactLabel {{
-    color: {p.muted};
-    font-size: {px(10)};
-    font-weight: 600;
-}}
 QLabel#WorkflowFile {{
-    color: {p.text};
+    color: {p.muted};
     font-family: "JetBrains Mono", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace;
     font-size: {px(11)};
 }}
+QLabel#WorkflowMetaFact {{ color: {p.muted}; font-size: {px(11)}; }}
+QLabel#WorkflowMetaDot {{ color: {p.border}; font-size: {px(11)}; }}
 QPushButton#WorkflowStepChip {{
     background: {p.background};
     color: {p.text};

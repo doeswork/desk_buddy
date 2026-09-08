@@ -1,4 +1,4 @@
-"""Workflow Studio UI, without individual step buttons.
+"""Workflow Studio UI: one document, given the whole window.
 
     QT_QPA_PLATFORM=offscreen python -m studio.ui.workspaces.workflows.tests
 """
@@ -14,21 +14,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QLabel,
     QListWidget,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
+    QWidget,
 )
 
 from ....models.config.workflows import Workflow, Workflows
 from .steps import GROUPS, all_templates, find
-from . import (
-    StepTable,
-    WorkflowNavigator,
-    WorkflowsWorkspace,
-    step_details,
-)
+from . import WorkflowNavigator, WorkflowsWorkspace
 
 _app = QApplication.instance() or QApplication([])
 
@@ -72,16 +69,44 @@ def test_sidebar_is_searchable_and_selects_workflows() -> None:
     assert "match" in side.empty.text()
 
 
-def test_step_overview_is_read_only_and_has_no_step_buttons() -> None:
+def test_the_page_is_the_document_and_nothing_else() -> None:
+    """No card, no step table, no prose — just facts and the editor.
+
+    The step overview restated the JSON below it and charged a third of the
+    window to do it, so the page carries one strip of facts and the editor.
+    """
     space, _store = populated()
     widget = space.page.widget()
-    table = widget.findChild(QTableWidget, "WorkflowSteps")
-    assert isinstance(table, StepTable)
-    assert table.rowCount() == 2
-    assert table.item(0, 1).text() == "servo"
-    assert "Elbow" in table.item(0, 2).text()
-    assert table.item(1, 1).text() == "custom_quack"
-    assert table.findChildren(QPushButton) == []
+
+    assert space.page.fills_height
+    assert widget.findChild(QTableWidget) is None
+    assert widget.findChild(QFrame, "Card") is None
+    assert widget.findChild(QWidget, "WorkflowMeta") is not None
+
+    # The one heading is the open workflow's name, not a fixed page title.
+    titles = [label.text() for label in widget.findChildren(QLabel)
+              if label.objectName() == "Title"]
+    assert titles == ["duck_walk"]
+
+
+def test_the_editor_takes_the_height_the_window_gives_it() -> None:
+    """100% of what is left, at any window size — the point of the change."""
+    space, _store = populated()
+    widget = space.page.widget()
+
+    for height in (500, 900):
+        widget.resize(1000, height)
+        widget.show()
+        _app.processEvents()
+
+        editor = space.editor
+        assert editor is not None
+        # Everything above the editor is one heading and one line of facts,
+        # so the editor gets the overwhelming majority of the page.
+        assert editor.height() > 0.7 * height, (height, editor.height())
+        # And the page never grows a scrollbar of its own around it.
+        assert not widget.verticalScrollBar().isVisible()
+        widget.hide()
 
 
 def test_json_editor_updates_the_same_individual_file() -> None:
@@ -218,19 +243,6 @@ def test_palette_refuses_to_clobber_unparseable_json() -> None:
     problem = space.insert_step("photo")
     assert "Fix the JSON" in problem
     assert space.draft_for(space.selected) == "{ not json"
-
-
-def test_base_rotate_steps_read_as_words_not_raw_json() -> None:
-    detail = step_details({
-        "subject": "baseRotate", "controlType": "ENCODER",
-        "direction": "RIGHT", "value": 10,
-    })
-    assert detail == "Rotate 10 steps right"
-    assert step_details({"subject": "detect_color"}) == "Detect color"
-    assert step_details(
-        {"subject": "gripper", "command": "SOFTHOLD"}
-    ) == "Soft Hold"
-    assert step_details({"subject": "gripper", "position": 120}) == "Gripper → 120°"
 
 
 # ---- The step palette ----------------------------------------------------
