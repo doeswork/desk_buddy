@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 from ..theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -27,4 +28,5 @@ class Card(QFrame):
             self.body_label = QLabel(body)
             self.body_label.setObjectName("CardBody")
             self.body_label.setWordWrap(True)
+            self.body_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             layout.addWidget(self.body_label)

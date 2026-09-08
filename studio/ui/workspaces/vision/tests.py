@@ -9,7 +9,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import (
     QApplication,
@@ -85,8 +85,9 @@ def test_install_progress_and_error_are_rendered_in_page() -> None:
         assert (progress.value(), progress.maximum()) == (25, 100)
         texts = [label.text() for label in widget.findChildren(QPushButton)]
         assert "Cancel" in texts
-        labels = [label.text() for label in widget.findChildren(QLabel)]
-        assert any("network interrupted" in text for text in labels)
+        labels = widget.findChildren(QLabel)
+        error = next(label for label in labels if "network interrupted" in label.text())
+        assert error.textInteractionFlags() & Qt.TextSelectableByMouse
 
 
 def test_detection_page_offers_robot_and_local_sources() -> None:
