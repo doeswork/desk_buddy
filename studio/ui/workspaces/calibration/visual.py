@@ -1,10 +1,8 @@
 """Visual: where the camera is, relative to the arm.
 
-`calibrate_depth` is a photo action (MQTT_SPEC.md §6): the firmware replies
-with in_progress/log:"sent" messages and a binary JPEG frame, not a
-completed/failed calibration result. This page triggers the capture and shows
-that it was requested; decoding the binary photo frame itself is out of scope
-for this pass.
+`calibrate_depth` is a photo action (MQTT_SPEC.md §6): the firmware publishes
+the JPEG on the robot's photo topic and a truthful terminal result on its event
+topic. This page triggers the capture and records successful publication.
 """
 
 from __future__ import annotations
@@ -31,12 +29,6 @@ class VisualPage(StepPage):
         client = self.workspace.client()
         action_id = send_calibrate_depth(client, self.workspace.robot)
         self.send(action_id, waiting_text="Requesting a depth capture…")
-
-    def is_terminal(self, payload: dict) -> bool:
-        # A photo reply (§6) has no `completed` status: the second
-        # in_progress, marked log:"sent", is the firmware's own signal that
-        # capture and publish finished (not proof the image is valid).
-        return payload.get("status") == "in_progress" and payload.get("log") == "sent"
 
     def on_completed(self, payload: dict) -> None:
         # No calibration values to save — the capture itself is the result.

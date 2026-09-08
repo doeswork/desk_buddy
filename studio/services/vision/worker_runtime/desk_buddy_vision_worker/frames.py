@@ -8,6 +8,7 @@ from typing import Mapping
 
 PAYLOAD_MARKER = b',"payload":'
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+PHOTO_SCHEMA = "desk_buddy.photo.v1"
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,36 @@ def decode_frame(payload: bytes) -> BinaryFrame:
     metadata, jpeg = decode_metadata(payload)
     _validate_jpeg(jpeg)
     return BinaryFrame(metadata, jpeg)
+
+
+def validate_photo_frame(frame: BinaryFrame) -> None:
+    """Validate metadata specific to an ESP32 photo publication."""
+    metadata = frame.metadata
+    if (
+        metadata.get("schema") != PHOTO_SCHEMA
+        or metadata.get("sender") != "firmware"
+        or metadata.get("content_type") != "image/jpeg"
+        or metadata.get("photo") != "sending_photo"
+    ):
+        raise ValueError("photo metadata does not match the photo protocol")
+    if metadata.get("size") != len(frame.jpeg):
+        raise ValueError("photo metadata size does not match the JPEG")
+    if _action_id(metadata.get("action_id")) == "":
+        raise ValueError("photo metadata needs an action ID")
+    if metadata.get("type") not in {
+        "photo", "detect_object", "detect_color", "calibrate_depth",
+    }:
+        raise ValueError("photo metadata has an unsupported capture type")
+    for field in ("width", "height"):
+        value = metadata.get(field)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"photo metadata {field} must be a positive integer")
+
+
+def _action_id(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value)
 
 
 def decode_metadata(payload: bytes) -> tuple[dict, bytes]:

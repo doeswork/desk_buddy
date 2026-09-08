@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
 
 from ....models.config.calibrations import Calibration, calibrations
+from ....services.network.pub_sub.robot_topics import event_topic
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_GAP, ROW_PADDING
@@ -146,7 +147,7 @@ class StepPage(Page):
         self._error = ""
 
         robot = self.workspace.robot
-        topic = f"{robot}/test"
+        topic = event_topic(robot)
         self._unsubscribe = self.workspace.client().subscribe(topic, self._on_reply)
         self.rebuild()
 
@@ -180,9 +181,7 @@ class StepPage(Page):
         self.rebuild()
 
     def is_terminal(self, payload: dict) -> bool:
-        """Whether this reply is the one to treat as success. Default: the
-        ordinary `calibrate` terminal status. A photo action (§6) has no
-        `completed` reply — override for its in_progress/log:"sent" shape."""
+        """Whether this reply is the one to treat as success."""
         return payload.get("status") == "completed"
 
     # Envelope fields, never results: they identify the exchange rather than

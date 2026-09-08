@@ -20,7 +20,7 @@ namespace ActionRouter {
     CompletedNoPhrase,  // sendCompleted(actionId, "", status)
     CompletedNamed,     // sendCompleted(actionId, replyLabel, status)
     CompletedDetails,   // sendCompletedDetails(actionId, replyLabel, json, ...)
-    PhotoInProgress,    // photo actions re-publish in_progress with "sent"
+    PhotoTerminal,      // photo actions report completed or a structured error
     HandlerOwned,       // the handler publishes its own reply
     None                // no reply (unknown action)
   };

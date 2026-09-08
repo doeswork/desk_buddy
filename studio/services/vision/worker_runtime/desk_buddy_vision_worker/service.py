@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 
 from .detector import HuggingFaceDetector
-from .frames import BinaryFrame, decode_frame, decode_metadata
+from .frames import BinaryFrame, decode_frame, decode_metadata, validate_photo_frame
 
 STATUS_SCHEMA = "desk_buddy.vision.status.v1"
 REQUEST_SCHEMA = "desk_buddy.vision.detect-request.v1"
@@ -40,7 +40,22 @@ class DetectorService:
         self.connect_error = ""
         self.jobs: queue.Queue[WorkItem | None] = queue.Queue(maxsize=1)
         self.requests: dict[tuple[str, str], tuple[dict, float]] = {}
-        self.robot_topics = tuple(config.get("robot_topics", ()))
+        routes = tuple(config.get("robot_routes", ()))
+        self.command_routes = {
+            str(route["command_topic"]): dict(route)
+            for route in routes
+            if isinstance(route, dict) and route.get("command_topic")
+        }
+        self.photo_routes = {
+            str(route["photo_topic"]): dict(route)
+            for route in routes
+            if isinstance(route, dict) and route.get("photo_topic")
+        }
+        self.event_routes = {
+            str(route["event_topic"]): dict(route)
+            for route in routes
+            if isinstance(route, dict) and route.get("event_topic")
+        }
         self.last_error = ""
         self.loaded = False
         self.processing = False
@@ -122,7 +137,7 @@ class DetectorService:
             self.connected_event.set()
             return
         client.subscribe(REQUEST_TOPIC, qos=1)
-        for topic in self.robot_topics:
+        for topic in (*self.command_routes, *self.event_routes, *self.photo_routes):
             client.subscribe(topic, qos=1)
         if self.loaded:
             # paho re-enters this callback after reconnecting. Republish the
@@ -136,10 +151,23 @@ class DetectorService:
         if message.topic == REQUEST_TOPIC:
             self._receive_local(payload)
             return
+        if message.topic in self.command_routes:
+            self._receive_robot_request(message.topic, payload)
+            return
+        if message.topic in self.event_routes:
+            self._receive_robot_event(message.topic, payload)
+            return
+        if message.topic in self.photo_routes:
+            self._receive_robot_frame(message.topic, payload)
+
+    def _receive_robot_request(self, topic: str, payload: bytes) -> None:
+        route = self.command_routes[topic]
+        result_topic = str(route.get("result_topic") or "")
+        if not result_topic:
+            return
         try:
             body = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            self._receive_robot_frame(message.topic, payload)
             return
         if not isinstance(body, dict):
             return
@@ -151,29 +179,73 @@ class DetectorService:
         prompt = body.get("phrase")
         if not action_id or not isinstance(prompt, str) or not prompt.strip():
             if action_id:
-                self._publish_failure(message.topic, action_id, "invalid_request", "A scalar detection phrase is required.")
+                self._publish_failure(
+                    result_topic, action_id, "invalid_request",
+                    "A scalar detection phrase is required.",
+                    robot=str(route.get("robot") or ""),
+                )
             return
         if body.get("use_model") is True:
             self._publish_failure(
-                message.topic, action_id, "automatic_execution_not_available",
+                result_topic, action_id, "automatic_execution_not_available",
                 "Automatic reach and grab is not available in basic vision.",
+                robot=str(route.get("robot") or ""),
             )
             return
-        key = (message.topic, action_id)
+        key = (topic, action_id)
         if key in self.requests:
             self.requests.pop(key, None)
             self._publish_failure(
-                message.topic, action_id, "duplicate_action_id",
+                result_topic, action_id, "duplicate_action_id",
                 "A pending detection already uses that action ID.",
+                robot=str(route.get("robot") or ""),
             )
             return
         requested_model = body.get("model_name")
         if requested_model and requested_model not in {
             self.detector.model_id, self.detector.catalog_id,
         }:
-            self._publish_failure(message.topic, action_id, "model_mismatch", "The requested model is not active.")
+            self._publish_failure(
+                result_topic, action_id, "model_mismatch",
+                "The requested model is not active.",
+                robot=str(route.get("robot") or ""),
+            )
             return
-        self.requests[key] = (dict(body), time.monotonic())
+        request = dict(body)
+        request["_robot"] = str(route.get("robot") or "")
+        request["_result_topic"] = result_topic
+        self.requests[key] = (request, time.monotonic())
+
+    def _receive_robot_event(self, topic: str, payload: bytes) -> None:
+        route = self.event_routes[topic]
+        command_topic = str(route.get("command_topic") or "")
+        result_topic = str(route.get("result_topic") or "")
+        robot = str(route.get("robot") or "")
+        if not command_topic or not result_topic:
+            return
+        try:
+            body = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if (
+            not isinstance(body, dict)
+            or body.get("sender") != "firmware"
+            or body.get("status") != "failed"
+        ):
+            return
+        action_id = _action_id(body)
+        pending = self.requests.pop((command_topic, action_id), None)
+        if pending is None:
+            return
+        error = body.get("error")
+        code = "robot_capture_failed"
+        message = "The robot failed to capture or publish the requested photo."
+        if isinstance(error, dict):
+            code = str(error.get("code") or code)
+            message = str(error.get("message") or message)
+        self._publish_failure(
+            result_topic, action_id, code, message, robot=robot,
+        )
 
     def _receive_local(self, payload: bytes) -> None:
         try:
@@ -212,42 +284,55 @@ class DetectorService:
                 self._publish_failure(RESULT_TOPIC, action_id, "invalid_image", _safe_error(exc))
 
     def _receive_robot_frame(self, topic: str, payload: bytes) -> None:
+        route = self.photo_routes[topic]
+        command_topic = str(route.get("command_topic") or "")
+        result_topic = str(route.get("result_topic") or "")
+        robot = str(route.get("robot") or "")
+        if not command_topic or not result_topic:
+            return
         try:
             frame: BinaryFrame = decode_frame(payload)
+            validate_photo_frame(frame)
         except ValueError as exc:
-            candidates = [key for key in self.requests if key[0] == topic]
+            candidates = [key for key in self.requests if key[0] == command_topic]
             if len(candidates) == 1:
                 expected = candidates[0]
                 self.requests.pop(expected, None)
                 self._publish_failure(
-                    topic, expected[1], "invalid_image",
+                    result_topic, expected[1], "invalid_image",
                     f"The robot published an invalid photo: {_safe_error(exc)}",
+                    robot=robot,
                 )
             return
         action_id = _action_id(frame.metadata)
-        pending = self.requests.pop((topic, action_id), None)
+        pending = self.requests.pop((command_topic, action_id), None)
         if not action_id:
             return
         if pending is None:
-            candidates = [key for key in self.requests if key[0] == topic]
+            candidates = [key for key in self.requests if key[0] == command_topic]
             if len(candidates) == 1:
                 expected = candidates[0]
                 self.requests.pop(expected, None)
                 self._publish_failure(
-                    topic, expected[1], "action_id_mismatch",
+                    result_topic, expected[1], "action_id_mismatch",
                     "The robot photo did not match the pending detection request.",
+                    robot=robot,
                 )
             return
         request, _received = pending
         self._enqueue(WorkItem(
-            action_id, str(request["phrase"]).strip(), frame.jpeg, topic, request,
+            action_id, str(request["phrase"]).strip(), frame.jpeg, result_topic, request,
         ))
 
     def _enqueue(self, item: WorkItem) -> None:
         try:
             self.jobs.put_nowait(item)
         except queue.Full:
-            self._publish_failure(item.result_topic, item.action_id, "detector_busy", "The detector is already processing an image.")
+            self._publish_failure(
+                item.result_topic, item.action_id, "detector_busy",
+                "The detector is already processing an image.",
+                robot=str(item.request.get("_robot") or ""),
+            )
 
     def _work_loop(self) -> None:
         while True:
@@ -259,14 +344,15 @@ class DetectorService:
             try:
                 batch = self.detector.detect(item.jpeg, item.prompt)
                 detections = batch["detections"]
+                robot = str(item.request.get("_robot") or "")
                 if not detections:
                     self._publish_failure(
                         item.result_topic, item.action_id, "no_detection",
                         f"No {item.prompt!r} detection met the confidence threshold.",
-                        batch=batch,
+                        batch=batch, robot=robot,
                     )
                 else:
-                    self._publish_result(item.result_topic, {
+                    result = {
                         "sender": "visual_ai",
                         "action_id": item.action_id,
                         "status": "completed",
@@ -277,17 +363,24 @@ class DetectorService:
                         "model_id": self.detector.model_id,
                         "catalog_id": self.detector.catalog_id,
                         "revision": self.detector.revision,
-                    })
+                    }
+                    if robot:
+                        result["robot"] = robot
+                    self._publish_result(item.result_topic, result)
                 self.last_error = ""
             except Exception as exc:
                 self.last_error = _safe_error(exc)
-                self._publish_failure(item.result_topic, item.action_id, "inference_failed", self.last_error)
+                self._publish_failure(
+                    item.result_topic, item.action_id, "inference_failed",
+                    self.last_error, robot=str(item.request.get("_robot") or ""),
+                )
             finally:
                 self.processing = False
                 self._publish_status("ready")
 
     def _publish_failure(
-        self, topic: str, action_id: str, code: str, message: str, *, batch: dict | None = None,
+        self, topic: str, action_id: str, code: str, message: str, *,
+        batch: dict | None = None, robot: str = "",
     ) -> None:
         result = {
             "sender": "visual_ai",
@@ -303,6 +396,8 @@ class DetectorService:
         if batch is not None:
             result["detection_batch"] = batch
             result["selected_detection"] = None
+        if robot:
+            result["robot"] = robot
         self._publish_result(topic, result)
 
     def _publish_result(self, topic: str, result: dict) -> None:
@@ -334,7 +429,12 @@ class DetectorService:
         for key, (request, received) in tuple(self.requests.items()):
             if received < cutoff:
                 self.requests.pop(key, None)
-                self._publish_failure(key[0], key[1], "photo_timeout", "The robot did not publish a correlated photo within 120 seconds.")
+                self._publish_failure(
+                    str(request.get("_result_topic") or ""), key[1],
+                    "photo_timeout",
+                    "The robot did not publish a correlated photo within 120 seconds.",
+                    robot=str(request.get("_robot") or ""),
+                )
 
 
 def _action_id(value: dict) -> str:

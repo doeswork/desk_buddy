@@ -1,9 +1,12 @@
 # Buddy ESP32 MQTT Message Guide
 
-The firmware listens for JSON commands on the status topic (see below), replies with an `in_progress` message, then finishes with `completed` (or `completed` with data). Every command should include a unique `action_id` so you can correlate responses. The firmware ignores any message whose `sender` is `"firmware"`.
+The firmware listens for JSON commands on the command topic, publishes lifecycle replies on the event topic, and keeps photos and heartbeat telemetry on their own channels. Every command must include a nonempty `sender` and unique `action_id`.
 
-- Command topic: `esp32_5/test`
-- Heartbeat topic: `esp32_5/HEARTBEAT`
+- Command topic: `esp32_5/commands`
+- Event topic: `esp32_5/events`
+- Photo topic: `esp32_5/photos`
+- Vision result topic: `esp32_5/vision`
+- Heartbeat topic: `esp32_5/heartbeat`
 - Typical fields in replies: `sender:"firmware"`, `action_id`, `status:"in_progress"| "completed"| "failed"`, optional `type`, optional data object.
 
 ---
@@ -347,11 +350,11 @@ Color detection
 ```json
 {"action":"detect_color","action_id":"62","sender":"ai_server"}
 ```
-These send `in_progress` (with optional `phrase`/`log`), then a `completed` with data or streamed photo payloads as implemented in the photo action.
+These send `in_progress`, publish the binary JPEG on the photo topic, then send a truthful `completed` or structured `failed` event.
 
 ---
 ## Heartbeat
-When enabled, the firmware publishes periodic telemetry on `esp32_5/HEARTBEAT`, including current servo/gripper angles and a timestamp. Hover snapshots are also periodically reported on the status topic when heartbeat is active.
+When enabled, the firmware publishes periodic telemetry on `esp32_5/heartbeat`, including current servo/gripper angles and a timestamp. Optional hover snapshots are reported on the event topic.
 
 ---
 ## OTA Firmware Update — `action: "ota_update"`
