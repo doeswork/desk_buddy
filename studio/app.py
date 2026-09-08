@@ -8,15 +8,43 @@ relative imports and a bare `python studio/app.py` cannot resolve them.
 
 from __future__ import annotations
 
+import os
+import platform
 import sys
+from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
 
-from .storage.settings import APP, ORG
-from .ui.main_window import MainWindow
+def _prepare_wslg() -> None:
+    """Point Qt at WSLg's real Wayland socket when the shell lost that path."""
+    if os.getenv("QT_QPA_PLATFORM"):
+        return
+    if "microsoft" not in platform.release().lower() and not os.getenv("WSL_DISTRO_NAME"):
+        return
+    display = os.getenv("WAYLAND_DISPLAY")
+    current = Path(os.getenv("XDG_RUNTIME_DIR", "/run/user/0"))
+    wslg = Path("/mnt/wslg/runtime-dir")
+    if display and not (current / display).exists() and (wslg / display).exists():
+        os.environ["XDG_RUNTIME_DIR"] = str(wslg)
+        print(
+            f"[Studio] Using WSLg Wayland runtime {wslg}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def main() -> int:
+    # Dispatch the privileged packaged-build helper before importing Qt or
+    # the application UI. Source builds use setup_entry.py for the same narrow
+    # boundary.
+    if len(sys.argv) == 4 and sys.argv[1] == "--broker-setup-helper":
+        from .services.network.broker.setup_helper import main as setup_main
+        return setup_main(sys.argv[2], sys.argv[3])
+
+    _prepare_wslg()
+    from PySide6.QtWidgets import QApplication
+    from .storage.settings import APP, ORG
+    from .ui.main_window import MainWindow
+
     app = QApplication(sys.argv)
     # These decide where Qt puts the preferences file, so they must not contain
     # spaces and must never change once shipped — a rename orphans every user's

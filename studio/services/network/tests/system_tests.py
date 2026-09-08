@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -308,7 +309,11 @@ def test_robot_endpoint_is_the_machines_broker() -> None:
     """
     from ..broker import finder
 
-    with mock.patch.object(system, "describe", lambda *a, **k: broker_state()):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: broker_state()),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         assert finder.robot_endpoint() == ("192.168.1.50", 1883)
 
 
@@ -317,7 +322,11 @@ def test_robot_endpoint_is_empty_when_the_broker_is_down() -> None:
     from ..broker import finder
 
     down = broker_state(reachable=False, service_active=False)
-    with mock.patch.object(system, "describe", lambda *a, **k: down):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: down),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         assert finder.robot_endpoint() == ("", 0)
 
 
@@ -326,7 +335,11 @@ def test_a_loopback_broker_is_never_given_to_a_robot() -> None:
     from ..broker import finder
 
     local = broker_state(host="127.0.0.1")
-    with mock.patch.object(system, "describe", lambda *a, **k: local):
+    with (
+        mock.patch("studio.storage.settings.settings", return_value=sandbox()),
+        mock.patch.object(system, "describe", lambda *a, **k: local),
+        mock.patch.object(finder, "is_wsl", return_value=False),
+    ):
         with mock.patch.object(finder, "lan_address", lambda: "192.168.1.50"):
             assert finder.robot_endpoint() == ("192.168.1.50", 1883)
 
@@ -372,11 +385,131 @@ def test_writing_is_refused_without_access() -> None:
     with mock.patch.object(
         system, "write_access", lambda: access(dir_writable=False)
     ):
-        problem = system.create_account("someone", "password123")
-        assert problem
-        assert "backup" in problem
+        change = system.create_account("someone", "password123")
+        assert not change.changed
+        assert "backup" in change.problem
 
-        assert system.remove_account("someone")
+        change = system.remove_account("someone")
+        assert not change.changed
+        assert change.problem
+
+
+def test_direct_account_reload_reports_written_and_applied_separately() -> None:
+    store = sandbox()
+    environment = SimpleNamespace(wsl=False, service_manager="systemd")
+    with mock.patch.object(system, "settings", return_value=store), \
+            mock.patch(
+                "studio.services.network.broker.setup_platform.detect",
+                return_value=environment,
+            ), \
+            mock.patch(
+                "studio.services.network.broker.setup_platform.service_commands",
+                return_value=[["systemctl", "reload", "mosquitto"]],
+            ), \
+            mock.patch.object(
+                system.subprocess, "run",
+                return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+            ):
+        change = system.reload()
+
+    assert change == system.AccountChange(changed=True, applied=True)
+    assert not store.get(keys.SYSTEM_BROKER_RELOAD_PENDING)
+
+
+def test_refused_account_reload_preserves_the_pending_change() -> None:
+    store = sandbox()
+    environment = SimpleNamespace(wsl=False, service_manager="systemd")
+    with mock.patch.object(system, "settings", return_value=store), \
+            mock.patch(
+                "studio.services.network.broker.setup_platform.detect",
+                return_value=environment,
+            ), \
+            mock.patch(
+                "studio.services.network.broker.setup_platform.service_commands",
+                return_value=[["systemctl", "reload", "mosquitto"]],
+            ), \
+            mock.patch.object(
+                system.subprocess, "run",
+                return_value=mock.Mock(
+                    returncode=1,
+                    stdout="",
+                    stderr="Interactive authentication required.",
+                ),
+            ):
+        change = system.reload()
+
+    assert change.changed and not change.applied
+    assert "refused" in change.problem
+    assert store.get(keys.SYSTEM_BROKER_RELOAD_PENDING)
+
+
+def test_wsl_account_reload_goes_straight_to_the_privileged_helper() -> None:
+    store = sandbox()
+    environment = SimpleNamespace(wsl=True, service_manager="systemd")
+    with mock.patch.object(system, "settings", return_value=store), \
+            mock.patch(
+                "studio.services.network.broker.setup_platform.detect",
+                return_value=environment,
+            ), \
+            mock.patch.object(system.subprocess, "run") as run:
+        change = system.reload()
+
+    assert change == system.AccountChange(changed=True)
+    assert store.get(keys.SYSTEM_BROKER_RELOAD_PENDING)
+    run.assert_not_called()
+
+
+def test_created_account_and_password_survive_a_pending_reload() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        passwd = root / "passwd"
+        acl = root / "acl"
+        passwd.write_text("")
+        acl.write_text("")
+        with mock.patch.object(system, "PASSWD_FILE", passwd), \
+                mock.patch.object(system, "ACL_FILE", acl), \
+                mock.patch.object(system, "write_access", return_value=access()), \
+                mock.patch.object(
+                    system.subprocess, "run",
+                    return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+                ), \
+                mock.patch.object(system, "_record_password") as record, \
+                mock.patch.object(
+                    system, "reload",
+                    return_value=system.AccountChange(changed=True),
+                ):
+            change = system.create_account(
+                "ubuntu-test", "generated-password", "ubuntu-test/#"
+            )
+            acl_text = acl.read_text()
+
+    assert change.changed and not change.applied
+    record.assert_called_once_with("ubuntu-test", "generated-password")
+    assert "user ubuntu-test" in acl_text
+
+
+def test_create_edit_and_remove_share_the_reload_result() -> None:
+    pending = system.AccountChange(changed=True)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        passwd = root / "passwd"
+        acl = root / "acl"
+        passwd.write_text("robot:hash\n")
+        acl.write_text("user robot\ntopic readwrite robot/#\n")
+        with mock.patch.object(system, "PASSWD_FILE", passwd), \
+                mock.patch.object(system, "ACL_FILE", acl), \
+                mock.patch.object(system, "write_access", return_value=access()), \
+                mock.patch.object(
+                    system.subprocess, "run",
+                    return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+                ), \
+                mock.patch.object(system, "_record_password"), \
+                mock.patch.object(system, "_forget_password"), \
+                mock.patch.object(system, "reload", return_value=pending) as reload:
+            assert system.create_account("new-robot", "password", "new-robot/#") == pending
+            assert system.set_topics("robot", ("robot/#", "shared/#")) == pending
+            assert system.remove_account("robot") == pending
+    assert reload.call_count == 3
 
 
 def test_grant_instructions_are_the_copyable_fallback() -> None:

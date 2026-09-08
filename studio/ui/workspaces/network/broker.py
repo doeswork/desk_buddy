@@ -1,23 +1,19 @@
-"""The Broker page: is Mosquitto here, is it running, and may Studio use it?
+"""Broker setup progress and a collapsed, lazy manual fallback.
 
-View only. Every question it asks is answered by `studio.services.network` —
-this file picks which card to build and nothing else. If a decision shows up
-here that is about *brokers* rather than about *widgets*, it belongs in the
-service.
-
-The page is a sequence, not a dashboard: it shows the one step that is due
-(install it, expose it to the LAN, give Studio an account, let Studio manage
-accounts) rather than everything at once, because a setup page that shows
-everything is a setup page nobody reads.
+The workspace owns the setup lifecycle. Building this view never starts a
+process or creates an account, including when built as an invisible page.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +21,6 @@ from PySide6.QtWidgets import (
 from ....services.network import (
     firewall_allows,
     firewall_hint,
-    lan_address,
 )
 from ....services.network.broker import system
 from ...components import Card, CommandCard, Column, StepsCard
@@ -36,151 +31,244 @@ from ...theme.metrics import CARD_MARGIN_H, CARD_SPACING
 class BrokerPage(Page):
     key = "broker"
     label = "Broker"
-
     title = "Broker"
     subtitle = "The MQTT hub. Robot, models, and workflows all talk through it."
 
     def enter(self) -> None:
-        """Re-read the two things the user changes outside Studio.
-
-        This page is where the setup instructions live, which makes it the
-        page they come back to after running them in a terminal — so a
-        stale answer here reads as the app being broken. Both the file
-        permissions and the connection are re-checked on the way in, which
-        is what makes "run these, then reopen this page" a complete loop.
-        """
-        self.workspace.recheck_access()
-        self.workspace.recheck_connection()
+        # Workspace activation owns setup; page navigation only repaints state.
+        self.rebuild()
 
     def build_page(self) -> QWidget:
-        broker = self.workspace.system_broker()
-        sections: list[QWidget] = [Card(broker.headline, broker.detail)]
-
-        if not broker.installed:
-            sections.append(
-                StepsCard(
-                    "Install a broker",
-                    "Studio uses the broker this machine runs rather than "
-                    "starting one of its own.",
-                    system.install_instructions(),
-                )
+        state = self.workspace.setup.status
+        titles = {
+            "idle": "Broker setup", "checking": "Connecting…",
+            "installing": "Installing Mosquitto…", "configuring": "Preparing your broker…",
+            "starting": "Starting the broker…", "verifying": "Checking the connection…",
+            "ready": "Studio is connected", "failed": "Setup needs attention",
+            "cancelled": "Setup paused",
+        }
+        card = Card(titles[state.state], state.message)
+        if (
+            state.connected
+            and state.network_ready
+            and not self.workspace.wsl_robot_access_available()
+        ):
+            network = QLabel(
+                f"Robot address: {state.robot_host}:{system.port()}. "
+                "Network configured; robot connection not yet confirmed."
             )
-            return Column(*sections)
-
-        if not broker.reachable:
-            sections.append(
-                StepsCard(
-                    "Start the broker",
-                    f"Nothing is answering on port {broker.port}.",
-                    system.install_instructions()[1:]
-                    + system.listener_instructions(broker.port),
-                )
-            )
-            if not lan_address():
-                # Worth saying here rather than once the broker is up: a
-                # machine with no network cannot serve a robot however well
-                # its broker is running.
-                sections.append(
-                    Card(
-                        "No network address",
-                        "This machine is not on a network, so a robot has no "
-                        "way to reach the broker even once it starts. "
-                        "Connect it to the same network as the robot.",
-                    )
-                )
-            return Column(*sections)
-
-        # No separate address card: the headline already names the address,
-        # and its detail line already tells robots where to find it. Three
-        # cards repeating one IP is how a page stops being read.
-
-        if not broker.configured:
-            sections.append(self._account_setup_card())
-
-        sections.append(self._manage_card(self.workspace.write_access()))
-
-        firewall = firewall_card(broker.port)
-        if firewall is not None:
-            sections.append(firewall)
+            network.setObjectName("CardBody")
+            network.setWordWrap(True)
+            card.layout().addWidget(network)
+        if state.state in ("failed", "cancelled"):
+            # Human-facing reason stays visible; command output lives below.
+            if state.detail:
+                reason = QLabel(state.detail)
+                reason.setObjectName("FieldError")
+                reason.setWordWrap(True)
+                card.layout().addWidget(reason)
+            retry = QPushButton("Retry setup")
+            retry.setObjectName("ContextPrimary")
+            retry.clicked.connect(lambda: self.workspace.start_setup(retry=True))
+            card.layout().addWidget(retry)
+        sections = [card]
+        account_reload = self._account_reload()
+        if account_reload is not None:
+            sections.append(account_reload)
+        robot_access = self._wsl_robot_access()
+        if robot_access is not None:
+            sections.append(robot_access)
+        sections.append(self._advanced())
         return Column(*sections)
 
-    def _account_setup_card(self) -> QWidget:
-        """Studio's own account: the commands that create it.
+    def _account_reload(self) -> QWidget | None:
+        """Pending account files, separate from the connected broker result."""
+        pending = self.workspace.account_reload_pending()
+        state = self.workspace.account_reload.status
+        if self.workspace.account_reload.running:
+            return Card("Applying broker user changes", state.message)
+        if not pending:
+            return None
 
-        No "check it worked" button. Studio tries the credentials whenever
-        this page is built, so running the commands and coming back is the
-        whole loop — the card is gone next time if they worked, and still
-        here with the reason if they did not.
-        """
-        name, password = system.suggested_account()
-        card = StepsCard(
-            "Create Studio's account",
-            "Studio needs an account on the broker to publish and subscribe. "
-            "Run these, then reopen this page. The password below is the one "
-            "Studio has recorded.",
-            system.account_instructions(name, password),
+        card = Card(
+            "Broker user changes need attention",
+            "The user files are saved, but Mosquitto has not reloaded them yet.",
         )
-
-        if self.workspace.verify_problem:
-            problem = QLabel(self.workspace.verify_problem)
-            problem.setObjectName("FieldError")
-            problem.setWordWrap(True)
-            card.layout().addWidget(problem)
+        detail = state.detail or self.workspace.account_problem
+        if detail:
+            reason = QLabel(detail)
+            reason.setObjectName("FieldError")
+            reason.setWordWrap(True)
+            card.layout().addWidget(reason)
+        retry = QPushButton("Retry applying changes")
+        retry.setObjectName("ContextPrimary")
+        retry.setEnabled(not self.workspace.setup.running)
+        retry.clicked.connect(
+            lambda: self.workspace.start_account_reload(retry=True)
+        )
+        card.layout().addWidget(retry)
         return card
 
-    def _manage_card(self, access) -> QWidget:
-        """Whether Studio may manage the broker's users.
+    def _wsl_robot_access(self) -> QWidget | None:
+        """The opt-in Windows boundary, separate from local broker health."""
+        broker = self.workspace.setup.status
+        if (
+            not self.workspace.wsl_robot_access_available()
+            or not broker.connected
+            or broker.state != "ready"
+        ):
+            return None
 
-        Asymmetric on purpose, because the two states are not equally
-        interesting. Not being able to manage users is a setup step that is
-        not finished, and it gets the full treatment: what is wrong, the
-        button that fixes it, and the exact commands underneath.
-
-        Being able to is just a fact, and it gets one line with a quiet way
-        back. The commands to undo it are not worth a permanent block of
-        terminal text on a page whose setup is complete — that was the card
-        shouting a finished step at someone who had already done it three
-        times.
-        """
-        if access.allowed:
-            return ManagedNote(
-                "Studio manages this broker's users.",
-                on_revoke=self._revoke if system.can_grant() else None,
-                problem=self.workspace.grant_problem,
+        access = self.workspace.robot_access.status
+        titles = {
+            "idle": "Connect robots on your network",
+            "checking": "Checking robot access…",
+            "disabled": "Connect robots on your network",
+            "repair": "Repair robot access",
+            "enabling": "Enabling robot access…",
+            "disabling": "Disabling robot access…",
+            "ready": "Robot access is ready",
+            "failed": "Robot access needs attention",
+            "cancelled": (
+                "Robot access is still enabled"
+                if access.ready
+                else "Robot access was not changed"
+            ),
+        }
+        message = access.message
+        if access.state in ("idle", "disabled"):
+            message = (
+                "Studio can use MQTT inside WSL. Allow Windows to forward the "
+                "broker port before connecting a robot on your home network."
             )
+        card = Card(titles.get(access.state, "Connect robots on your network"), message)
 
-        body = (
-            f"{access.reason} Until then, Add User is unavailable and "
-            "accounts have to be created with mosquitto_passwd."
-        )
-        body += (
-            " Grant Access hands your desktop's password prompt the commands "
-            "below — Studio never sees your password, and never runs sudo "
-            "itself."
-            if system.can_grant()
-            else " Run these commands to grant it; they are needed once."
-        )
-        card = StepsCard(
-            "Let Studio manage this broker's users",
-            body,
-            system.grant_instructions(),
-        )
-        if system.can_grant():
-            grant = QPushButton("Grant Access")
-            grant.setObjectName("ContextPrimary")
-            grant.setCursor(Qt.PointingHandCursor)
-            grant.clicked.connect(self._grant)
-            card.layout().addWidget(grant)
+        if access.ready and access.host and not access.message.startswith("Robot address:"):
+            address = QLabel(f"Robot address: {access.host}:{system.port()}")
+            address.setObjectName("CardBody")
+            address.setWordWrap(True)
+            card.layout().addWidget(address)
+        if access.detail:
+            detail = QLabel(access.detail)
+            detail.setObjectName(
+                "FieldError" if access.state in ("failed", "cancelled") else "CardBody"
+            )
+            detail.setWordWrap(True)
+            card.layout().addWidget(detail)
 
-        if self.workspace.grant_problem:
-            problem = QLabel(self.workspace.grant_problem)
-            problem.setObjectName("FieldError")
-            problem.setWordWrap(True)
-            card.layout().addWidget(problem)
+        if self.workspace.robot_access.running:
+            return card
+
+        if access.ready:
+            disable = QPushButton("Disable robot access")
+            disable.setObjectName("ContextAction")
+            disable.clicked.connect(
+                lambda: self.workspace.start_robot_access("disable")
+            )
+            card.layout().addWidget(disable)
+            return card
+
+        labels = {
+            "repair": "Repair robot access",
+            "failed": "Retry robot access",
+        }
+        retrying_disable = access.action == "disable"
+        label = (
+            "Retry disabling robot access"
+            if retrying_disable
+            else labels.get(access.state, "Enable robot access")
+        )
+        enable = QPushButton(label)
+        enable.setObjectName("ContextPrimary")
+        enable.clicked.connect(
+            lambda: self.workspace.start_robot_access(
+                "disable" if retrying_disable else "enable"
+            )
+        )
+        card.layout().addWidget(enable)
         return card
 
-    def _grant(self) -> None:
-        self.workspace.grant_access()
+    def _advanced(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        toggle = QPushButton("Advanced / Manual setup")
+        toggle.setObjectName("ContextAction")
+        toggle.setCheckable(True)
+        toggle.setChecked(self.workspace.advanced_open)
+        layout.addWidget(toggle)
+        content = QWidget()
+        content.setObjectName("ManualSetupContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(content)
+        content.setVisible(self.workspace.advanced_open)
+
+        def populate():
+            if content_layout.count():
+                return
+            # Lazy construction prevents rendering a hidden page from generating
+            # credentials, querying firewalls, or running any setup operation.
+            from ....storage.settings import settings
+            from ....storage import keys
+            store = settings()
+            connection = Card("Connection settings", "Leave the host blank to set up this machine. Enter an existing broker account to connect to a custom broker.")
+            fields = QFormLayout()
+            host = QLineEdit(store.get(keys.SYSTEM_BROKER_HOST))
+            port = QSpinBox()
+            port.setRange(1, 65535)
+            port.setValue(system.port(store))
+            user = QLineEdit(store.get(keys.SYSTEM_BROKER_USER))
+            secret = QLineEdit(store.get(keys.SYSTEM_BROKER_PASSWORD))
+            secret.setEchoMode(QLineEdit.Password)
+            for label, field in (("Broker host", host), ("Port", port), ("Username", user), ("Password", secret)):
+                fields.addRow(label, field)
+            connection.layout().addLayout(fields)
+            save = QPushButton("Save and retry")
+            save.setEnabled(not self.workspace.setup.running)
+
+            def save_connection():
+                if self.workspace.setup.running:
+                    return
+                system.set_connection(host_value=host.text(), port_value=port.value(),
+                                      user=user.text(), password=secret.text(), backend=store)
+                self.workspace.start_setup(retry=True)
+
+            save.clicked.connect(save_connection)
+            connection.layout().addWidget(save)
+            content_layout.addWidget(connection)
+            details = Card("Diagnostics", self.workspace.setup.status.detail or self.workspace.setup.status.message)
+            content_layout.addWidget(details)
+            if (
+                self.workspace.setup.status.connected
+                and not self.workspace.setup.running
+                and self.workspace.write_access().allowed
+            ):
+                content_layout.addWidget(ManagedNote(
+                    "Studio manages this broker’s users.",
+                    on_revoke=self._revoke,
+                    problem=self.workspace.grant_problem,
+                ))
+            content_layout.addWidget(StepsCard("Install and start Mosquitto", "Manual fallback for this operating system.", system.install_instructions()))
+            name = store.get(keys.SYSTEM_BROKER_USER) or "studio"
+            password = store.get(keys.SYSTEM_BROKER_PASSWORD) or "<generated during setup>"
+            content_layout.addWidget(StepsCard("Studio account", "These commands contain the broker password. Keep it private.", system.account_instructions(name, password)))
+            content_layout.addWidget(StepsCard("Broker configuration", "Review existing listeners and authentication before applying these fallback commands. Automatic setup checks compatibility for you.", system.listener_instructions(system.port())))
+            content_layout.addWidget(StepsCard("Account management", "Grant Studio permission to manage broker accounts.", system.grant_instructions()))
+            firewall = firewall_card(system.port())
+            if firewall is not None:
+                content_layout.addWidget(firewall)
+
+        def expanded(checked):
+            self.workspace.advanced_open = checked
+            if checked:
+                populate()
+            content.setVisible(checked)
+
+        toggle.toggled.connect(expanded)
+        if self.workspace.advanced_open:
+            populate()
+        return panel
 
     def _revoke(self) -> None:
         self.workspace.revoke_access()

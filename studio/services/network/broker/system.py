@@ -1,29 +1,8 @@
-"""The broker the machine runs, which Studio uses rather than replaces.
+"""System broker state, credentials and account management.
 
-Studio used to be able to start its own Mosquitto on another port. It no
-longer does, and that is the point: the machine's broker is on 1883 where
-every MQTT client looks by default, it is up whether or not Studio is, and a
-robot flashed with stock firmware is already pointed at it. A second broker
-beside a working one is only a second place for a message to be, and one of
-them to be wrong.
-
-Studio does not start, stop, or reconfigure the broker — all three need root, and a broker the user set up for
-their own reasons is not Studio's to rewrite. It *connects* to it, and where
-setup is needed it prints the commands for the user to run.
-
-That division is the whole design:
-
-    Studio owns          knowing where the broker is, connecting to it,
-                         recording the credentials it was given, and
-                         telling the user exactly what to run
-
-    The user owns        installing mosquitto, creating accounts in
-                         /etc/mosquitto/passwd, editing the ACL, and
-                         starting the service
-
-Nothing here runs `sudo`. A tool that edits a system service's config as root
-without being asked is a tool that has to be trusted much more than this one
-needs to be — the same rule `finder.install_command()` already follows.
+Network activation delegates installation and privileged configuration to the
+asynchronous setup coordinator. This module supplies the existing account APIs
+and manual fallback instructions; OS prompts own administrator authentication.
 """
 
 from __future__ import annotations
@@ -31,6 +10,7 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -56,9 +36,7 @@ COMMAND_TIMEOUT = 10
 # because the wait is a human reading a password prompt, not a file edit.
 GRANT_TIMEOUT = 120
 
-# Where a distribution's mosquitto keeps the files an account lives in. Only
-# read to *report* on them — Studio never writes here, and does not need to
-# for the paths it prints to be correct.
+# Default account files shared with the authorized setup helper.
 CONFIG_DIR = Path("/etc/mosquitto")
 PASSWD_FILE = CONFIG_DIR / "passwd"
 ACL_FILE = CONFIG_DIR / "acl"
@@ -80,6 +58,21 @@ GROUP = "mosquitto"
 # user: reload mosquitto.service, for whoever installed it, from an active
 # local session. It cannot start, stop, disable or touch any other service.
 POLKIT_RULE = Path("/etc/polkit-1/rules.d/49-desk-buddy-mosquitto.rules")
+
+
+@dataclass(frozen=True)
+class AccountChange:
+    """What an account-file mutation achieved.
+
+    ``changed`` means the passwd/ACL files reached the requested state.
+    ``applied`` means Mosquitto also accepted the reload. Keeping those two
+    facts separate prevents a generated password from being stranded because
+    a later service-manager operation needed privilege.
+    """
+
+    changed: bool = False
+    applied: bool = False
+    problem: str = ""
 
 
 
@@ -202,6 +195,9 @@ def set_connection(
     store.set(keys.SYSTEM_BROKER_PORT, int(port_value) or SYSTEM_PORT)
     store.set(keys.SYSTEM_BROKER_USER, user.strip())
     store.set(keys.SYSTEM_BROKER_PASSWORD, password)
+    store.set(keys.SYSTEM_BROKER_VERIFIED, False)
+    store.set(keys.SYSTEM_BROKER_ROBOT_HOST, "")
+    store.set(keys.SYSTEM_BROKER_NETWORK_READY, False)
     store.sync()
 
 
@@ -273,8 +269,7 @@ def describe(backend: Settings | None = None, *, connect: bool = True) -> System
 
 
 # ---- What the user has to run -------------------------------------------
-# Printed, never run. Studio has no business holding root, and these are
-# short enough to read before pasting — which is the point.
+# Manual fallback commands. Normal setup uses the authorized helper instead.
 
 
 def install_instructions() -> list[tuple[str, str]]:
@@ -488,16 +483,19 @@ def account_instructions(user: str, password: str, *, topics: str = "#") -> list
     `mosquitto_passwd` anyway; hiding it here would only mean they have to
     fetch it from somewhere else in the UI to complete the same step.
     """
-    name = user or "studio"
-    secret = password or "<password>"
+    name = shlex.quote(user or "studio")
+    secret = shlex.quote(password or "<password>")
+    prepare = f"test -e {PASSWD_FILE} || install -m 640 -g mosquitto /dev/null {PASSWD_FILE}"
+    acl = shlex.quote(f"user {user or 'studio'}\ntopic readwrite {topics}\n")
     return [
+        ("Prepare the password file if missing", "sudo sh -c " + shlex.quote(prepare)),
         (
             "Create the account",
             f"sudo mosquitto_passwd -b {PASSWD_FILE} {name} {secret}",
         ),
         (
             "Let it reach every topic",
-            f"printf 'user {name}\\ntopic readwrite {topics}\\n' "
+            f"printf '%s' {acl} "
             f"| sudo tee -a {ACL_FILE}",
         ),
         (
@@ -514,11 +512,21 @@ def listener_instructions(number: int = SYSTEM_PORT) -> list[tuple[str, str]]:
     for Studio and useless for a robot. This is the one edit that turns it
     into a broker the rest of the network can use.
     """
+    directory = CONFIG_DIR / "conf.d"
+    fragment = directory / "desk-buddy.conf"
+    text = ("# Managed by Desk Buddy Studio\n"
+            f"listener {int(number)} 0.0.0.0\nallow_anonymous false\n"
+            f"password_file {PASSWD_FILE}\nacl_file {ACL_FILE}\n")
+    include = f"include_dir {directory}"
+    enable = (f"grep -Fqx {shlex.quote(include)} {CONFIG_FILE} || "
+              f"printf '%s\\n' {shlex.quote(include)} >> {CONFIG_FILE}")
     return [
+        ("Create the configuration directory", f"sudo install -d -m 755 {directory}"),
         (
-            "Listen on every interface",
-            f"printf 'listener {number} 0.0.0.0\\n' | sudo tee -a {CONFIG_FILE}",
+            "Configure an authenticated LAN listener",
+            f"printf '%s' {shlex.quote(text)} | sudo tee {fragment}",
         ),
+        ("Include the configuration once", "sudo sh -c " + shlex.quote(enable)),
         ("Apply it", f"sudo systemctl restart {SERVICE}"),
     ]
 
@@ -529,11 +537,8 @@ def listener_instructions(number: int = SYSTEM_PORT) -> list[tuple[str, str]]:
 # "write two files in /etc/mosquitto", and whether Studio may do that is a
 # filesystem question, asked fresh every time rather than assumed.
 #
-# Studio never elevates. It does not call sudo or pkexec, and it does not ask
-# for a password — a GUI that collects a root password to run a shell command
-# is a habit worth not teaching. Either the user has granted access to those
-# two files, in which case editing them is ordinary unprivileged work, or
-# they have not, in which case Studio says so and shows how to grant it.
+# Account edits use the existing grant. Privileged setup runs separately;
+# administrator passwords are handled exclusively by system authorization.
 
 
 @dataclass(frozen=True)
@@ -903,8 +908,8 @@ def _record_reload_rule(installed: bool, backend: Settings | None = None) -> Non
     store.sync()
 
 
-def create_account(user: str, password: str, topics: str = "#") -> str:
-    """Add `user` to the broker and give it `topics`. "" on success.
+def create_account(user: str, password: str, topics: str = "#") -> AccountChange:
+    """Write `user`, then report separately whether Mosquitto reloaded it.
 
     Refuses rather than half-works when Studio has not been granted access:
     the caller is expected to have disabled the button already, and this is
@@ -912,13 +917,15 @@ def create_account(user: str, password: str, topics: str = "#") -> str:
     """
     access = write_access()
     if not access.allowed:
-        return access.reason or "Studio may not edit the broker's accounts."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's accounts."
+        )
 
     name = user.strip()
     if not name:
-        return "A username is required."
+        return AccountChange(problem="A username is required.")
     if not password:
-        return "A password is required."
+        return AccountChange(problem="A password is required.")
 
     try:
         result = subprocess.run(
@@ -928,19 +935,20 @@ def create_account(user: str, password: str, topics: str = "#") -> str:
             timeout=COMMAND_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
+        return AccountChange(problem=str(error))
     if result.returncode != 0:
-        return (result.stderr or result.stdout or "").strip() or (
-            f"{PASSWD_TOOL} failed."
+        return AccountChange(
+            problem=(result.stderr or result.stdout or "").strip()
+            or f"{PASSWD_TOOL} failed."
         )
 
     problem = _rewrite_acl_entry(name, topics)
     if problem:
-        return problem
+        return AccountChange(problem=problem)
 
-    # Written down only once the broker has actually taken it, so a failed
-    # create never leaves a password recorded for an account that does not
-    # exist. This is the only copy: mosquitto_passwd hashed the original.
+    # Record as soon as both account files are written. Reload is a separate
+    # outcome, and this copy is what lets the UI recover from an interrupted
+    # authorization instead of generating a different password.
     _record_password(name, password)
     return reload()
 
@@ -971,11 +979,13 @@ def _forget_password(name: str) -> None:
         pass
 
 
-def remove_account(user: str) -> str:
-    """Delete `user` from the broker. "" on success."""
+def remove_account(user: str) -> AccountChange:
+    """Delete `user` from the files and report whether that is live."""
     access = write_access()
     if not access.allowed:
-        return access.reason or "Studio may not edit the broker's accounts."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's accounts."
+        )
 
     try:
         result = subprocess.run(
@@ -985,17 +995,18 @@ def remove_account(user: str) -> str:
             timeout=COMMAND_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
+        return AccountChange(problem=str(error))
     # -D on an absent user is not a failure worth surfacing: the desired
     # end state is "this account does not exist", which already holds.
     if result.returncode != 0 and "not found" not in (result.stderr or "").lower():
-        return (result.stderr or result.stdout or "").strip() or (
-            f"{PASSWD_TOOL} failed."
+        return AccountChange(
+            problem=(result.stderr or result.stdout or "").strip()
+            or f"{PASSWD_TOOL} failed."
         )
 
     problem = _rewrite_acl_entry(user, topics=None)
     if problem:
-        return problem
+        return AccountChange(problem=problem)
 
     # The account is gone from the broker, so the recorded password is now a
     # secret for nothing. Keeping it would also mean a later account reusing
@@ -1109,19 +1120,21 @@ def _acl_topics() -> dict[str, list[str]]:
     return found
 
 
-def set_topics(user: str, topics: tuple[str, ...] | list[str]) -> str:
-    """Replace `user`'s topic list on the broker. "" on success.
+def set_topics(user: str, topics: tuple[str, ...] | list[str]) -> AccountChange:
+    """Replace topics in the ACL and report whether Mosquitto reloaded it.
 
     Only the ACL is touched — no password is involved, so this works for an
     account Studio did not create and has no secret for.
     """
     access = write_access()
     if not access.acl_writable:
-        return access.reason or "Studio may not edit the broker's ACL."
+        return AccountChange(
+            problem=access.reason or "Studio may not edit the broker's ACL."
+        )
 
     problem = _rewrite_acl_entry(user, ",".join(topics) if topics else "")
     if problem:
-        return problem
+        return AccountChange(problem=problem)
     return reload()
 
 
@@ -1179,8 +1192,8 @@ def _topic_list(topics: str) -> list[str]:
     return [part.strip() for part in topics.split(",") if part.strip()] or ["#"]
 
 
-def reload() -> str:
-    """Ask the broker to re-read its account files. "" on success.
+def reload() -> AccountChange:
+    """Try an unprivileged reload, leaving an authorized retry when needed.
 
     SIGHUP via the service manager, so nobody is disconnected. This is the
     one step that may still need privilege — but on a desktop with a polkit
@@ -1188,22 +1201,55 @@ def reload() -> str:
     leaves the accounts correctly written and only not yet live, which the
     caller reports as such rather than as a lost change.
     """
-    if not shutil.which("systemctl"):
-        return ""
+    from .setup_platform import detect, service_commands
+    store = settings()
+    store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, True)
+    store.sync()
+    environment = detect()
+    if environment.wsl:
+        # A WSLg process is not an active local polkit subject, so systemd
+        # predictably refuses this call even when Studio installed its narrow
+        # reload rule. The workspace immediately uses the WSL-root helper.
+        print("[Studio broker accounts] reload queued for the WSL helper", flush=True)
+        return AccountChange(changed=True)
     try:
-        result = subprocess.run(
-            ["systemctl", "reload", SERVICE],
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
+        commands = service_commands(environment.service_manager, "reload")
+    except RuntimeError as error:
+        print(f"[Studio broker accounts] direct reload unavailable: {error}", flush=True)
+        return AccountChange(
+            changed=True,
+            problem=f"The broker could not be reloaded: {error}",
         )
+    try:
+        for command in commands:
+            print(
+                "[Studio broker accounts] direct reload "
+                + " ".join(str(part) for part in command),
+                flush=True,
+            )
+            result = subprocess.run(command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
+            if result.returncode:
+                detail = (result.stderr or result.stdout or "").strip()
+                print(
+                    f"[Studio broker accounts] direct reload refused: "
+                    f"exit={result.returncode}, detail={detail!r}",
+                    flush=True,
+                )
+                return AccountChange(
+                    changed=True,
+                    problem="The service manager refused the broker reload.",
+                )
     except (OSError, subprocess.SubprocessError) as error:
-        return f"Accounts written, but the broker could not be reloaded: {error}"
-    if result.returncode != 0:
-        detail = (result.stderr or "").strip()
-        return (
-            "Accounts written, but the broker could not be reloaded"
-            + (f": {detail}" if detail else ".")
-            + f" Run: sudo systemctl reload {SERVICE}"
+        print(
+            f"[Studio broker accounts] direct reload failed: "
+            f"{type(error).__name__}: {error}",
+            flush=True,
         )
-    return ""
+        return AccountChange(
+            changed=True,
+            problem=f"The broker could not be reloaded: {error}",
+        )
+    store.set(keys.SYSTEM_BROKER_RELOAD_PENDING, False)
+    store.sync()
+    print("[Studio broker accounts] direct reload complete", flush=True)
+    return AccountChange(changed=True, applied=True)
