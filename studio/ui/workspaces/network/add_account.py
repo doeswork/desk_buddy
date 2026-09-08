@@ -98,15 +98,14 @@ class AddAccountPage(Page):
         # invent and nothing weak to pick.
         password = generate_password()
         topics = "#" if self._full_access else f"{name}/#"
-        problem = self.workspace.create_account(name, password, topics)
-        if problem:
-            self._fail(problem)
+        change = self.workspace.create_account(name, password, topics)
+        if not change.changed:
+            self._fail(change.problem)
             return
 
-        # The password exists only in the variable above — the broker keeps a
-        # hash — so handing it straight to the page that shows it is the only
-        # way it survives. Set before navigating: Accounts is already built by
-        # this point, but state-then-navigate is the clearer order.
+        # File creation is success even if the service reload still needs
+        # authorization. Show the credential immediately; Studio also keeps a
+        # private local copy so an interrupted apply cannot strand it.
         accounts = self.workspace.find("accounts")
         accounts.created(name, password)
         self.workspace.go_to("accounts")

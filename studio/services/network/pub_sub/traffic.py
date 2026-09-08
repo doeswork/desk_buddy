@@ -17,6 +17,7 @@ class TrafficRecorder:
         self._client = None
         self._port = 0
         self._host = ""
+        self._credentials = ("", "")
         self._status = "Broker is not running"
         self._lock = Lock()
 
@@ -37,6 +38,7 @@ class TrafficRecorder:
         host, port = studio_endpoint()
         if port and (
             self._client is None or port != self._port or host != self._host
+            or studio_credentials() != self._credentials
         ):
             self.start(port, host)
         elif not port and self._client is not None:
@@ -54,6 +56,7 @@ class TrafficRecorder:
             return
 
         name, password = studio_credentials()
+        self._credentials = (name, password)
         if not name:
             self._set_status(
                 "No broker account yet — set one on Network → Broker."

@@ -12,7 +12,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QPlainTextEdit
 
 from .storage import keys
@@ -25,8 +25,39 @@ from .ui.menus.view import DEFAULT_ZOOM_INDEX
 
 def main() -> int:
     app = QApplication([])
-    # Studio no longer starts a broker at launch — it uses the machine's —
-    # so the only thing to assert about startup is that it touches nothing.
+    # NetworkWorkspace deliberately invalidates persisted WSL endpoints until
+    # it can inspect Windows again. The smoke test builds that real workspace,
+    # so give every Network settings reader a disposable backend rather than
+    # clearing the developer's verified endpoint merely by running tests.
+    settings_directory = tempfile.TemporaryDirectory()
+    smoke_settings = Settings(QSettings(
+        os.path.join(settings_directory.name, "settings.ini"),
+        QSettings.IniFormat,
+    ))
+    settings_patches = [
+        mock.patch(
+            "studio.ui.workspaces.network.workspace.settings",
+            return_value=smoke_settings,
+        ),
+        mock.patch(
+            "studio.storage.settings.settings", return_value=smoke_settings
+        ),
+        mock.patch(
+            "studio.services.network.broker.system.settings",
+            return_value=smoke_settings,
+        ),
+    ]
+    for patcher in settings_patches:
+        patcher.start()
+    # The smoke test builds every page and pumps Qt events. Never launch an
+    # authorization prompt on the developer/CI host, including restored Network.
+    activation_patch = mock.patch(
+        "studio.ui.workspaces.network.workspace.NetworkWorkspace.activate"
+    )
+    activate_network = activation_patch.start()
+    # Setup is scheduled after construction so the main window exists before
+    # any authorization prompt. The operation itself stays mocked: smoke tests
+    # must never touch the developer/CI machine's broker.
     with (
         mock.patch(
             "studio.services.network.broker.system.create_account"
@@ -36,7 +67,26 @@ def main() -> int:
         preferences.return_value.mqtt_broker_auto_start = True
         window = MainWindow()
     create_account.assert_not_called()
+    activate_network.assert_not_called()
     window.show()
+    app.processEvents()
+    activate_network.assert_called_once_with()
+    activate_network.reset_mock()
+
+    # Disabling launch-time automation does not remove the explicit Network
+    # entry point. A later visit still asks that workspace to prepare MQTT.
+    window._preferences.mqtt_broker_auto_start = False
+    network_index = next(
+        index for index, workspace in enumerate(window.workspaces)
+        if workspace.key == "network"
+    )
+    with mock.patch.object(QTimer, "singleShot") as single_shot:
+        window._start_network_broker()
+        single_shot.assert_not_called()
+    window.select_workspace(network_index)
+    app.processEvents()
+    activate_network.assert_called_once_with()
+    activate_network.reset_mock()
 
     assert window.windowTitle() == "Desk Buddy Studio"
 
@@ -106,6 +156,9 @@ def main() -> int:
 
     print(f"OK: {len(workspaces)} workspaces / {total_pages} pages, "
           f"two bars swap, preferences round-trip, diagnostics render")
+    for patcher in reversed(settings_patches):
+        patcher.stop()
+    settings_directory.cleanup()
     app.quit()
     return 0
 

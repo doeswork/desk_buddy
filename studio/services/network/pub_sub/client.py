@@ -37,6 +37,7 @@ class MqttClient:
         # hashable in a way that would dedupe usefully anyway.
         self._subscribers: dict[str, list[Callback]] = defaultdict(list)
         self._host = ""
+        self._credentials = ("", "")
 
     @property
     def status(self) -> str:
@@ -55,6 +56,7 @@ class MqttClient:
         host, port = studio_endpoint()
         if port and (
             self._client is None or port != self._port or host != self._host
+            or studio_credentials() != self._credentials
         ):
             self.start(port, host)
         elif not port and self._client is not None:
@@ -72,6 +74,7 @@ class MqttClient:
             return
 
         name, password = studio_credentials()
+        self._credentials = (name, password)
         if not name:
             self._set_status(
                 "No broker account yet — set one on Network → Broker."

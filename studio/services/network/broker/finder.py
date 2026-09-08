@@ -528,7 +528,7 @@ class BrokerReport:
 
     @property
     def chip(self) -> str:
-        """The workspace bar's always-visible broker indicator."""
+        """the workspace bar's always-visible broker indicator."""
         return chip_for(self.port)
 
 
@@ -548,22 +548,26 @@ def report() -> BrokerReport:
     """
     from . import system
 
-    broker = system.describe()
+    broker = system.describe(connect=False)
     return BrokerReport(
         status=detect(), port=broker.port if broker.reachable else 0
     )
 
 
 def chip_text() -> str:
-    """The workspace bar's broker indicator, without the cost of full detection.
+    """the workspace bar's broker indicator, without the cost of full detection.
 
     A local socket check is ~0.05ms against ~2.25ms for report(), which
     matters when this runs every few seconds for the life of the app.
     """
     from . import system
 
-    broker = system.describe()
+    broker = system.describe(connect=False)
     return chip_for(broker.port if broker.reachable else 0)
+
+
+def is_wsl() -> bool:
+    return "microsoft" in platform.release().lower() or bool(os.getenv("WSL_DISTRO_NAME"))
 
 
 def robot_endpoint() -> tuple[str, int]:
@@ -579,7 +583,23 @@ def robot_endpoint() -> tuple[str, int]:
     """
     from . import system
 
-    broker = system.describe()
+    from ....storage import keys
+    from ....storage.settings import settings
+    store = settings()
+    if store.get(keys.SYSTEM_BROKER_SETUP_PAUSED) and not store.get(keys.SYSTEM_BROKER_NETWORK_READY):
+        return "", 0
+    advertised = store.get(keys.SYSTEM_BROKER_ROBOT_HOST)
+    if advertised:
+        if not store.get(keys.SYSTEM_BROKER_NETWORK_READY):
+            return "", 0
+        connection = store.get(keys.SYSTEM_BROKER_HOST) or "127.0.0.1"
+        return (advertised, system.port()) if port_open(system.port(), connection) else ("", 0)
+    # WSL's private NAT address is not a robot endpoint. Windows forwarding
+    # is managed separately; enter its address when provisioning the robot.
+    if is_wsl():
+        return "", 0
+
+    broker = system.describe(connect=False)
     if not broker.reachable:
         return "", 0
     host = broker.host
@@ -597,7 +617,7 @@ def studio_endpoint() -> tuple[str, int]:
     """
     from . import system
 
-    broker = system.describe()
+    broker = system.describe(connect=False)
     if not broker.reachable:
         return "", 0
     # Prefer the recorded address, but fall back to loopback: a broker

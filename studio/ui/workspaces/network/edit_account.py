@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 )
 
 from ....models.config.mqtt_topics import TOPIC_RULE, validate_topic
-from ....services.network.broker import system
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -71,6 +70,7 @@ class EditAccountPage(Page):
             account.topics,
             self._new_topic,
             self._problem,
+            enabled=not self.workspace.account_actions_busy(),
             on_topic_changed=self._topic_changed,
             on_add=self.add_topic,
             on_remove=self.remove_topic,
@@ -132,9 +132,8 @@ class EditAccountPage(Page):
 
     def _set_topics(self, topics) -> str:
         """Write the ACL and refresh the workspace's cached account list."""
-        problem = system.set_topics(self._name, topics)
-        self.workspace.refresh()
-        return problem
+        change = self.workspace.set_account_topics(self._name, topics)
+        return "" if change.changed else change.problem
 
     def done(self) -> None:
         self.workspace.go_to("accounts")
@@ -150,7 +149,8 @@ class TopicForm(QWidget):
     """The current topic list, and the field to add another."""
 
     def __init__(self, topics: tuple[str, ...], new_topic: str, problem: str,
-                 *, on_topic_changed, on_add, on_remove, on_done) -> None:
+                 *, enabled: bool, on_topic_changed, on_add, on_remove,
+                 on_done) -> None:
         super().__init__()
 
         layout = QVBoxLayout(self)
@@ -164,7 +164,7 @@ class TopicForm(QWidget):
         layout.addWidget(heading)
 
         if topics:
-            layout.addWidget(TopicList(topics, on_remove))
+            layout.addWidget(TopicList(topics, on_remove if enabled else None))
         else:
             empty = QLabel(
                 "No topics yet. This user can connect but cannot publish "
@@ -186,12 +186,14 @@ class TopicForm(QWidget):
         self._topic.setPlaceholderText("robot-1/status")
         self._topic.textChanged.connect(on_topic_changed)
         self._topic.returnPressed.connect(on_add)
+        self._topic.setEnabled(enabled)
         row.addWidget(self._topic, 1)
 
         add = QPushButton("Add Topic")
         add.setObjectName("ToolbarAction")
         add.setCursor(Qt.PointingHandCursor)
         add.clicked.connect(on_add)
+        add.setEnabled(enabled)
         row.addWidget(add)
         layout.addLayout(row)
 
@@ -245,11 +247,12 @@ class TopicList(QListWidget):
         label.setObjectName("CommandText")
         layout.addWidget(label, 1)
 
-        remove = QLabel("Remove")
-        remove.setObjectName("RowActionBad")
-        remove.setCursor(Qt.PointingHandCursor)
-        remove.setToolTip(f"Remove {topic}")
-        remove.mousePressEvent = lambda event: on_remove(topic)
-        layout.addWidget(remove)
+        if on_remove is not None:
+            remove = QLabel("Remove")
+            remove.setObjectName("RowActionBad")
+            remove.setCursor(Qt.PointingHandCursor)
+            remove.setToolTip(f"Remove {topic}")
+            remove.mousePressEvent = lambda event: on_remove(topic)
+            layout.addWidget(remove)
 
         return holder

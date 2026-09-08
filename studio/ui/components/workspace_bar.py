@@ -1,4 +1,4 @@
-"""The workspace bar: which top-level area of the app you are in.
+"""the workspace bar: which top-level area of the app you are in.
 
 The first of the app's three bars, under the menu bar and above the toolbar.
 One button per workspace, exclusive, always visible. Never changes. Switching

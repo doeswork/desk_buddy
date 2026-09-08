@@ -18,7 +18,7 @@ class Preferences:
 
     @property
     def mqtt_broker_auto_start(self) -> bool:
-        """Whether Studio starts its managed MQTT broker on launch."""
+        """Whether Studio prepares and connects to MQTT on launch."""
         return self._settings.get(keys.MQTT_BROKER_AUTO_START)
 
     def set_mqtt_broker_auto_start(self, enabled: bool) -> None:

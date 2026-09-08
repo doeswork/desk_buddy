@@ -1,4 +1,4 @@
-"""The toolbar: the actions for the workspace you are in.
+"""the toolbar: the actions for the workspace you are in.
 
 The second of the app's three bars. The menu bar is Qt's own, the workspace
 bar above this one picks which workspace you are in, and this holds whatever
@@ -70,7 +70,7 @@ class Toolbar(QToolBar):
         self.buttons: dict[str, ToolbarButton] = {}
 
         # One wrapping widget holds every action, rather than adding them to
-        # The toolbar directly: QToolBar lays its own children out in a single
+        # the toolbar directly: QToolBar lays its own children out in a single
         # row and offers a chevron when they overflow, which is exactly the
         # disappearance this bar exists to avoid.
         self._flow = FlowBar(spacing=0, line_spacing=2)

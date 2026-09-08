@@ -9,10 +9,10 @@ what an account may do is a property of one row in this page's table, not of
 the workspace. Add sits at the top right of the page, and Reset / Remove sit
 on the row they act on.
 
-The page has two states. Normally it is the table of accounts; after one is
-created or reset it shows that account's credentials instead, because a
-password is shown exactly once and the user has to be able to copy it before
-moving on.
+Normally this page is the table of accounts. After one is created, or when the
+user chooses Show, it presents that account's recorded credentials instead.
+Mosquitto owns the account and stores its hash; Studio's private record keeps
+only passwords Studio itself generated.
 """
 
 from __future__ import annotations
@@ -63,29 +63,55 @@ class AccountsPage(Page):
         port = self.workspace.system_broker().port or SYSTEM_PORT
         # The address a client actually connects on, which is the LAN one
         # the broker binds to — not loopback, which no robot can reach.
-        host = self.workspace.broker_host() or lan_address() or "127.0.0.1"
+        host = self.workspace.broker_host()
+        if not host and not self.workspace.wsl_robot_access_available():
+            host = lan_address() or "127.0.0.1"
         sections = []
 
         if self._credentials is not None:
             name, password = self._credentials
+            applying = self.workspace.account_reload.running
+            waiting = self.workspace.account_reload_pending()
+            if applying:
+                title = f"User {name} is saved"
+                intro = (
+                    "Copy this password now. Studio is applying the broker "
+                    "change in the background and keeps a private local copy."
+                )
+            elif waiting:
+                title = f"User {name} is saved"
+                intro = (
+                    "Copy this password now. The broker reload still needs "
+                    "attention, but this credential is preserved and will not "
+                    "be regenerated."
+                )
+            else:
+                title = f"User {name} is ready"
+                intro = ""
             sections.append(CredentialsCard(
                 name,
                 password,
                 host,
                 port,
+                title=title,
+                intro=intro,
                 on_done=self._dismiss,
             ))
 
-        if self.workspace.account_problem:
-            sections.append(Card(
-                "The broker did not take these users",
-                self.workspace.account_problem,
-            ))
+        reload_card = self._reload_card()
+        if reload_card is not None:
+            sections.append(reload_card)
 
-        if self.workspace.running():
+        if self.workspace.running() and host:
             sections.append(Card(
                 "Connect to this broker",
                 f"{host}:{port}, with a username and password below.",
+            ))
+        elif self.workspace.running():
+            sections.append(Card(
+                "Robot access is not ready",
+                "Open Network → Broker and enable robot access before using "
+                "these credentials on a device outside WSL.",
             ))
         else:
             sections.append(Card(
@@ -104,10 +130,13 @@ class AccountsPage(Page):
                 "hand with mosquitto_passwd.",
             ))
 
+        busy = self.workspace.account_actions_busy()
         sections.append(AccountTable(
             entries,
-            on_edit=self.edit_account if access.allowed else None,
-            on_remove=self.remove_account if access.allowed else None,
+            on_show=self.show_account,
+            on_edit=self.edit_account if access.allowed and not busy else None,
+            on_remove=self.remove_account if access.allowed and not busy else None,
+            busy=busy,
         ))
         return Column(*sections)
 
@@ -138,6 +167,9 @@ class AccountsPage(Page):
             add.setToolTip(
                 f"{access.reason} See Network → Broker to grant access."
             )
+        if self.workspace.account_actions_busy():
+            add.setEnabled(False)
+            add.setToolTip("Wait for the current broker user change to finish.")
         return add
 
     # ---- actions ---------------------------------------------------------
@@ -153,6 +185,10 @@ class AccountsPage(Page):
 
     def created(self, name: str, password: str) -> None:
         """Called by the Add Account page once the account exists."""
+        self._show(name, password)
+
+    def show_account(self, name: str, password: str) -> None:
+        """Show a credential Studio recorded for an existing broker user."""
         self._show(name, password)
 
     def edit_account(self, name: str) -> None:
@@ -175,9 +211,36 @@ class AccountsPage(Page):
         if confirm != QMessageBox.Yes:
             return
 
-        problem = self.workspace.remove_account(name)
-        if problem:
-            QMessageBox.warning(parent, "Could not remove the user", problem)
+        change = self.workspace.remove_account(name)
+        if not change.changed:
+            QMessageBox.warning(parent, "Could not remove the user", change.problem)
+
+    def _reload_card(self) -> QWidget | None:
+        pending = self.workspace.account_reload_pending()
+        state = self.workspace.account_reload.status
+        if self.workspace.account_reload.running:
+            return Card("Applying broker user changes", state.message)
+        if not pending:
+            return None
+
+        card = Card(
+            "Broker user changes need attention",
+            "The account files are saved, but Mosquitto has not reloaded them yet.",
+        )
+        detail = state.detail or self.workspace.account_problem
+        if detail:
+            reason = QLabel(detail)
+            reason.setObjectName("FieldError")
+            reason.setWordWrap(True)
+            card.layout().addWidget(reason)
+        retry = QPushButton("Retry applying changes")
+        retry.setObjectName("ToolbarPrimary")
+        retry.setEnabled(not self.workspace.setup.running)
+        retry.clicked.connect(
+            lambda: self.workspace.start_account_reload(retry=True)
+        )
+        card.layout().addWidget(retry)
+        return card
 
     def _show(self, name: str, password: str) -> None:
         self._credentials = (name, password)
@@ -191,7 +254,7 @@ class AccountsPage(Page):
 class AccountTable(QTableWidget):
     """Every account, what a client needs to connect as one, and its actions.
 
-    Reset and Remove sit on the row they act on rather than needing a
+    Show, Edit and Remove sit on the row they act on rather than needing a
     selection first — a click does the whole thing, there is no state in
     between where a button up in a toolbar would still need to catch up.
     """
@@ -211,7 +274,8 @@ class AccountTable(QTableWidget):
 
 
 
-    def __init__(self, entries: list, *, on_edit, on_remove) -> None:
+    def __init__(self, entries: list, *, on_show, on_edit, on_remove,
+                 busy: bool = False) -> None:
         super().__init__(len(entries), len(self.COLUMNS))
         self.setObjectName("AccountTable")
         self.setHorizontalHeaderLabels(self.COLUMNS)
@@ -234,17 +298,17 @@ class AccountTable(QTableWidget):
                 item.setToolTip(value)
                 self.setItem(row, column, item)
 
-            if on_edit is None and on_remove is None:
+            if not account.password and on_edit is None and on_remove is None:
                 # Studio has not been granted write access. The rows are
                 # still worth showing — this is the broker's real account
                 # list — but there is nothing here to click.
-                note = QLabel("Read only")
+                note = QLabel("Applying…" if busy else "Read only")
                 note.setObjectName("CardBody")
                 self.setCellWidget(row, self.ACTIONS, self._pad(note))
             else:
                 self.setCellWidget(
                     row, self.ACTIONS,
-                    self._row_actions(account.name, on_edit, on_remove),
+                    self._row_actions(account, on_show, on_edit, on_remove),
                 )
 
         # Topics is the one genuinely open-ended value — an account can carry
@@ -301,7 +365,7 @@ class AccountTable(QTableWidget):
         layout.addWidget(widget)
         return holder
 
-    def _row_actions(self, name: str, on_edit, on_remove) -> QWidget:
+    def _row_actions(self, account, on_show, on_edit, on_remove) -> QWidget:
         holder = QWidget()
         layout = QHBoxLayout(holder)
         # Several actions share this row, so the padding between them is
@@ -313,18 +377,31 @@ class AccountTable(QTableWidget):
         # Compact row actions, not BAR-2-style buttons: the row already says
         # whose account this is, so the control only needs to name the verb.
         #
-        # Show and Reset are gone with the managed broker. Both read a
-        # password back, and the broker stores only a hash — Studio kept its
-        # own copy before, which is exactly the private list that could
-        # disagree with the broker. Changing a password is mosquitto_passwd's
-        # job now.
-        edit = self._button("Edit", "RowAction", f"Edit {name}'s topics")
-        edit.mousePressEvent = lambda event: on_edit(name)
-        layout.addWidget(edit)
+        # Mosquitto is authoritative for whether the account exists. Studio's
+        # private record supplies only the generated password it cannot read
+        # back from Mosquitto's hash.
+        if account.password:
+            show = self._button(
+                "Show", "RowAction", f"Show {account.name}'s credentials"
+            )
+            show.mousePressEvent = (
+                lambda event: on_show(account.name, account.password)
+            )
+            layout.addWidget(show)
 
-        remove = self._button("Remove", "RowActionBad", f"Remove {name}", last=True)
-        remove.mousePressEvent = lambda event: on_remove(name)
-        layout.addWidget(remove)
+        if on_edit is not None:
+            edit = self._button(
+                "Edit", "RowAction", f"Edit {account.name}'s topics"
+            )
+            edit.mousePressEvent = lambda event: on_edit(account.name)
+            layout.addWidget(edit)
+
+        if on_remove is not None:
+            remove = self._button(
+                "Remove", "RowActionBad", f"Remove {account.name}", last=True
+            )
+            remove.mousePressEvent = lambda event: on_remove(account.name)
+            layout.addWidget(remove)
 
         return holder
 
@@ -376,19 +453,16 @@ class AccountTable(QTableWidget):
 
 
 class CredentialsCard(QWidget):
-    """Shows a password once, because it can never be shown again.
-
-    Mosquitto stores a hash. Nothing — not Studio, not the broker — can read
-    this back, so the card is deliberately blunt about that.
-    """
+    """Show a generated password kept in Studio's private record store."""
 
     DEFAULT_INTRO = (
-        "Copy the password now — it is stored as a hash and cannot be shown "
-        "again. If it is lost, reset it to get a new one."
+        "Copy this password for the device. Mosquitto stores only its hash; "
+        "Studio keeps this generated credential in its private local data "
+        "file so you can retrieve it again."
     )
 
     def __init__(self, name: str, password: str, host: str, port: int,
-                 parent: QWidget | None = None, *, intro: str = "",
+                 parent: QWidget | None = None, *, title: str = "", intro: str = "",
                  on_done=None) -> None:
         super().__init__(parent)
 
@@ -398,21 +472,24 @@ class CredentialsCard(QWidget):
         )
         layout.setSpacing(CARD_SPACING * 2)
 
-        title = QLabel(f"User {name} is ready")
-        title.setObjectName("CardTitle")
-        layout.addWidget(title)
+        heading = QLabel(title or f"User {name} is ready")
+        heading.setObjectName("CardTitle")
+        layout.addWidget(heading)
 
         warning = QLabel(intro or self.DEFAULT_INTRO)
         warning.setObjectName("CardBody")
         warning.setWordWrap(True)
         layout.addWidget(warning)
 
-        for label, value in (
-            ("Host", host),
+        fields = []
+        if host:
+            fields.append(("Host", host))
+        fields.extend((
             ("Port", str(port)),
             ("Username", name),
             ("Password", password),
-        ):
+        ))
+        for label, value in fields:
             layout.addLayout(self._field(label, value))
 
         # Dismissing the card is the card's own business.
