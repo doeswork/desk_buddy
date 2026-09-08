@@ -535,7 +535,7 @@ class NetworkTests(unittest.TestCase):
 
     def test_window_selection_activates_network_but_repaint_does_not(self):
         from ...main_window import MainWindow
-        window = SimpleNamespace(nav_bar=mock.Mock(), stack=mock.Mock(), workspaces=[self.space], _show_workspace=mock.Mock())
+        window = SimpleNamespace(workspace_bar=mock.Mock(), stack=mock.Mock(), workspaces=[self.space], _show_workspace=mock.Mock())
         with mock.patch("studio.ui.main_window.QTimer.singleShot") as schedule:
             MainWindow.select_workspace(window, 0)
         self.assertEqual(schedule.call_args.args[1], self.space.activate)

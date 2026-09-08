@@ -1,5 +1,6 @@
-"""BAR 1 — the workspace switcher.
+"""the workspace bar: which top-level area of the app you are in.
 
+The first of the app's three bars, under the menu bar and above the toolbar.
 One button per workspace, exclusive, always visible. Never changes. Switching
 between the pages *inside* a workspace is the side panel's job.
 
@@ -18,10 +19,10 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QToolBar
 from .spacer import spacer
 
 
-class NavBar(QToolBar):
+class WorkspaceBar(QToolBar):
     def __init__(self, window: QMainWindow, workspaces, on_select) -> None:
         super().__init__("Workspaces", window)
-        self.setObjectName("NavBar")
+        self.setObjectName("WorkspaceBar")
         self.setMovable(False)
         self.layout().setSpacing(0)
         self.layout().setContentsMargins(0, 0, 0, 0)

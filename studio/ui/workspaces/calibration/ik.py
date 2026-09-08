@@ -240,7 +240,7 @@ class HoverPoint(QWidget):
         bottom.addWidget(self.distance)
 
         self.capture = QPushButton("Capture This Pose")
-        self.capture.setObjectName("ContextAction")
+        self.capture.setObjectName("ToolbarAction")
         self.capture.setCursor(Qt.PointingHandCursor)
         self.capture.setEnabled(False)
         self.capture.setToolTip(

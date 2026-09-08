@@ -116,28 +116,28 @@ class StencilForm(QWidget):
         buttons.setSpacing(CARD_SPACING * 2)
 
         start = QPushButton("Start")
-        start.setObjectName("ContextPrimary")
+        start.setObjectName("ToolbarPrimary")
         start.setCursor(Qt.PointingHandCursor)
         start.setEnabled(enabled)
         start.clicked.connect(on_start)
         buttons.addWidget(start)
 
         run_point = QPushButton("Run Point")
-        run_point.setObjectName("ContextAction")
+        run_point.setObjectName("ToolbarAction")
         run_point.setCursor(Qt.PointingHandCursor)
         run_point.setEnabled(enabled)
         run_point.clicked.connect(on_run_point)
         buttons.addWidget(run_point)
 
         status = QPushButton("Status")
-        status.setObjectName("ContextAction")
+        status.setObjectName("ToolbarAction")
         status.setCursor(Qt.PointingHandCursor)
         status.setEnabled(enabled)
         status.clicked.connect(on_status)
         buttons.addWidget(status)
 
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("ContextAction")
+        cancel.setObjectName("ToolbarAction")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.setEnabled(enabled)
         cancel.clicked.connect(on_cancel)
@@ -178,7 +178,7 @@ class StencilForm(QWidget):
         layout.addWidget(distance)
 
         apply_button = QPushButton("Apply")
-        apply_button.setObjectName("ContextAction")
+        apply_button.setObjectName("ToolbarAction")
         apply_button.setCursor(Qt.PointingHandCursor)
         apply_button.setEnabled(enabled)
         apply_button.clicked.connect(

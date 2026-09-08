@@ -83,7 +83,7 @@ class PerchForm(QWidget):
             row = QHBoxLayout()
             row.addWidget(spin, 1)
             send = QPushButton("Set")
-            send.setObjectName("ContextAction")
+            send.setObjectName("ToolbarAction")
             send.setCursor(Qt.PointingHandCursor)
             send.setEnabled(enabled)
             send.clicked.connect(
@@ -97,7 +97,7 @@ class PerchForm(QWidget):
         layout.addSpacing(CARD_SPACING * 3)
         profile_row = QHBoxLayout()
         profile = QPushButton("Run Base Rotation Profile")
-        profile.setObjectName("ContextPrimary")
+        profile.setObjectName("ToolbarPrimary")
         profile.setCursor(Qt.PointingHandCursor)
         profile.setEnabled(enabled)
         profile.clicked.connect(on_run_profile)

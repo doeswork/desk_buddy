@@ -10,7 +10,7 @@ Three things a page builds:
     build_header_actions()  the header's right-hand slot, optional
     build_page()             the main body
 
-Neither the side panel nor BAR 2 is one of them — both belong to the workspace
+Neither the side panel nor the toolbar is one of them — both belong to the workspace
 (see workspaces/base.py), so they keep their shape as the user moves between
 pages. A page-level action that is not that — one button naming the page's
 one verb, like Accounts' Add Account — belongs in `build_header_actions`
@@ -52,6 +52,16 @@ class Page:
     title: str = ""
     subtitle: str = ""
     status: str = ""
+
+    # Whether the body should take every pixel the viewport has.
+    #
+    # A page is a scrolling column by default: its body is as tall as its
+    # contents and a stretch pushes it to the top, so a short page does not
+    # stretch a card across an empty screen. That is wrong for a page whose
+    # body *is* one editable document — the editor wants the height, and the
+    # stretch is what stops it having it. Such a page sets this, drops the
+    # stretch, and takes responsibility for filling the viewport itself.
+    fills_height: bool = False
 
     def __init__(self, workspace=None) -> None:
         # The workspace this page belongs to. Shared state — a broker report,
@@ -125,12 +135,19 @@ class Page:
         )
         layout.setSpacing(PAGE_SPACING)
         layout.addWidget(self.build_header())
-        layout.addWidget(self.build_page())
-        layout.addStretch(1)
+        layout.addWidget(self.build_page(), 1 if self.fills_height else 0)
+        if not self.fills_height:
+            layout.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidget(inner)
         scroll.setWidgetResizable(True)
+        if self.fills_height:
+            # The body sizes itself to the viewport, so the outer scroll must
+            # never offer a vertical bar of its own: one here would let the
+            # page grow past the window and hand the editor a scrollbar
+            # inside a scrollbar.
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._widget = scroll
         return scroll
 
@@ -151,7 +168,8 @@ class Page:
         inner = self._widget.widget()
         layout = inner.layout()
 
-        # Header and body sit before the trailing stretch, in that order.
+        # Header and body come first, in that order — a filling page has
+        # no trailing stretch behind them, which changes nothing here.
         for index in (0, 1):
             item = layout.takeAt(0)
             if item is not None and item.widget() is not None:
@@ -163,7 +181,7 @@ class Page:
                 old.setParent(None)
                 old.deleteLater()
         layout.insertWidget(0, self.build_header())
-        layout.insertWidget(1, self.build_page())
+        layout.insertWidget(1, self.build_page(), 1 if self.fills_height else 0)
 
         if self.on_rebuilt is not None:
             self.on_rebuilt()

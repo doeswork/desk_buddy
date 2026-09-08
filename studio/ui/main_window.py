@@ -1,7 +1,7 @@
 """Main window. Assembly only — the pieces live in their own files.
 
     menus/             one file per menu, each owns its actions
-    components/        reusable widgets, incl. BAR 1 and BAR 2
+    components/        reusable widgets, incl. the workspace bar and the toolbar
     workspaces/        one top-level area each, owning its pages
     pages/             the Page base class
     theme/             palettes (light / dark / system) and stylesheet
@@ -34,7 +34,7 @@ from .menus import build_menu_bar
 from .menus.view import DEFAULT_ZOOM_INDEX, ZOOM_LEVELS
 from .workspaces import build_workspaces
 from .theme import DEFAULT_THEME, available, omarchy, stylesheet
-from .components import ContextBar, DebugTray, NavBar, PreferencesDialog
+from .components import Toolbar, DebugTray, WorkspaceBar, PreferencesDialog
 
 
 class MainWindow(QMainWindow):
@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
 
         # Restoring a workspace is not a user action. In particular, restoring
         # Network must not bypass a disabled automatic-setup preference. The
-        # launch hook below decides whether setup starts; later BAR 1 clicks
+        # launch hook below decides whether setup starts; later workspace bar clicks
         # still activate Network explicitly.
         self.select_workspace(self._restored_workspace(), activate=False)
         self.workspace.go_to(self._restored_page())
@@ -81,12 +81,12 @@ class MainWindow(QMainWindow):
         self._start_network_broker()
 
     def _build_toolbars(self) -> None:
-        self.nav_bar = NavBar(self, self.workspaces, self.select_workspace)
-        self.addToolBar(Qt.TopToolBarArea, self.nav_bar)
+        self.workspace_bar = WorkspaceBar(self, self.workspaces, self.select_workspace)
+        self.addToolBar(Qt.TopToolBarArea, self.workspace_bar)
 
-        self.context_bar = ContextBar(self)
+        self.toolbar = Toolbar(self)
         self.addToolBarBreak(Qt.TopToolBarArea)
-        self.addToolBar(Qt.TopToolBarArea, self.context_bar)
+        self.addToolBar(Qt.TopToolBarArea, self.toolbar)
 
     def _build_side_dock(self) -> None:
         self.side_dock = QDockWidget("Browser", self)
@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         self.side_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
 
         # No title bar. Which workspace you are in is already said by the
-        # checked tab in BAR 1, and naming it again above its own page list
+        # checked tab in the workspace bar, and naming it again above its own page list
         # is a header that carries no information. An empty widget is how Qt
         # removes the bar; setTitleBarWidget(None) restores the default.
         self.side_dock.setTitleBarWidget(QWidget())
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
 
     # ---- Broker ---------------------------------------------------------
     def _watch_broker(self) -> None:
-        """Keep BAR 1's broker chip honest.
+        """Keep the workspace bar's broker chip honest.
 
         A local TCP connect costs well under a millisecond, so polling is
         cheaper and far simpler than tracking a process we may not have
@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
         self.refresh_broker()
 
     def refresh_broker(self) -> None:
-        self.nav_bar.set_broker(chip_text())
+        self.workspace_bar.set_broker(chip_text())
         self._traffic_recorder.reconcile()
         vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
         if vision is not None:
@@ -292,6 +292,14 @@ class MainWindow(QMainWindow):
                 self.restoreState(state)
         except (TypeError, ValueError):
             pass
+
+        # The two bars are stacked, never side by side, whatever the saved
+        # state says. `restoreState` matches toolbars by object name, so a
+        # state written before either was renamed restores neither — and the
+        # break between them is lost with them, dropping the toolbar up onto
+        # the workspace bar's row. Re-asserting it here costs nothing when
+        # the state is current and is the whole fix when it is not.
+        self.insertToolBarBreak(self.toolbar)
 
     def closeEvent(self, event) -> None:
         """Save preferences and drop the broker connection on the way out.
@@ -451,8 +459,8 @@ class MainWindow(QMainWindow):
         self.refresh_broker()
 
     def select_workspace(self, index: int, *, activate: bool = True) -> None:
-        """The one thing that happens on a BAR 1 click."""
-        self.nav_bar.check(index)
+        """The one thing that happens on a workspace bar click."""
+        self.workspace_bar.check(index)
         self.stack.setCurrentIndex(index)
         self._show_workspace(self.workspaces[index])
         workspace = self.workspaces[index]
@@ -461,12 +469,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, workspace.activate)
 
     def _show_workspace(self, workspace) -> None:
-        """Put a workspace's chrome on screen: BAR 2, the dock, the status.
+        """Put a workspace's chrome on screen: the toolbar, the dock, the status.
 
-        BAR 2 and the status come from the page showing inside it; the side
+        the toolbar and the status come from the page showing inside it; the side
         panel is the workspace's own list of pages.
         """
-        self.context_bar.show_page(workspace)
+        self.toolbar.show_page(workspace)
 
         # The workspace builds its own side panel; the dock just hosts it.
         side = workspace.side()

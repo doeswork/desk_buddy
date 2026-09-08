@@ -457,7 +457,7 @@ class NetworkWorkspace(Workspace):
         self._access = None
         super().refresh()
 
-    # ---- BAR 2 -----------------------------------------------------------
+    # ---- the toolbar -----------------------------------------------------------
     def build_actions(self) -> list:
         """Nothing. Network has no workspace-wide verbs.
 

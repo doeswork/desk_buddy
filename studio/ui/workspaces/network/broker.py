@@ -68,7 +68,7 @@ class BrokerPage(Page):
                 reason.setWordWrap(True)
                 card.layout().addWidget(reason)
             retry = QPushButton("Retry setup")
-            retry.setObjectName("ContextPrimary")
+            retry.setObjectName("ToolbarPrimary")
             retry.clicked.connect(lambda: self.workspace.start_setup(retry=True))
             card.layout().addWidget(retry)
         sections = [card]
@@ -101,7 +101,7 @@ class BrokerPage(Page):
             reason.setWordWrap(True)
             card.layout().addWidget(reason)
         retry = QPushButton("Retry applying changes")
-        retry.setObjectName("ContextPrimary")
+        retry.setObjectName("ToolbarPrimary")
         retry.setEnabled(not self.workspace.setup.running)
         retry.clicked.connect(
             lambda: self.workspace.start_account_reload(retry=True)
@@ -161,7 +161,7 @@ class BrokerPage(Page):
 
         if access.ready:
             disable = QPushButton("Disable robot access")
-            disable.setObjectName("ContextAction")
+            disable.setObjectName("ToolbarAction")
             disable.clicked.connect(
                 lambda: self.workspace.start_robot_access("disable")
             )
@@ -179,7 +179,7 @@ class BrokerPage(Page):
             else labels.get(access.state, "Enable robot access")
         )
         enable = QPushButton(label)
-        enable.setObjectName("ContextPrimary")
+        enable.setObjectName("ToolbarPrimary")
         enable.clicked.connect(
             lambda: self.workspace.start_robot_access(
                 "disable" if retrying_disable else "enable"
@@ -193,7 +193,7 @@ class BrokerPage(Page):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         toggle = QPushButton("Advanced / Manual setup")
-        toggle.setObjectName("ContextAction")
+        toggle.setObjectName("ToolbarAction")
         toggle.setCheckable(True)
         toggle.setChecked(self.workspace.advanced_open)
         layout.addWidget(toggle)

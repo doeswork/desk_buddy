@@ -62,7 +62,7 @@ class CommandCard(QFrame):
         row.addWidget(self.command_field)
 
         self.copy_button = QPushButton("Copy")
-        self.copy_button.setObjectName("ContextAction")
+        self.copy_button.setObjectName("ToolbarAction")
         self.copy_button.clicked.connect(self._copy)
         row.addWidget(self.copy_button)
 

@@ -1,6 +1,6 @@
 """What a page declares for one context-bar button.
 
-Not a widget — a description the ContextBar turns into a ContextButton. Pages
+Not a widget — a description the Toolbar turns into a ToolbarButton. Pages
 return these from `build_actions()`.
 """
 

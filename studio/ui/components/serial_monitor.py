@@ -682,13 +682,13 @@ class WifiDialog(QDialog):
 
         buttons = QHBoxLayout()
         save = QPushButton("Save Wi-Fi & Restart")
-        save.setObjectName("ContextPrimary")
+        save.setObjectName("ToolbarPrimary")
         save.setCursor(Qt.PointingHandCursor)
         save.clicked.connect(self.save)
         buttons.addWidget(save)
 
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("ContextAction")
+        cancel.setObjectName("ToolbarAction")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
@@ -827,13 +827,13 @@ class MqttDialog(QDialog):
 
         buttons = QHBoxLayout()
         self.save_button = QPushButton("Save MQTT & Restart")
-        self.save_button.setObjectName("ContextPrimary")
+        self.save_button.setObjectName("ToolbarPrimary")
         self.save_button.setCursor(Qt.PointingHandCursor)
         self.save_button.clicked.connect(self.save)
         buttons.addWidget(self.save_button)
 
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("ContextAction")
+        cancel.setObjectName("ToolbarAction")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)

@@ -199,7 +199,7 @@ def control_button(
     primary: bool = False,
 ) -> QPushButton:
     button = QPushButton(label)
-    button.setObjectName("ContextPrimary" if primary else "ContextAction")
+    button.setObjectName("ToolbarPrimary" if primary else "ToolbarAction")
     button.setCursor(Qt.PointingHandCursor)
     button.setEnabled(enabled)
     button.clicked.connect(on_click)

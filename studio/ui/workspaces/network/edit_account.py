@@ -190,7 +190,7 @@ class TopicForm(QWidget):
         row.addWidget(self._topic, 1)
 
         add = QPushButton("Add Topic")
-        add.setObjectName("ContextAction")
+        add.setObjectName("ToolbarAction")
         add.setCursor(Qt.PointingHandCursor)
         add.clicked.connect(on_add)
         add.setEnabled(enabled)
@@ -205,7 +205,7 @@ class TopicForm(QWidget):
         layout.addSpacing(CARD_SPACING * 3)
         done_row = QHBoxLayout()
         done = QPushButton("Done")
-        done.setObjectName("ContextPrimary")
+        done.setObjectName("ToolbarPrimary")
         done.setCursor(Qt.PointingHandCursor)
         done.clicked.connect(on_done)
         done_row.addWidget(done)
