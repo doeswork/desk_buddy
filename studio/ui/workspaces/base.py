@@ -1,10 +1,10 @@
 """Base class every workspace inherits.
 
 A Workspace is a top-level area of the app — Network, Vision, Workflows — and
-it owns many pages. BAR 1 picks the workspace; the side panel is a list of
+it owns many pages. The workspace bar picks the workspace; the side panel is a list of
 links into it; the page fills the body.
 
-    Workspace          BAR 1 button, owns the pages and the shared state
+    Workspace          the workspace bar button, owns the pages and the shared state
       └── Page         one screen in the body, owns its actions and its body
 
 Pages and the side panel are deliberately not the same list. `pages` is every
@@ -13,7 +13,7 @@ no link is still a page — Add Account is reached from a button on Accounts,
 not from the panel, and would be noise in a list of places to go. Navigation
 is by key throughout, so nothing depends on what order either list is in.
 
-BAR 2 belongs to the workspace, not to the page. Every Network page shows the
+The toolbar belongs to the workspace, not to the page. Every Network page shows the
 same Network buttons; what changes as you move around is which of them are
 live, never which of them exist. A toolbar that reshuffles as you navigate is
 one the user has to re-read every time, and a button that vanishes is one they
@@ -40,7 +40,7 @@ from ..components import SidePanel
 class Workspace:
     """One top-level area. Subclasses declare their pages."""
 
-    # Identity. BAR 1 needs these before anything is built.
+    # Identity. The workspace bar needs these before anything is built.
     key: str = ""
     label: str = ""
 
@@ -58,7 +58,7 @@ class Workspace:
         self._stack: QStackedWidget | None = None
         self._side: QWidget | None = None
         # Set by the window: lets a workspace whose state changed ask for the
-        # chrome — BAR 2, the side panel, the status — to catch up with it.
+        # chrome — the toolbar, the side panel, the status — to catch up with it.
         self.on_rebuilt = None
         # Also set by the window: say one transient line in the status strip.
         # For the outcome of an action the user just took, where the result
@@ -116,7 +116,7 @@ class Workspace:
         if self.on_rebuilt is not None:
             self.on_rebuilt()
 
-    # ---- what BAR 2 and the status strip read ----------------------------
+    # ---- what the toolbar and the status strip read ----------------------------
     def build_actions(self) -> list:
         """This workspace's buttons — the same ones on all of its pages.
 

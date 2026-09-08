@@ -90,7 +90,7 @@ class StepsCard(QFrame):
             self.fields.append(field)
 
             button = QPushButton("Copy")
-            button.setObjectName("ContextAction")
+            button.setObjectName("ToolbarAction")
             button.clicked.connect(
                 lambda _checked=False, f=field, b=button: self._copy(f, b)
             )

@@ -167,7 +167,7 @@ class BrokerPage(Page):
         )
         if system.can_grant():
             grant = QPushButton("Grant Access")
-            grant.setObjectName("ContextPrimary")
+            grant.setObjectName("ToolbarPrimary")
             grant.setCursor(Qt.PointingHandCursor)
             grant.clicked.connect(self._grant)
             card.layout().addWidget(grant)

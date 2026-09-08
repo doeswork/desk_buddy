@@ -93,7 +93,7 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
 **0 — Strip the page back to nothing. `studio/ui/pages/network.py` — DONE**
 - delete the three placeholder cards (`Broker` / `Connected` / `Traffic`) and
   their `build_*` methods
-- delete every BAR 2 action — `build_actions()` returns `[]`, so the context
+- delete every toolbar action — `build_actions()` returns `[]`, so the toolbar
   bar renders empty
 - keep the side panel, but **empty**: `SidePanel("Brokers", [])`, not `None`.
   Returning `None` hides the dock entirely, which is a different layout — and
@@ -101,7 +101,7 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
 - the hardcoded `Local broker / mqtt.deskbuddy.ai / Custom…` rows go; that list
   gets rebuilt from real brokers in step 2
 - `status` stops claiming "Broker stopped" — nothing knows that yet
-- keep `title` / `subtitle` / `key` / `label`; the page still exists in BAR 1
+- keep `title` / `subtitle` / `key` / `label`; the page still exists in the workspace bar
 - `NOT BUILT YET` badge stays until step 4 — it is the honest label for a page
   that cannot yet reach a robot
 - **why first:** every later step then *adds* something real. Nothing on the
@@ -109,7 +109,7 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
   control sit side by side looking identical.
 - **exit:** the Network page is a title, an empty side panel, an empty context
   bar, and nothing else. Smoke test still passes.
-- **done:** page is title + subtitle + empty `Brokers` panel + empty BAR 2.
+- **done:** page is title + subtitle + empty `Brokers` panel + an empty toolbar.
   `build_actions()` is not overridden at all — the base already returns `[]`,
   so an empty override would have been noise. `build_side()` stays, because
   the base returns `None` there and that hides the dock.
@@ -144,10 +144,10 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
     process we may not have started (a broker can also die without telling us)
   - **`DEFAULT_PORT = 18830`, deliberately not 1883** — this machine already
     has a system broker on the default port, so ours must never collide
-  - BAR 1 now carries **two** always-true chips, `● broker on <port>` beside
+  - The workspace bar now carries **two** always-true chips, `● broker on <port>` beside
     `○ no robot`. They belong there, not on this page: a robot dropping
     offline matters most while you are driving it from Manual.
-  - BAR 2 offers only what the state allows — Start when down, Stop/Restart
+  - The toolbar offers only what the state allows — Start when down, Stop/Restart
     when up. Offering to "Start" a running broker is its own small lie.
   - **the chip timer must not call `report()`** — that shells out to
     `mosquitto -h` (~2.25ms vs ~0.05ms for a socket check, 46x). `chip_text()`
@@ -168,7 +168,7 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
   Surface that verbatim rather than "failed to start" (verified)
 - **check the port first** — a system broker may already hold 1883 (there is one
   on this machine now). If found: offer to use it instead of failing to bind.
-- Start / Stop / Restart on BAR 2 become real
+- Start / Stop / Restart on the toolbar become real
 - **exit:** press Start on a fresh machine, get a running private broker, no root
 - **done.** `start()` / `stop()` / `restart()` / `shutdown()`, each returning a
   `CommandResult(ok, message, detail)` rather than raising — a broker that will
@@ -193,7 +193,7 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
     tells the window to re-read the actions and status
   - 10 tests in `studio/network/command_tests.py`, skipped when Mosquitto is
     absent, always on an unused port so they never disturb a real broker
-- **bug found by mark, fixed:** with a system broker on 1883, BAR 2 came up
+- **bug found by mark, fixed:** with a system broker on 1883, the toolbar came up
   **empty** — no way to start Studio's own. Cause: `build_actions()` asked "is
   a broker running?" when the question is "is *ours* running?". A broker we did
   not start must not suppress the button that starts ours. `BrokerReport` now
@@ -205,10 +205,10 @@ next starts. Step 0 is deletion; 1–3 are new code; 4–6 port what already wor
 **Diagnostics — `studio/diagnostics.py`.** Help → Copy Diagnostics
 (`Ctrl+Shift+D`), or `python -m studio.diagnostics`. One pasteable block:
 binaries and versions, both ports and who owns them, the exact strings the UI
-is rendering, file paths with permissions, and what BAR 2 is actually showing.
+is rendering, file paths with permissions, and what the toolbar is actually showing.
 Read-only and carries no credentials. It exists because "the buttons are
 missing" should be a paste, not a conversation — that bug above was invisible
-in the code and obvious in one line of this output (`BAR 2 EMPTY`).
+in the code and obvious in one line of this output (`toolbar      EMPTY`).
 
 **3 — Accounts. `studio/network/accounts.py` — DONE**
 - `studio` account created on first run: strong generated password, full access
@@ -224,7 +224,7 @@ in the code and obvious in one line of this output (`BAR 2 EMPTY`).
 - store our own creds in `user_config/`; **[OPEN]** password in plaintext INI
   vs `keyring`
 - **exit:** credentials a firmware flash can actually use
-- **done.** Accounts live on the Network page: the side panel is the list, BAR 2
+- **done.** Accounts live on the Network page: the side panel is the list, the toolbar
   carries Add Account / Reset Password / Remove Account. Notes:
   - **an account is not a robot.** It is a credential — anything joining the
     system gets one, which is the point of everything speaking MQTT rather than
@@ -246,7 +246,7 @@ in the code and obvious in one line of this output (`BAR 2 EMPTY`).
     now record the port they started on; the finder only scans when we are not
     running one.
   - **bug found:** a rebuilt side panel never reached the dock — `_page_changed`
-    refreshed BAR 2 but not the panel. `select_page` and `_page_changed` now
+    refreshed the toolbar but not the panel. `select_page` and `_page_changed` now
     share one `_show_page`.
   - 12 tests in `studio/network/account_tests.py`, against a real broker:
     a new account actually connects, a wrong password does not, two accounts
@@ -368,9 +368,9 @@ Pick `manual_controller`, Bar 2 becomes Home / Perch / Open / Close / Photo.
 ┌────────────────────────────────────────────────────────┐
 │ File  Edit  Robot  View  Help          ● connected     │  Qt menu (thin)
 ├────────────────────────────────────────────────────────┤
-│ [Messages][Vision][Workflows][Calib][Logs][Manual]     │  BAR 1 — service
+│ [Messages][Vision][Workflows][Calib][Logs][Manual]     │  the workspace bar — service
 ├────────────────────────────────────────────────────────┤
-│  Start   Stop   Restart   Config          ⏻ running    │  BAR 2 — context
+│  Start   Stop   Restart   Config          ⏻ running    │  the toolbar — context
 ├──────────────┬─────────────────────────────────────────┤
 │              │                                         │
 │   side       │            main panel                   │
@@ -776,7 +776,7 @@ the placeholder cards already follow, doing real work.
 These cards are *built back up* one step at a time — step 0 deletes the
 placeholder versions first, so nothing on the page is ever a lie.
 
-BAR 2 becomes `Install / Start / Stop / Restart | Add Robot | Config / Topics` —
+the toolbar becomes `Install / Start / Stop / Restart | Add Robot | Config / Topics` —
 `Install` replaces itself with the broker state once one exists. `Config` opens
 broker settings, which is where the old Setup tab's fields go —
 **progressive disclosure**:

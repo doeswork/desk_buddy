@@ -54,7 +54,7 @@ def main() -> int:
         assert window.stack.currentIndex() == index, (
             f"{workspace.key}: workspace did not switch"
         )
-        assert window.nav_bar.actions_by_index[index].isChecked(), (
+        assert window.workspace_bar.actions_by_index[index].isChecked(), (
             f"{workspace.key}: not checked"
         )
 
@@ -72,7 +72,7 @@ def main() -> int:
                 f"{workspace.key}: link {key!r} points at no page"
             )
 
-        # BAR 2 belongs to the workspace: the same buttons in the same order
+        # The toolbar belongs to the workspace: the same buttons in the same order
         # on every one of its pages, whatever else changes.
         expected = None
         for page in workspace.pages:
@@ -82,7 +82,7 @@ def main() -> int:
             assert workspace.page is page, f"{page.key}: page did not switch"
             check_actions(window, workspace, page)
 
-            labels = list(window.context_bar.buttons)
+            labels = list(window.toolbar.buttons)
             if expected is None:
                 expected = labels
             assert labels == expected, (
@@ -111,16 +111,16 @@ def main() -> int:
 
 
 def check_actions(window, workspace, page) -> None:
-    """BAR 2 shows exactly what the workspace declared, on every page."""
+    """The toolbar shows exactly what the workspace declared, on every page."""
     specs = [s for s in workspace.build_actions() if isinstance(s, ActionSpec)]
-    labels = list(window.context_bar.buttons)
+    labels = list(window.toolbar.buttons)
     expected = [s.label for s in specs]
     assert labels == expected, f"{page.key}: context bar {labels} != {expected}"
 
     # A button is clickable exactly when its action has something to do.
     # An enabled button with no handler is a control that lies.
     by_label = {s.label: s for s in specs}
-    for label, button in window.context_bar.buttons.items():
+    for label, button in window.toolbar.buttons.items():
         spec = by_label[label]
         assert button.isEnabled() == spec.clickable, (
             f"{page.key}: {label} enabled={button.isEnabled()} "
@@ -132,8 +132,8 @@ def check_actions(window, workspace, page) -> None:
             )
 
     # At most one primary, matching what the page declared.
-    primaries = [l for l, b in window.context_bar.buttons.items()
-                 if b.objectName() == "ContextPrimary"]
+    primaries = [l for l, b in window.toolbar.buttons.items()
+                 if b.objectName() == "ToolbarPrimary"]
     declared = [s.label for s in workspace.build_actions()
                 if isinstance(s, ActionSpec) and s.primary]
     assert primaries == declared, f"{page.key}: primary {primaries} != {declared}"

@@ -1,6 +1,6 @@
-"""The five workspaces, in BAR 1 order.
+"""The five workspaces, in the workspace bar order.
 
-A workspace is a top-level area and owns many pages; BAR 1 switches between
+A workspace is a top-level area and owns many pages; the workspace bar switches between
 workspaces, the side panel switches between one workspace's pages.
 
 To add a workspace: write the file, import it, add it to WORKSPACE_CLASSES.

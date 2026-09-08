@@ -22,9 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from ....models.config.workflows import Workflow, Workflows
-from ....models.config.workflow_steps import all_templates, find
+from .steps import GROUPS, all_templates, find
 from . import (
-    StepPaletteCard,
     StepTable,
     WorkflowNavigator,
     WorkflowsWorkspace,
@@ -149,24 +148,43 @@ def test_creating_a_workflow_immediately_creates_its_file() -> None:
     assert said == ["Created duck_walk.json"]
 
 
-def test_toolbar_has_no_run_or_individual_step_actions() -> None:
+def test_the_toolbar_leads_with_the_workflows_own_verbs() -> None:
+    """The document's actions come first, before the step vocabulary — a
+    user looking for Save should not have to scan 28 step names to find it."""
     space, _store = populated()
     labels = [action.label for action in space.build_actions()
               if hasattr(action, "label")]
-    assert labels == ["New", "Save JSON", "Delete Workflow"]
+    assert labels[:3] == ["New", "Save JSON", "Delete Workflow"]
+    # Still no per-step run/edit controls; steps are read-only for now.
     assert "Run" not in labels
-    assert "Add Step" not in labels
 
 
-def test_palette_offers_a_button_for_every_template() -> None:
+def test_the_toolbar_offers_a_button_for_every_template() -> None:
+    """The palette is the toolbar now, not a card in the page body.
+
+    Adding steps is the work of this workspace, and a palette below the
+    document is one the user scrolls past to reach the thing it edits.
+    """
     space, _store = populated()
-    card = StepPaletteCard(space)
-    labels = {
-        button.text()
-        for button in card.findChildren(QPushButton)
-    }
+    labels = {action.label for action in space.build_actions()
+              if hasattr(action, "label")}
     for template in all_templates():
         assert template.label in labels, template.key
+
+
+def test_step_buttons_are_dead_until_a_workflow_is_open() -> None:
+    """There is nothing to append a step to, so the button says so by being
+    disabled rather than failing when pressed."""
+    # An empty store is the only way there is genuinely nothing open:
+    # `selected` falls back to the first workflow whenever one exists.
+    space = WorkflowsWorkspace(repository())
+    assert space.selected is None
+
+    steps = [action for action in space.build_actions()
+             if hasattr(action, "label")
+             and action.label not in ("New", "Save JSON", "Delete Workflow")]
+    assert steps, "the palette should still be listed"
+    assert not any(action.clickable for action in steps)
 
 
 def test_palette_button_appends_a_step_to_the_draft() -> None:
@@ -213,6 +231,107 @@ def test_base_rotate_steps_read_as_words_not_raw_json() -> None:
         {"subject": "gripper", "command": "SOFTHOLD"}
     ) == "Soft Hold"
     assert step_details({"subject": "gripper", "position": 120}) == "Gripper → 120°"
+
+
+# ---- The step palette ----------------------------------------------------
+
+def test_every_template_produces_a_step_the_model_accepts() -> None:
+    store = repository()
+    for template in all_templates():
+        workflow = Workflow("probe", "", True, (template.to_step(),))
+        assert store.save(workflow) == "", template.key
+        saved = store.find("probe")
+        assert saved is not None
+        assert saved.steps[0]["subject"] == template.subject
+        store.delete("probe")
+
+
+def test_template_keys_are_unique_and_findable() -> None:
+    keys = [template.key for template in all_templates()]
+    assert len(keys) == len(set(keys))
+    for key in keys:
+        assert find(key) is not None
+    assert find("no_such_template") is None
+    assert GROUPS, "the palette needs at least one group"
+
+
+def test_templates_hand_out_private_copies() -> None:
+    template = find("servo_elbow")
+    assert template is not None
+    first = template.to_step()
+    first["position"] = 5
+    assert template.to_step()["position"] == 90
+
+
+def test_the_palette_covers_every_firmware_action() -> None:
+    """The palette exists so nobody has to memorise the firmware vocabulary.
+
+    A missing action defeats that quietly: the user simply never learns the
+    robot can do it. So the list is checked against firmware/ActionRouter.cpp
+    — the route table is the real contract, not the README beside it.
+    """
+    import re
+    from pathlib import Path
+
+    from .steps import all_templates
+
+    router = Path(__file__).resolve().parents[4] / "firmware" / "ActionRouter.cpp"
+    if not router.exists():          # firmware not checked out beside Studio
+        return
+
+    table = router.read_text()
+    table = table[table.index("ROUTES[]"):]
+    actions = set(re.findall(r'\{"(\w+)",\s', table))
+    assert actions, "no routes parsed — has the table's shape changed?"
+
+    offered = {template.subject for template in all_templates()}
+    missing = sorted(actions - offered)
+    assert not missing, f"firmware actions with no palette button: {missing}"
+
+
+def test_calibration_templates_send_the_field_their_type_expects() -> None:
+    """`calibrate` is really several actions behind one name.
+
+    A hover point carries `distance`; a perch value carries `value`. Sending
+    the wrong one is accepted by the transport and rejected by the robot, so
+    the template has to pair them correctly or the button is a trap.
+    """
+    from .steps import (
+        HOVER_TYPES, PERCH_ANGLE_TYPES, PERCH_REACH_TYPES, all_templates,
+    )
+
+    for template in all_templates():
+        if template.subject != "calibrate":
+            continue
+        step = template.to_step()
+        kind = step["calibration_type"]
+        if kind in HOVER_TYPES:
+            assert "distance" in step, template.key
+        elif kind in PERCH_ANGLE_TYPES + PERCH_REACH_TYPES:
+            assert "value" in step, template.key
+        else:
+            raise AssertionError(f"unknown calibration_type: {kind}")
+
+
+def test_enumerated_fields_use_values_the_firmware_accepts() -> None:
+    """A default that is not in the enumeration is a button that fails."""
+    from .steps import (
+        DIRECTIONS, GRIPPER_COMMANDS, JOINTS, SPEEDS, STENCIL_COMMANDS,
+        all_templates,
+    )
+
+    for template in all_templates():
+        step = template.to_step()
+        if step.get("subject") == "servo":
+            assert step["servoName"] in JOINTS, template.key
+        if step.get("subject") == "gripper" and "command" in step:
+            assert step["command"] in GRIPPER_COMMANDS, template.key
+        if step.get("subject") == "stencilCalibrate":
+            assert step["command"] in STENCIL_COMMANDS, template.key
+        if "direction" in step:
+            assert step["direction"] in DIRECTIONS, template.key
+        if isinstance(step.get("speed"), str):
+            assert step["speed"] in SPEEDS, template.key
 
 
 def main() -> int:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from functools import partial
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -33,8 +34,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.workflow_steps import GROUPS, StepTemplate
-from ....models.config.workflow_steps import find as find_template
+from .steps import GROUPS
+from .steps import find as find_template
 from ....models.config.workflows import (
     NAME_RULE,
     Workflow,
@@ -55,7 +56,7 @@ def _button(
     primary: bool = False,
 ) -> QPushButton:
     button = QPushButton(label)
-    button.setObjectName("ContextPrimary" if primary else "ContextAction")
+    button.setObjectName("ToolbarPrimary" if primary else "ToolbarAction")
     button.setCursor(Qt.PointingHandCursor)
     button.clicked.connect(on_click)
     return button
@@ -335,56 +336,6 @@ class StepsOverviewCard(Card):
             )
 
 
-class StepPaletteCard(Card):
-    """Buttons that write a step's JSON so nobody has to memorize the API.
-
-    Grouped the way the robot is built — arm, gripper, base, vision — because
-    that is how someone thinks about a routine. Each button appends a complete,
-    valid step with real defaults; the JSON editor below is where it gets
-    tuned.
-    """
-
-    def __init__(self, workspace: "WorkflowsWorkspace") -> None:
-        super().__init__(
-            "Add a step",
-            "Each button appends a ready-to-edit step to the JSON below. "
-            "Hover any button for its firmware fields.",
-        )
-
-        for group in GROUPS:
-            self.layout().addSpacing(CARD_GAP)
-            heading = QLabel(group.label.upper())
-            heading.setObjectName("WorkflowFactLabel")
-            self.layout().addWidget(heading)
-
-            row = QWidget()
-            flow = QHBoxLayout(row)
-            flow.setContentsMargins(0, 2, 0, 0)
-            flow.setSpacing(4)
-            for template in group.templates:
-                flow.addWidget(self._chip(workspace, template))
-            flow.addStretch(1)
-            self.layout().addWidget(row)
-
-    @staticmethod
-    def _chip(
-        workspace: "WorkflowsWorkspace", template: StepTemplate
-    ) -> QPushButton:
-        button = QPushButton(template.label)
-        button.setObjectName("WorkflowStepChip")
-        button.setCursor(Qt.PointingHandCursor)
-        button.setAccessibleName(f"Add {template.label} step")
-
-        preview = json.dumps(template.to_step(), indent=2)
-        tip = [template.summary]
-        if template.notes:
-            tip.append(template.notes)
-        tip.append(preview)
-        button.setToolTip("\n\n".join(tip))
-        button.clicked.connect(lambda: workspace.insert_step(template.key))
-        return button
-
-
 class JsonEditorCard(Card):
     def __init__(self, workspace: "WorkflowsWorkspace", workflow: Workflow) -> None:
         super().__init__(
@@ -454,7 +405,9 @@ class EditorPage(Page):
                 workflow, str(self.workspace.repository.path_for(workflow.name))
             ),
             StepsOverviewCard(workflow),
-            StepPaletteCard(self.workspace),
+            # The step palette is the toolbar now, not a card here: adding steps is
+            # the work of this workspace, and a palette below the document is
+            # one the user scrolls past to reach the thing it edits.
             JsonEditorCard(self.workspace, workflow),
         )
 
@@ -574,10 +527,20 @@ class WorkflowsWorkspace(Workspace):
 
     def save(self) -> str:
         current = self.selected
-        if current is None or self.editor is None:
+        if current is None:
             return "No workflow is open."
 
-        text = self.editor.toPlainText()
+        # The editor widget is the live text when the page is on screen, but
+        # it is not the only place the text lives: `insert_step` stages its
+        # result as a draft, and a workflow can be selected and edited before
+        # the page has ever been built. Falling back to the draft is what
+        # makes "insert a step, then save" work in that order — without it,
+        # a staged edit reported "No workflow is open" and was silently lost.
+        text = (
+            self.editor.toPlainText()
+            if self.editor is not None
+            else self.draft_for(current)
+        )
         self.remember_draft(current.name, text)
         saved, problem = self.repository.save_text(current.name, text)
         if problem or saved is None:
@@ -636,8 +599,18 @@ class WorkflowsWorkspace(Workspace):
         self.page.rebuild()
 
     def build_actions(self) -> list:
+        """The workflow's own verbs, then the whole step vocabulary.
+
+        Every firmware action is a button here rather than a card in the page
+        body: adding steps *is* the work of this workspace, and a palette
+        buried below the document is one the user scrolls past. The bar wraps,
+        so all of them stay visible at any window width.
+
+        Steps are disabled until a workflow is open, for the same reason Save
+        is — there is nothing to add them to.
+        """
         workflow = self.selected
-        return [
+        actions = [
             ActionSpec("New", on_click=self.open_new),
             ActionSpec(
                 "Save JSON",
@@ -650,6 +623,21 @@ class WorkflowsWorkspace(Workspace):
                 on_click=self.confirm_delete if workflow is not None else None,
             ),
         ]
+
+        for group in GROUPS:
+            actions.append(Separator())
+            for template in group.templates:
+                actions.append(
+                    ActionSpec(
+                        template.label,
+                        on_click=(
+                            partial(self.insert_step, template.key)
+                            if workflow is not None
+                            else None
+                        ),
+                    )
+                )
+        return actions
 
 
 __all__ = ["EditorPage", "WorkflowsWorkspace"]

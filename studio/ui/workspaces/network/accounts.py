@@ -4,7 +4,7 @@ View only. Which topics an account reaches, what a valid name is, and how a
 password is made are all decided in `studio.services.network.broker.accounts`.
 
 Add Account, Reset Password and Remove Account live here rather than on BAR
-2: BAR 2 is the workspace's own controls, the same on every Network page, and
+2: the toolbar is the workspace's own controls, the same on every Network page, and
 what an account may do is a property of one row in this page's table, not of
 the workspace. Add sits at the top right of the page, and Reset / Remove sit
 on the row they act on.
@@ -114,7 +114,7 @@ class AccountsPage(Page):
     def build_header_actions(self) -> QWidget | None:
         """Add User, level with the subtitle at the header's right edge.
 
-        Not BAR 2: this button belongs to the accounts list, and putting it
+        Not the toolbar: this button belongs to the accounts list, and putting it
         up in the workspace's bar would make Add Account exist even on pages
         that have no account list to add to. Hidden while there is nothing
         to add to yet, or a password already claiming the page's attention.
@@ -128,7 +128,7 @@ class AccountsPage(Page):
             return None
 
         add = QPushButton("Add User")
-        add.setObjectName("ContextPrimary")
+        add.setObjectName("ToolbarPrimary")
         access = self.workspace.write_access()
         if access.allowed:
             add.setCursor(Qt.PointingHandCursor)
@@ -420,7 +420,7 @@ class CredentialsCard(QWidget):
             layout.addSpacing(CARD_SPACING * 2)
             row = QHBoxLayout()
             done = QPushButton("Done")
-            done.setObjectName("ContextPrimary")
+            done.setObjectName("ToolbarPrimary")
             done.setCursor(Qt.PointingHandCursor)
             done.clicked.connect(on_done)
             row.addWidget(done)
@@ -443,7 +443,7 @@ class CredentialsCard(QWidget):
         row.addWidget(field)
 
         copy = QPushButton("Copy")
-        copy.setObjectName("ContextAction")
+        copy.setObjectName("ToolbarAction")
         copy.clicked.connect(lambda: self._copy(field, copy))
         row.addWidget(copy)
         return row

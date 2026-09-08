@@ -10,7 +10,7 @@ Three things a page builds:
     build_header_actions()  the header's right-hand slot, optional
     build_page()             the main body
 
-Neither the side panel nor BAR 2 is one of them — both belong to the workspace
+Neither the side panel nor the toolbar is one of them — both belong to the workspace
 (see workspaces/base.py), so they keep their shape as the user moves between
 pages. A page-level action that is not that — one button naming the page's
 one verb, like Accounts' Add Account — belongs in `build_header_actions`

@@ -126,15 +126,15 @@ def _paths() -> list[str]:
 def _window(window) -> list[str]:
     """What the UI is showing — the half a log file never captures."""
     workspace = window.workspace
-    buttons = window.context_bar.buttons
+    buttons = window.toolbar.buttons
 
     lines = [
         f"workspace    {workspace.key}",
         f"page         {workspace.page.key}",
         f"theme        {window.theme}   zoom={window.zoom}",
-        f"BAR 1 chips  {window.nav_bar.broker_label.text()!r}"
-        f" / {window.nav_bar.connection_label.text()!r}",
-        f"BAR 2        {list(buttons) or 'EMPTY'}",
+        f"chips        {window.workspace_bar.broker_label.text()!r}"
+        f" / {window.workspace_bar.connection_label.text()!r}",
+        f"toolbar      {list(buttons) or 'EMPTY'}",
         f"debug tray   visible={window.debug_dock.isVisible()}",
         f"recorder     {window._traffic_recorder.status!r}",
     ]

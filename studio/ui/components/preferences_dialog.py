@@ -38,13 +38,13 @@ class PreferencesDialog(QDialog):
 
         buttons = QHBoxLayout()
         save = QPushButton("Save")
-        save.setObjectName("ContextPrimary")
+        save.setObjectName("ToolbarPrimary")
         save.setCursor(Qt.PointingHandCursor)
         save.clicked.connect(self.save)
         buttons.addWidget(save)
 
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("ContextAction")
+        cancel.setObjectName("ToolbarAction")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)

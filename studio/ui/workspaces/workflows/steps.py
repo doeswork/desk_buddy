@@ -1,4 +1,4 @@
-"""The firmware action vocabulary, as insertable workflow step templates.
+"""The firmware action vocabulary, as the buttons on the Workflows toolbar.
 
 `firmware/README.md` is the contract. This module restates the part a workflow
 can use so Studio can offer it as buttons: a person building a routine should
@@ -12,6 +12,12 @@ point to edit instead of a form to fill in.
 Steps are stored under `subject` (the Rails-era key the workflow file uses),
 while every other field name matches the firmware message exactly. Nothing
 executes workflows yet; when a runner arrives it maps `subject` to `action`.
+
+Lives beside the toolbar it fills rather than in `models/config/`, where it
+sat originally: everything there is persisted state backed by a Store, and
+this is a hardcoded list of buttons with exactly one consumer. If a workflow
+*runner* ever needs the same table to validate what it is about to send, that
+is the moment to move it back down — not before.
 """
 
 from __future__ import annotations
@@ -27,6 +33,22 @@ SPEEDS = ("veryslow", "slow", "regular", "fast", "superfast")
 
 # 216 firmware steps is one full base rotation (108-tooth gear, 18-tooth drive).
 STEPS_PER_REVOLUTION = 216
+
+# The calibration_type values `calibrate` accepts, split by what they take:
+# a hover point carries `distance`, a perch value carries `value`.
+HOVER_TYPES = (
+    "hover_over_min", "hover_over_mid", "hover_over_max",
+    "hover_min_120", "hover_mid_120", "hover_max_120",
+)
+PERCH_ANGLE_TYPES = (
+    "perch_elbow_angle", "perch_wrist_angle", "perch_twist_angle",
+)
+PERCH_REACH_TYPES = ("perch_min", "perch_mid", "perch_max")
+
+STENCIL_COMMANDS = (
+    "START", "RUN_POINT", "ADJUST", "ADJUST_PREVIOUS", "STATUS",
+    "CANCEL", "CLEAR",
+)
 
 
 @dataclass(frozen=True)
@@ -163,6 +185,116 @@ VISION = StepGroup(
             "Run color detection.",
             {},
         ),
+        StepTemplate(
+            "calibrate_depth", "Depth photo", "calibrate_depth",
+            "Capture a frame for depth calibration.",
+            {},
+            "A photo action: replies in_progress then sends the frame, "
+            "with no completed message.",
+        ),
+    ),
+)
+
+# Calibration writes. These change what the robot believes about itself, so a
+# workflow containing one is a setup routine rather than a movement — which is
+# why they are grouped apart from Arm and Base rather than beside the moves
+# that use them.
+CALIBRATION = StepGroup(
+    "Calibration",
+    (
+        StepTemplate(
+            "calibration_values", "Read values", "calibrationvalues",
+            "Ask the robot for every stored calibration value.",
+            {},
+            "Replies with a calibrationvalues object. Unsaved keys come "
+            "back null, so this is the way to see what is missing.",
+        ),
+        StepTemplate(
+            "calibrate_hover", "Save hover point", "calibrate",
+            "Record a reach landmark at the arm's current angles.",
+            {"calibration_type": "hover_over_mid", "distance": 60},
+            "calibration_type is one of hover_over_min/mid/max (table "
+            "level) or hover_min_120/mid_120/max_120 (50 mm up). distance "
+            "is how far out the gripper is, in mm. Keep min < mid < max.",
+        ),
+        StepTemplate(
+            "calibrate_perch_angle", "Save perch angle", "calibrate",
+            "Record one perch joint angle.",
+            {"calibration_type": "perch_elbow_angle", "value": 125},
+            "calibration_type is perch_elbow_angle, perch_wrist_angle or "
+            "perch_twist_angle. value is the servo angle, 0–180.",
+        ),
+        StepTemplate(
+            "calibrate_perch_reach", "Save perch reach", "calibrate",
+            "Record one perch distance landmark.",
+            {"calibration_type": "perch_mid", "value": 50},
+            "calibration_type is perch_min, perch_mid or perch_max. "
+            "value is a distance in mm.",
+        ),
+        StepTemplate(
+            "calibrate_base_rotation", "Profile base rotation", "calibrate_base_rotation",
+            "Measure the base's rotation profile.",
+            {"neutralServoAngle": 93},
+            "Runs for several minutes and publishes progress throughout. "
+            "neutralServoAngle is optional, 0–180.",
+        ),
+    ),
+)
+
+STENCIL = StepGroup(
+    "Stencil",
+    (
+        StepTemplate(
+            "stencil_start", "Start", "stencilCalibrate",
+            "Begin a stencil calibration session.",
+            {"command": "START"},
+            "Moves to perch, homes the base to true north, then checks the "
+            "base is ready.",
+        ),
+        StepTemplate(
+            "stencil_run_point", "Run point", "stencilCalibrate",
+            "Attempt the session's next stencil point.",
+            {"command": "RUN_POINT"},
+            "A miss replies completed with phase needs_adjustment — nudge "
+            "with Adjust, then run the same point again.",
+        ),
+        StepTemplate(
+            "stencil_adjust", "Adjust", "stencilCalibrate",
+            "Nudge the current point before retrying it.",
+            {"command": "ADJUST", "rotationNudgeDegrees": 2.0,
+             "distanceNudgeMm": -3.0},
+            "Use ADJUST_PREVIOUS instead to correct the point just "
+            "completed.",
+        ),
+        StepTemplate(
+            "stencil_status", "Status", "stencilCalibrate",
+            "Ask where the stencil session is up to.",
+            {"command": "STATUS"},
+            "Replies with a stencil_calibration object.",
+        ),
+        StepTemplate(
+            "stencil_cancel", "Cancel", "stencilCalibrate",
+            "Stop the session, keeping what it has saved.",
+            {"command": "CANCEL"},
+            "CLEAR discards the saved offsets instead.",
+        ),
+    ),
+)
+
+SYSTEM = StepGroup(
+    "System",
+    (
+        StepTemplate(
+            "ota_update", "Firmware update", "ota_update",
+            "Flash new firmware from a release URL.",
+            {
+                "url": "https://github.com/user/repo/releases/download/"
+                       "v1.0.0/firmware.bin",
+                "version": "v1.0.0",
+            },
+            "The robot reboots on success and never replies. Add token for "
+            "a private repo, and sha256 to verify the download.",
+        ),
     ),
 )
 
@@ -178,7 +310,9 @@ CUSTOM = StepGroup(
     ),
 )
 
-GROUPS: tuple[StepGroup, ...] = (ARM, GRIPPER, BASE, VISION, CUSTOM)
+GROUPS: tuple[StepGroup, ...] = (
+    ARM, GRIPPER, BASE, VISION, CALIBRATION, STENCIL, SYSTEM, CUSTOM,
+)
 
 
 def all_templates() -> tuple[StepTemplate, ...]:
@@ -196,8 +330,12 @@ __all__ = [
     "DIRECTIONS",
     "GRIPPER_COMMANDS",
     "GROUPS",
+    "HOVER_TYPES",
     "JOINTS",
+    "PERCH_ANGLE_TYPES",
+    "PERCH_REACH_TYPES",
     "SPEEDS",
+    "STENCIL_COMMANDS",
     "STEPS_PER_REVOLUTION",
     "StepGroup",
     "StepTemplate",

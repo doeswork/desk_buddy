@@ -9,7 +9,6 @@ import json
 import tempfile
 from pathlib import Path
 
-from ..config.workflow_steps import GROUPS, all_templates, find
 from ..config.workflows import (
     Workflow,
     Workflows,
@@ -138,46 +137,20 @@ def test_mismatched_or_damaged_files_do_not_break_the_directory() -> None:
     assert [workflow.name for workflow in store.all()] == ["good_one"]
 
 
-def test_every_template_produces_a_step_the_model_accepts() -> None:
-    store, _root = repository()
-    for template in all_templates():
-        workflow = Workflow("probe", "", True, (template.to_step(),))
-        assert store.save(workflow) == "", template.key
-        saved = store.find("probe")
-        assert saved is not None
-        assert saved.steps[0]["subject"] == template.subject
-        store.delete("probe")
-
-
-def test_template_keys_are_unique_and_findable() -> None:
-    keys = [template.key for template in all_templates()]
-    assert len(keys) == len(set(keys))
-    for key in keys:
-        assert find(key) is not None
-    assert find("no_such_template") is None
-    assert GROUPS, "the palette needs at least one group"
-
-
-def test_templates_hand_out_private_copies() -> None:
-    template = find("servo_elbow")
-    assert template is not None
-    first = template.to_step()
-    first["position"] = 5
-    assert template.to_step()["position"] == 90
-
-
 def test_inserting_a_step_appends_to_the_document() -> None:
+    # A literal step, not a palette template: this is about the model's
+    # insertion rules, and borrowing the UI's button list to supply sample
+    # data would tie a storage test to what the toolbar happens to offer.
     text = Workflow("firsttest", "", True, ()).to_text()
-    template = find("gripper_grab")
-    assert template is not None
+    step = {"subject": "gripper", "command": "GRAB"}
 
-    updated, problem = step_inserted_into_text(text, template.to_step())
+    updated, problem = step_inserted_into_text(text, dict(step))
     assert problem == ""
     raw = json.loads(updated)
-    assert raw["steps"] == [{"subject": "gripper", "command": "GRAB"}]
+    assert raw["steps"] == [step]
     assert raw["workflow"]["name"] == "firsttest"
 
-    twice, problem = step_inserted_into_text(updated, template.to_step())
+    twice, problem = step_inserted_into_text(updated, dict(step))
     assert problem == ""
     assert len(json.loads(twice)["steps"]) == 2
 

@@ -51,15 +51,15 @@ QMenu::item:selected {{ background: {p.border}; }}
 QMenu::item:disabled {{ color: {p.muted}; }}
 QMenu::separator {{ height: {HAIRLINE}; background: {p.border}; margin: {px(3)} 0; }}
 
-/* ---- BAR 1: page switcher. Never changes. ---- */
-QToolBar#NavBar {{
+/* ---- the workspace bar: page switcher. Never changes. ---- */
+QToolBar#WorkspaceBar {{
     background: {p.panel};
     border: none;
     border-bottom: {HAIRLINE} solid {p.border};
     padding: 0;
     spacing: 0;
 }}
-QToolBar#NavBar QToolButton {{
+QToolBar#WorkspaceBar QToolButton {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 0;
@@ -69,18 +69,18 @@ QToolBar#NavBar QToolButton {{
     color: {p.text};
     font-size: {px(12)};
 }}
-QToolBar#NavBar QToolButton:hover {{ background: {p.muted_bg}; }}
+QToolBar#WorkspaceBar QToolButton:hover {{ background: {p.muted_bg}; }}
 /* The active page reads as a selected tab: it keeps the panel background and
    is marked by an accent rule, the way a CAD workbench tab is. */
-QToolBar#NavBar QToolButton:checked {{
+QToolBar#WorkspaceBar QToolButton:checked {{
     background: {p.background};
     border-bottom: {px(2)} solid {p.accent};
     color: {p.text};
     font-weight: 600;
 }}
 
-/* ---- BAR 2: context bar. Swaps per page. ---- */
-QToolBar#ContextBar {{
+/* ---- the toolbar: context bar. Swaps per page. ---- */
+QToolBar#Toolbar {{
     background: {p.panel};
     border: none;
     border-bottom: {HAIRLINE} solid {p.border};
@@ -92,39 +92,47 @@ QToolBar#ContextBar {{
    a button paints itself only when hovered, pressed, or primary. That is what
    keeps a dense toolbar from reading as a pile of stickers — an inert button
    is flat and grey, never its own dotted box. */
-QPushButton#ContextAction, QPushButton#ContextPrimary {{
+QPushButton#ToolbarAction, QPushButton#ToolbarPrimary {{
     border: none;
     border-radius: 0;
     padding: {TIGHT_V} {TIGHT_H};
     margin: 0;
 }}
-QPushButton#ContextAction {{
+QPushButton#ToolbarAction {{
     background: transparent;
     color: {p.text};
 }}
-QPushButton#ContextAction:hover:!disabled {{ background: {p.muted_bg}; }}
-QPushButton#ContextAction:pressed {{ background: {p.border}; }}
-QPushButton#ContextAction:disabled {{ background: transparent; color: {p.muted}; }}
+QPushButton#ToolbarAction:hover:!disabled {{ background: {p.muted_bg}; }}
+QPushButton#ToolbarAction:pressed {{ background: {p.border}; }}
+QPushButton#ToolbarAction:disabled {{ background: transparent; color: {p.muted}; }}
 
 /* The one primary action is the only filled thing on the bar. */
-QPushButton#ContextPrimary {{
+QPushButton#ToolbarPrimary {{
     background: {p.accent};
     color: {p.on_accent};
     font-weight: 600;
 }}
-QPushButton#ContextPrimary:hover:!disabled {{ background: {p.accent_dark}; }}
-QPushButton#ContextPrimary:pressed {{ background: {p.accent_dark}; }}
-QPushButton#ContextPrimary:disabled {{
+QPushButton#ToolbarPrimary:hover:!disabled {{ background: {p.accent_dark}; }}
+QPushButton#ToolbarPrimary:pressed {{ background: {p.accent_dark}; }}
+QPushButton#ToolbarPrimary:disabled {{
     background: transparent;
     color: {p.muted};
     font-weight: 600;
 }}
 QToolBar::separator {{ background: {p.border}; width: {HAIRLINE}; margin: {px(3)} {px(5)}; }}
+/* The toolbar wraps, so its dividers are real widgets the flow can place — a
+   QToolBar separator only exists inside the toolbar's own single row. */
+QFrame#ToolbarSeparator {{
+    background: {p.border};
+    max-width: {HAIRLINE};
+    margin: {px(4)} {px(4)};
+    border: none;
+}}
 /* Stretch spacers are plain QWidgets; keep them invisible. */
 QToolBar QWidget#Spacer {{ background: transparent; border: none; }}
 
 /* ---- Docks ---- */
-/* No ::title rule: the side dock has no title bar. BAR 1 already names the
+/* No ::title rule: the side dock has no title bar. The workspace bar already names the
    workspace, so the panel is its page list and nothing else. */
 QDockWidget > QWidget {{ background: {p.panel}; border-right: {HAIRLINE} solid {p.border}; }}
 
@@ -132,7 +140,7 @@ QListWidget, QListWidget#SidePanel {{ background: {p.panel}; border: none; paddi
 
 /* Each state has to be legible on its own, so they differ by more than a few
    percent of fill: hover tints, pressed goes darker still, and the selected
-   row carries the accent rule — the same mark BAR 1 uses for the active tab,
+   row carries the accent rule — the same mark the workspace bar uses for the active tab,
    turned on its side. The transparent left border on the resting state is
    what keeps text from shifting when that rule appears. */
 QListWidget::item {{
@@ -197,7 +205,7 @@ QTableWidget::item:selected {{ background: {p.border}; color: {p.text}; }}
 /* A validation message, next to the field it is about. */
 QLabel#FieldError {{ color: {p.bad}; font-size: {px(11)}; }}
 
-/* Row actions: small text buttons inside a table cell, not BAR 2 controls.
+/* Row actions: small text buttons inside a table cell, not the toolbar controls.
    Compact on purpose — the row already carries the account's name, so the
    button only needs to name the verb. */
 /* Spacing is set in layout code (setContentsMargins), not here: QSS padding
@@ -306,7 +314,7 @@ QSlider[manualControl="true"]::handle:horizontal:disabled {{
     background: {p.muted_bg};
     border-color: {p.muted};
 }}
-/* ---- Status chips on BAR 1 ----
+/* ---- Status chips on the workspace bar ----
    The two always-true facts, quiet until they matter. */
 QLabel#StatusChip {{
     color: {p.muted};
@@ -432,7 +440,7 @@ QPushButton#EStop {{
 QPushButton#EStop:hover {{ background: {p.bad_hover}; }}
 
 /* ---- Buttons ----
-   The app has exactly three: ContextAction and ContextPrimary on BAR 2, and
+   The app has exactly three: ToolbarAction and ToolbarPrimary on the toolbar, and
    EStop. This rule is the fallback for any plain QPushButton Qt creates for
    us — add a named variant here only when a real one exists in the UI. */
 
