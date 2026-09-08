@@ -139,6 +139,13 @@ class MqttClient:
         Returns an unsubscribe function. Many callers can each wait on their
         own topic/action_id without opening their own connection — this is
         what lets a calibration step and the logs viewer share one socket.
+
+        **`callback` runs on paho's network thread, not the GUI thread.** It
+        must not touch a widget: creating, deleting or re-parenting one from
+        here segfaults the process, which is exactly what a base-rotation
+        run did while the main thread was inside QBoxLayout::setGeometry. A
+        UI caller hands the payload over with a queued signal first — see
+        `ReplyBridge` in `ui/workspaces/calibration/step.py`.
         """
         with self._lock:
             self._subscribers[topic].append(callback)

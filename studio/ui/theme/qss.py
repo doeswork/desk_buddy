@@ -224,6 +224,41 @@ QLabel#Title {{ font-size: {px(18)}; font-weight: 600; color: {p.text}; }}
 QLabel#Subtitle {{ font-size: {px(12)}; color: {p.muted}; }}
 QLabel#CardTitle {{ font-size: {px(13)}; font-weight: 600; color: {p.text}; }}
 QLabel#CardBody {{ font-size: {px(12)}; color: {p.muted}; }}
+
+/* ---- Manual controller ---- */
+QLabel#ManualControlLabel {{
+    color: {p.text};
+    font-size: {px(12)};
+    font-weight: 600;
+}}
+QLabel#ManualTopic {{
+    color: {p.muted};
+    font-family: "JetBrains Mono", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: {px(11)};
+}}
+QSlider[manualControl="true"]::groove:horizontal {{
+    height: {px(5)};
+    background: {p.border};
+    border-radius: {px(2)};
+}}
+QSlider[manualControl="true"]::sub-page:horizontal {{
+    background: {p.accent};
+    border-radius: {px(2)};
+}}
+QSlider[manualControl="true"]::handle:horizontal {{
+    width: {px(15)};
+    margin: -{px(5)} 0;
+    background: {p.panel};
+    border: {px(2)} solid {p.accent};
+    border-radius: {px(7)};
+}}
+QSlider[manualControl="true"]::handle:horizontal:hover {{
+    background: {p.accent};
+}}
+QSlider[manualControl="true"]::handle:horizontal:disabled {{
+    background: {p.muted_bg};
+    border-color: {p.muted};
+}}
 /* ---- Status chips on BAR 1 ----
    The two always-true facts, quiet until they matter. */
 QLabel#StatusChip {{
