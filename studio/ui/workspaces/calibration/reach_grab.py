@@ -68,7 +68,7 @@ class DetectForm(QWidget):
         row.addWidget(field, 1)
 
         detect = QPushButton("Capture and Detect")
-        detect.setObjectName("ContextPrimary")
+        detect.setObjectName("ToolbarPrimary")
         detect.setCursor(Qt.PointingHandCursor)
         detect.setEnabled(enabled)
         detect.clicked.connect(on_detect)

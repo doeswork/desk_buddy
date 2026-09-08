@@ -14,9 +14,10 @@ from .card import Card
 from .command_card import CommandCard
 from .steps_card import StepsCard
 from .column import Column
-from .context_bar import ContextBar, ContextButton
+from .toolbar import Toolbar, ToolbarButton
 from .debug_tray import DebugTray
-from .nav_bar import NavBar
+from .flow_layout import FlowBar, FlowLayout
+from .workspace_bar import WorkspaceBar
 from .preferences_dialog import PreferencesDialog
 from .serial_monitor import SerialMonitor
 from .side_panel import SidePanel
@@ -28,10 +29,12 @@ __all__ = [
     "CommandCard",
     "StepsCard",
     "Column",
-    "ContextBar",
-    "ContextButton",
+    "Toolbar",
+    "ToolbarButton",
     "DebugTray",
-    "NavBar",
+    "FlowBar",
+    "FlowLayout",
+    "WorkspaceBar",
     "PreferencesDialog",
     "SerialMonitor",
     "Separator",

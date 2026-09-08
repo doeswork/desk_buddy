@@ -49,38 +49,38 @@ class Pose:
 # whatever the arm was really at.
 POSES = {
     "hover_over_min": Pose(
-        elbow=10, wrist=20, twist=90, distance=0, height=0,
-        summary="Folded in, gripper just above the base.",
-        hint="The closest the gripper can hover without touching the base. "
-             "Elbow well back, forearm angled down.",
+        elbow=114, wrist=34, twist=90, distance=0, height=0,
+        summary="Folded right in — gripper down at the base, on the table.",
+        hint="Zero reach: the gripper is as close to the base as it goes, "
+             "resting at table level rather than out in front.",
     ),
     "hover_over_mid": Pose(
-        elbow=17, wrist=62, twist=90, distance=60, height=0,
-        summary="Half extended, gripper over the 60 mm mark.",
-        hint="Elbow forward of vertical, forearm reaching out and slightly "
-             "down so the gripper hovers just clear of the table.",
+        elbow=68, wrist=70, twist=90, distance=60, height=0,
+        summary="Reaching out, gripper down at the 60 mm mark.",
+        hint="Forearm angled down so the gripper is at table level, just "
+             "touching the 60 mm mark rather than hovering above it.",
     ),
     "hover_over_max": Pose(
-        elbow=57, wrist=132, twist=90, distance=120, height=0,
-        summary="Fully reaching out, gripper over the 120 mm mark.",
-        hint="The furthest the gripper reaches while still hovering low. "
-             "Stop before the arm strains or the base lifts.",
+        elbow=106, wrist=178, twist=90, distance=120, height=0,
+        summary="Fully extended, gripper down at the 120 mm mark.",
+        hint="The furthest the gripper reaches while still touching the "
+             "table. Stop before the arm strains or the base lifts.",
     ),
     "hover_min_120": Pose(
-        elbow=57, wrist=40, twist=90, distance=30, height=50,
-        summary="Folded in, but lifted 50 mm off the table.",
+        elbow=0, wrist=32, twist=90, distance=30, height=50,
+        summary="Close in at the 30 mm mark, lifted 50 mm off the table.",
         hint="The first point the gripper can reach at the upper edge — "
              "close in, and noticeably higher than the z=0 poses.",
     ),
     "hover_mid_120": Pose(
-        elbow=57, wrist=78, twist=90, distance=75, height=50,
-        summary="Half extended at 50 mm, gripper over the 75 mm mark.",
+        elbow=30, wrist=78, twist=90, distance=75, height=50,
+        summary="Reaching to the 75 mm mark, held 50 mm up.",
         hint="Same reach as mid, raised. The forearm points out and level "
              "rather than down.",
     ),
     "hover_max_120": Pose(
-        elbow=78, wrist=134, twist=90, distance=120, height=50,
-        summary="Reaching out at 50 mm, gripper over the 120 mm mark.",
+        elbow=74, wrist=162, twist=90, distance=120, height=50,
+        summary="Fully extended to the 120 mm mark, held 50 mm up.",
         hint="The far upper corner of the workspace. Furthest reach that "
              "still holds the gripper off the table.",
     ),
@@ -89,10 +89,16 @@ POSES = {
 # Segment lengths, in the drawing's own units — the arm's real proportions,
 # not millimetres. The table line and reach marks are scaled to match, so a
 # pose that reaches "120 mm" lands on the 120 mm mark by construction.
-BASE_HEIGHT = 26
-UPPER_ARM = 62
+#
+# Chosen so that every one of the six calibration points is reachable with
+# no part of the arm passing through the table — searched rather than
+# guessed, because the constraint is tighter than it looks: the forearm has
+# to fold far enough to bring the gripper down at zero reach, while the
+# upper arm stays long enough to put it out at 120 mm.
+BASE_HEIGHT = 36
+UPPER_ARM = 64
 FOREARM = 46
-GRIPPER = 16
+GRIPPER = 14
 
 
 class ArmPoseView(QWidget):
@@ -129,7 +135,8 @@ class ArmPoseView(QWidget):
         muted.setAlphaF(0.30)
         accent = colors.highlight().color()
 
-        area = QRectF(self.rect()).adjusted(10, 10, -10, -18)
+        # The legend takes a strip off the top, so the arms never overlap it.
+        area = QRectF(self.rect()).adjusted(10, 24, -10, -18)
         origin = QPointF(area.left() + area.width() * 0.22, area.bottom() - 14)
         # One unit of reach in pixels, sized so max reach uses the width that
         # is actually there rather than a fixed guess.
@@ -151,7 +158,40 @@ class ArmPoseView(QWidget):
                 painter, origin, scale, elbow, wrist,
                 QPen(accent, 2.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin),
             )
+        self._draw_legend(painter, QRectF(self.rect()), ink, muted, accent)
         painter.end()
+
+    def _draw_legend(self, painter, rect, ink, muted, accent) -> None:
+        """Name the two arms, in the colours they are actually drawn in.
+
+        Without this the drawing is a puzzle: two overlapping arms with no
+        way to tell which one the user is supposed to be moving. A key in
+        the body text would work too, but only this puts the words next to
+        the thing they name.
+        """
+        font = QFont(self.font())
+        font.setPointSizeF(max(7.0, font.pointSizeF() - 2))
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+
+        entries = [("Target shape", muted, 5.0)]
+        if self._live is not None:
+            entries.append(("Arm now", accent, 2.6))
+
+        x = rect.left() + 10
+        y = rect.top() + 12
+        swatch = 16
+        for label, color, width in entries:
+            painter.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(x, y), QPointF(x + swatch, y))
+            x += swatch + 5
+            painter.setPen(QPen(ink, 1.0))
+            painter.drawText(
+                QRectF(x, y - 8, metrics.horizontalAdvance(label) + 4, 16),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                label,
+            )
+            x += metrics.horizontalAdvance(label) + 14
 
     def _draw_table(self, painter, area, origin, scale, ink, muted) -> None:
         """The table line, and the reach mark this pose aims for."""
@@ -188,14 +228,23 @@ class ArmPoseView(QWidget):
             painter.setPen(QPen(muted, 1.0, Qt.DashLine))
             painter.drawLine(QPointF(area.left(), y), QPointF(area.right(), y))
 
-    @staticmethod
-    def _mm_to_units() -> float:
+    # How far the drawn arm's gripper can reach along the table, found by
+    # sweeping both joints. Hardcoded rather than recomputed per paint: it
+    # follows from the segment lengths above and only changes when they do.
+    MAX_REACH_UNITS = 121.5
+
+    @classmethod
+    def _mm_to_units(cls) -> float:
         """Drawing units per millimetre.
 
-        Max reach (120 mm) should land at roughly the arm's full extension,
-        which is what ties the reach marks to the segment lengths above.
+        Tied to what the drawn arm can actually reach, so the 120 mm mark
+        sits exactly where a fully extended arm puts its gripper. Scaling by
+        the summed segment lengths instead — which is the obvious thing —
+        overshoots by a fifth, because a folded arm never reaches the sum of
+        its own parts: it left every target pose visibly short of its own
+        mark.
         """
-        return (UPPER_ARM + FOREARM + GRIPPER) / 150.0
+        return cls.MAX_REACH_UNITS / 120.0
 
     def _draw_arm(self, painter, origin, scale, elbow, wrist, pen) -> None:
         """One arm, from the two angles that decide its shape.
@@ -234,16 +283,30 @@ class ArmPoseView(QWidget):
         )
         painter.drawLine(joint, hand)
 
-        # The gripper carries on in the forearm's direction, drawn as an open
-        # jaw so the drawing has an obvious "this end holds things" tip.
-        spread = math.radians(14)
+        # The gripper: a short stem carrying on in the forearm's direction,
+        # then two jaws splayed off its end.
+        #
+        # The stem matters. Drawing the jaws straight off the wrist — which
+        # is the obvious way — leaves the visible metal stopping short of
+        # where the gripper actually is, because a splayed line covers less
+        # ground than a straight one. Every target pose then read as falling
+        # short of its own reach mark while being, in fact, exactly on it.
+        stem = GRIPPER * 0.55
+        wrist_end = QPointF(
+            hand.x() + math.sin(fore) * stem * scale,
+            hand.y() - math.cos(fore) * stem * scale,
+        )
+        painter.drawLine(hand, wrist_end)
+
+        jaw_length = GRIPPER - stem
+        spread = math.radians(22)
         for offset in (spread, -spread):
             jaw = fore + offset
             painter.drawLine(
-                hand,
+                wrist_end,
                 QPointF(
-                    hand.x() + math.sin(jaw) * GRIPPER * scale,
-                    hand.y() - math.cos(jaw) * GRIPPER * scale,
+                    wrist_end.x() + math.sin(jaw) * jaw_length * scale,
+                    wrist_end.y() - math.cos(jaw) * jaw_length * scale,
                 ),
             )
 

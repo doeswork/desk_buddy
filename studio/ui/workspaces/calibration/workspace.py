@@ -67,7 +67,7 @@ class CalibrationWorkspace(Workspace):
         client.reconcile()
         return client
 
-    # ---- BAR 2 ---------------------------------------------------------------
+    # ---- the toolbar ---------------------------------------------------------------
     def build_actions(self) -> list:
         """Calibration has no workspace-wide buttons: every action is specific
         to the step's own form, and lives on that form instead — see

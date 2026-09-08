@@ -47,13 +47,16 @@ jobs:
         run: |
           python -m studio.storage.tests
           python -m studio.models.tests.tests
+          python -m studio.models.tests.workflow_tests
           python -m studio.services.error_reporter_tests
           python -m studio.services.network.tests.tests
           python -m studio.services.network.tests.system_tests
           python -m studio.ui.components.serial_tests
+          python -m studio.ui.components.flow_tests
           python -m studio.ui.workspaces.network.tests
           python -m studio.ui.workspaces.calibration.tests
           python -m studio.ui.workspaces.manual_tests
+          python -m studio.ui.workspaces.workflows.tests
 
       - name: Smoke test
         env:

@@ -20,11 +20,14 @@ from .config import (
     Robot,
     Robots,
     TOPIC_RULE,
+    Workflow,
+    Workflows,
     calibrations,
     default_topics,
     robots,
     users,
     validate_topic,
+    workflows,
 )
 from .data import AppError, MqttMessage, app_errors, mqtt_messages
 
@@ -37,6 +40,8 @@ __all__ = [
     "Robot",
     "Robots",
     "TOPIC_RULE",
+    "Workflow",
+    "Workflows",
     "calibrations",
     "default_topics",
     "robots",
@@ -44,4 +49,5 @@ __all__ = [
     "mqtt_messages",
     "app_errors",
     "validate_topic",
+    "workflows",
 ]

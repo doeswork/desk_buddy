@@ -138,7 +138,7 @@ class MarkForm(QWidget):
         layout.addWidget(self._label, 1)
 
         mark = QPushButton("Mark as Robot")
-        mark.setObjectName("ContextPrimary")
+        mark.setObjectName("ToolbarPrimary")
         mark.setCursor(Qt.PointingHandCursor)
         mark.clicked.connect(on_submit)
         layout.addWidget(mark)

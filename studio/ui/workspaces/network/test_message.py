@@ -169,7 +169,7 @@ class SendForm(QWidget):
         layout.addSpacing(CARD_SPACING * 2)
         row = QHBoxLayout()
         send = QPushButton("Send")
-        send.setObjectName("ContextPrimary")
+        send.setObjectName("ToolbarPrimary")
         send.setCursor(Qt.PointingHandCursor)
         send.clicked.connect(on_send)
         row.addWidget(send)

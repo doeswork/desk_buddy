@@ -170,7 +170,7 @@ class AccountForm(QWidget):
             lambda index, checked: on_access_changed(index == 1) if checked else None
         )
 
-        # The form's own buttons, on the form. BAR 2 carries what the whole
+        # The form's own buttons, on the form. The toolbar carries what the whole
         # workspace can do; finishing or abandoning this one form is not that,
         # and putting it up there would make the bar change shape per page.
         layout.addSpacing(CARD_SPACING * 3)
@@ -178,12 +178,12 @@ class AccountForm(QWidget):
         buttons.setSpacing(CARD_SPACING * 2)
 
         create = QPushButton("Create User")
-        create.setObjectName("ContextPrimary")
+        create.setObjectName("ToolbarPrimary")
         create.setCursor(Qt.PointingHandCursor)
         create.clicked.connect(on_submit)
 
         cancel = QPushButton("Cancel")
-        cancel.setObjectName("ContextAction")
+        cancel.setObjectName("ToolbarAction")
         cancel.setCursor(Qt.PointingHandCursor)
         cancel.clicked.connect(on_cancel)
 

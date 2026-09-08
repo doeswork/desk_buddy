@@ -528,7 +528,7 @@ class BrokerReport:
 
     @property
     def chip(self) -> str:
-        """BAR 1's always-visible broker indicator."""
+        """the workspace bar's always-visible broker indicator."""
         return chip_for(self.port)
 
 
@@ -543,7 +543,7 @@ def report() -> BrokerReport:
     """Everything the Network page needs, in one call.
 
     Costs a subprocess (`mosquitto -h`), so call it when the page is built or
-    after something changed — not on a timer. For the BAR 1 chip use
+    after something changed — not on a timer. For the workspace bar chip use
     `chip_text()`, which only needs to know whether a port answers.
     """
     from . import system
@@ -555,7 +555,7 @@ def report() -> BrokerReport:
 
 
 def chip_text() -> str:
-    """BAR 1's broker indicator, without the cost of full detection.
+    """the workspace bar's broker indicator, without the cost of full detection.
 
     A local socket check is ~0.05ms against ~2.25ms for report(), which
     matters when this runs every few seconds for the life of the app.

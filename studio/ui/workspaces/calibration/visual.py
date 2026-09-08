@@ -55,7 +55,7 @@ class CaptureForm(QWidget):
 
         row = QHBoxLayout()
         capture = QPushButton("Capture Depth Reference")
-        capture.setObjectName("ContextPrimary")
+        capture.setObjectName("ToolbarPrimary")
         capture.setCursor(Qt.PointingHandCursor)
         capture.setEnabled(enabled)
         capture.clicked.connect(on_capture)
