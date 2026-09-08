@@ -224,6 +224,25 @@ QLabel#Title {{ font-size: {px(18)}; font-weight: 600; color: {p.text}; }}
 QLabel#Subtitle {{ font-size: {px(12)}; color: {p.muted}; }}
 QLabel#CardTitle {{ font-size: {px(13)}; font-weight: 600; color: {p.text}; }}
 QLabel#CardBody {{ font-size: {px(12)}; color: {p.muted}; }}
+QLabel#VisionStateGood {{ color: {p.good}; font-size: {px(12)}; font-weight: 600; }}
+QComboBox#VisionModelPicker, QComboBox#VisionSourcePicker, QComboBox#VisionRobotPicker,
+QLineEdit#VisionPrompt {{
+    background: {p.muted_bg};
+    color: {p.text};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    padding: {px(5)} {px(8)};
+    min-width: {px(210)};
+}}
+QProgressBar#VisionProgress {{
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    background: {p.muted_bg};
+    color: {p.text};
+    text-align: center;
+    min-height: {px(14)};
+}}
+QProgressBar#VisionProgress::chunk {{ background: {p.accent}; }}
 
 /* ---- Manual controller ---- */
 QLabel#ManualControlLabel {{

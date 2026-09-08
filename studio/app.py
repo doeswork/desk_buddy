@@ -8,9 +8,11 @@ relative imports and a bare `python studio/app.py` cannot resolve them.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -39,6 +41,17 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--broker-setup-helper":
         from .services.network.broker.setup_helper import main as setup_main
         return setup_main(sys.argv[2], sys.argv[3])
+
+    if len(sys.argv) == 2 and sys.argv[1] == "--vision-bootstrap-self-test":
+        from .services.vision.bootstrap import bootstrap_self_test
+        try:
+            with tempfile.TemporaryDirectory(prefix="desk-buddy-vision-test-") as directory:
+                report = bootstrap_self_test(directory)
+        except Exception as exc:
+            print(f"Vision bootstrap self-test failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(report, sort_keys=True))
+        return 0
 
     _prepare_wslg()
     from PySide6.QtWidgets import QApplication

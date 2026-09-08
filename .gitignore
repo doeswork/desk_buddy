@@ -17,3 +17,6 @@ ToDo.md
 *.sqlite3
 *.db__pycache__/
 *.pyc
+studio/deployment/
+studio/.build/
+studio/dist/

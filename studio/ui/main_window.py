@@ -192,6 +192,9 @@ class MainWindow(QMainWindow):
     def refresh_broker(self) -> None:
         self.nav_bar.set_broker(chip_text())
         self._traffic_recorder.reconcile()
+        vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
+        if vision is not None:
+            vision.start_enabled()
 
     def _start_network_broker(self) -> None:
         """Schedule automatic broker setup after the first window paint.
@@ -300,6 +303,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Broker setup is still running. Finish the system authorization prompt before closing.", 8000)
             event.ignore()
             return
+        vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
+        if vision is not None and vision.install_running:
+            answer = QMessageBox.question(
+                self,
+                "Cancel Vision installation?",
+                "A model is still downloading. Cancel it and close Studio?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+        for workspace in self.workspaces:
+            shutdown = getattr(workspace, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
         self.debug_tray.shutdown()
         self._traffic_recorder.stop()
 
