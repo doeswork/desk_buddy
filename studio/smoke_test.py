@@ -310,6 +310,7 @@ def check_debug_tray(window) -> None:
     ):
         assert window.restart_app()
         start.assert_called_once()
+        assert "--wait-for-previous-instance" in start.call_args.args[1]
         close.assert_called_once()
 
     if window.debug_dock.isVisible():

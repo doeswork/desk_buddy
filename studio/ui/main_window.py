@@ -192,6 +192,9 @@ class MainWindow(QMainWindow):
     def refresh_broker(self) -> None:
         self.workspace_bar.set_broker(chip_text())
         self._traffic_recorder.reconcile()
+        vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
+        if vision is not None:
+            vision.start_enabled()
 
     def _start_network_broker(self) -> None:
         """Schedule automatic broker setup after the first window paint.
@@ -308,6 +311,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Broker setup is still running. Finish the system authorization prompt before closing.", 8000)
             event.ignore()
             return
+        vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
+        if vision is not None and vision.install_running:
+            answer = QMessageBox.question(
+                self,
+                "Cancel Vision installation?",
+                "A model is still downloading. Cancel it and close Studio?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+        for workspace in self.workspaces:
+            shutdown = getattr(workspace, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
         self.debug_tray.shutdown()
         self._traffic_recorder.stop()
 
@@ -322,12 +341,14 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def restart_app(self) -> bool:
-        """Start a replacement process after an explicit confirmation."""
+        """Start a replacement that waits for this process to release its lock."""
+        from ..app import RESTART_WAIT_ARGUMENT
+
         answer = QMessageBox.question(
             self,
             "Restart Desk Buddy Studio?",
-            "Studio will close and reopen. Any running broker will be stopped "
-            "cleanly as the current window closes.",
+            "Studio will close and reopen. The broker will keep running while "
+            "Studio's connections and services restart cleanly.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -336,11 +357,11 @@ class MainWindow(QMainWindow):
 
         if getattr(sys, "frozen", False):
             program = sys.executable
-            arguments = sys.argv[1:]
+            arguments = [RESTART_WAIT_ARGUMENT, *sys.argv[1:]]
             working_directory = str(Path(sys.executable).resolve().parent)
         else:
             program = sys.executable
-            arguments = ["-m", "studio", *sys.argv[1:]]
+            arguments = ["-m", "studio", RESTART_WAIT_ARGUMENT, *sys.argv[1:]]
             working_directory = str(Path(__file__).resolve().parents[2])
 
         result = QProcess.startDetached(program, arguments, working_directory)

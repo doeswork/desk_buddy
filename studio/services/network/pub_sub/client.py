@@ -22,6 +22,7 @@ from typing import Callable
 from ..broker.finder import studio_credentials, studio_endpoint
 
 Callback = Callable[[str, dict], None]
+RawCallback = Callable[[str, bytes], None]
 
 
 class MqttClient:
@@ -29,6 +30,10 @@ class MqttClient:
 
     def __init__(self) -> None:
         self._client = None
+        # A detached replacement briefly exists beside the process it is
+        # replacing.  A per-instance id keeps the broker from making those
+        # two clients repeatedly disconnect and reconnect each other.
+        self._client_id = f"desk-buddy-studio-commands-{uuid.uuid4().hex[:12]}"
         self._port = 0
         self._status = "Broker is not running"
         self._lock = Lock()
@@ -36,6 +41,9 @@ class MqttClient:
         # a set: callbacks are usually bound methods/closures, which are not
         # hashable in a way that would dedupe usefully anyway.
         self._subscribers: dict[str, list[Callback]] = defaultdict(list)
+        # Kept separate so a firmware JPEG can share a topic with ordinary
+        # JSON without changing what any existing subscriber receives.
+        self._raw_subscribers: dict[str, list[RawCallback]] = defaultdict(list)
         self._host = ""
         self._credentials = ("", "")
 
@@ -83,7 +91,7 @@ class MqttClient:
         try:
             client = mqtt.Client(
                 mqtt.CallbackAPIVersion.VERSION2,
-                client_id="desk-buddy-studio-commands",
+                client_id=self._client_id,
                 protocol=mqtt.MQTTv311,
             )
             client.username_pw_set(name, password)
@@ -132,6 +140,14 @@ class MqttClient:
             self._client.publish(topic, json.dumps(body), qos=qos)
         return action_id
 
+    def publish_raw(self, topic: str, payload: bytes, *, qos: int = 1) -> bool:
+        """Publish opaque bytes without JSON encoding. True when queued."""
+        client = self._client
+        if client is None or not isinstance(payload, bytes):
+            return False
+        result = client.publish(topic, payload, qos=qos)
+        return not bool(getattr(result, "rc", 0))
+
     # ---- receiving -----------------------------------------------------------
     def subscribe(self, topic: str, callback: Callback) -> Callable[[], None]:
         """Call `callback(topic, payload)` for every JSON message on `topic`.
@@ -157,6 +173,43 @@ class MqttClient:
                 callbacks = self._subscribers.get(topic)
                 if callbacks and callback in callbacks:
                     callbacks.remove(callback)
+                if not callbacks:
+                    self._subscribers.pop(topic, None)
+                if (
+                    self._client is not None
+                    and topic not in self._subscribers
+                    and topic not in self._raw_subscribers
+                ):
+                    self._client.unsubscribe(topic)
+
+        return unsubscribe
+
+    def subscribe_raw(
+        self, topic: str, callback: RawCallback
+    ) -> Callable[[], None]:
+        """Call ``callback(topic, bytes)`` before any JSON decoding.
+
+        Like :meth:`subscribe`, the callback runs on paho's network thread.
+        UI consumers must cross a queued Qt signal before touching widgets.
+        """
+        with self._lock:
+            self._raw_subscribers[topic].append(callback)
+            if self._client is not None:
+                self._client.subscribe(topic, qos=1)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                callbacks = self._raw_subscribers.get(topic)
+                if callbacks and callback in callbacks:
+                    callbacks.remove(callback)
+                if not callbacks:
+                    self._raw_subscribers.pop(topic, None)
+                if (
+                    self._client is not None
+                    and topic not in self._subscribers
+                    and topic not in self._raw_subscribers
+                ):
+                    self._client.unsubscribe(topic)
 
         return unsubscribe
 
@@ -166,7 +219,7 @@ class MqttClient:
             self._set_status(f"Connection refused: {reason_code}")
             return
         with self._lock:
-            topics = list(self._subscribers.keys())
+            topics = list(set(self._subscribers) | set(self._raw_subscribers))
         for topic in topics:
             client.subscribe(topic, qos=1)
         self._set_status(f"Connected on {self._host}:{self._port}")
@@ -178,8 +231,14 @@ class MqttClient:
             self._set_status(f"Disconnected ({reason_code}); retrying…")
 
     def _on_message(self, _client, _userdata, message) -> None:
+        raw = bytes(message.payload)
+        with self._lock:
+            raw_callbacks = list(self._raw_subscribers.get(message.topic, ()))
+        for callback in raw_callbacks:
+            callback(message.topic, raw)
+
         try:
-            payload = json.loads(message.payload)
+            payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return
         if not isinstance(payload, dict):

@@ -34,7 +34,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 patchelf
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 patchelf mosquitto mosquitto-clients
 
       - name: Install dependencies
         run: |
@@ -51,11 +51,13 @@ jobs:
           python -m studio.services.error_reporter_tests
           python -m studio.services.network.tests.tests
           python -m studio.services.network.tests.system_tests
+          python -m studio.services.vision.tests
           python -m studio.ui.components.serial_tests
           python -m studio.ui.components.flow_tests
           python -m studio.ui.workspaces.network.tests
           python -m studio.ui.workspaces.calibration.tests
           python -m studio.ui.workspaces.manual_tests
+          python -m studio.ui.workspaces.vision.tests
           python -m studio.ui.workspaces.workflows.tests
 
       - name: Smoke test

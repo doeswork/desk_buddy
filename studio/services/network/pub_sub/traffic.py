@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from threading import Lock
 
 from ....models.data.mqtt_messages import MqttMessages, mqtt_messages
@@ -15,6 +16,7 @@ class TrafficRecorder:
     def __init__(self, store: MqttMessages | None = None) -> None:
         self.store = store if store is not None else mqtt_messages()
         self._client = None
+        self._client_id = f"desk-buddy-studio-debug-{uuid.uuid4().hex[:12]}"
         self._port = 0
         self._host = ""
         self._credentials = ("", "")
@@ -65,7 +67,7 @@ class TrafficRecorder:
         try:
             client = mqtt.Client(
                 mqtt.CallbackAPIVersion.VERSION2,
-                client_id="desk-buddy-studio-debug",
+                client_id=self._client_id,
                 protocol=mqtt.MQTTv311,
             )
             client.username_pw_set(name, password)

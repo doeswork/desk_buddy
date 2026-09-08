@@ -73,6 +73,14 @@ SYSTEM_BROKER_RELOAD_PENDING = Key("network/system_broker_reload_pending", bool,
 # rule" forever, including immediately after successfully writing one.
 SYSTEM_BROKER_RELOAD_RULE = Key("network/system_broker_reload_rule", bool, False)
 
+# ---- Vision -------------------------------------------------------------
+# Selection is what the picker shows. Active is the last model that reached
+# an exact MQTT-ready state; keeping them separate makes failed switches
+# recoverable without forgetting what the user was trying to install.
+VISION_SELECTED_MODEL = Key("vision/selected_model", str, "owlv2-base")
+VISION_ACTIVE_MODEL = Key("vision/active_model", str, "")
+VISION_AUTO_START = Key("vision/auto_start", bool, False)
+
 ALL = (
     THEME,
     ZOOM_INDEX,
@@ -91,4 +99,7 @@ ALL = (
     SYSTEM_BROKER_SETUP_PAUSED,
     SYSTEM_BROKER_RELOAD_PENDING,
     SYSTEM_BROKER_RELOAD_RULE,
+    VISION_SELECTED_MODEL,
+    VISION_ACTIVE_MODEL,
+    VISION_AUTO_START,
 )

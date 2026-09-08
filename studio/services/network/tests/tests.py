@@ -18,6 +18,8 @@ from unittest import mock
 
 from ..broker import finder as install
 from ..broker.finder import BrokerStatus, Tool
+from ..pub_sub.client import MqttClient
+from ..pub_sub.traffic import TrafficRecorder
 
 
 class fake_path:
@@ -40,6 +42,15 @@ class fake_path:
     def __exit__(self, *exc) -> None:
         os.environ["PATH"] = self._path
         install.EXTRA_PATHS = self._extra
+
+
+def test_mqtt_clients_use_unique_ids_across_studio_instances() -> None:
+    commands = (MqttClient(), MqttClient())
+    recorders = (TrafficRecorder(store=mock.Mock()), TrafficRecorder(store=mock.Mock()))
+    assert commands[0]._client_id != commands[1]._client_id
+    assert recorders[0]._client_id != recorders[1]._client_id
+    assert commands[0]._client_id.startswith("desk-buddy-studio-commands-")
+    assert recorders[0]._client_id.startswith("desk-buddy-studio-debug-")
 
 
 def make_executable(directory: Path, name: str, script: str = "") -> Path:
