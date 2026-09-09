@@ -24,8 +24,9 @@ from PySide6.QtWidgets import (
 )
 
 from ....models.config.workflows import Workflow, Workflows
-from .steps import GROUPS, all_templates, find
-from . import WorkflowNavigator, WorkflowsWorkspace
+from .palette import GroupButton, StepPalette
+from .steps import GROUPS, JOINTS, all_templates, find
+from . import WorkflowNavigator, WorkflowsWorkspace, WorkflowTitle
 
 _app = QApplication.instance() or QApplication([])
 
@@ -47,6 +48,26 @@ def populated() -> tuple[WorkflowsWorkspace, Workflows]:
     ))
     store.create("morning_wave", "A polite greeting")
     return WorkflowsWorkspace(store), store
+
+
+def test_the_sidebar_is_the_search_and_the_list_and_nothing_else() -> None:
+    """It carried a "Workflows" heading and a New button above the search.
+
+    Both were second copies: the workspace bar already names the workspace,
+    and New is a document verb that belongs on the toolbar beside Save and
+    Delete. A panel that says its own name is the app saying it twice.
+    """
+    space, _store = populated()
+    side = space.side()
+
+    assert not [label for label in side.findChildren(QLabel)
+                if label.text() == "Workflows"]
+    assert not [button for button in side.findChildren(QPushButton)
+                if button.text() == "New"]
+
+    # And New is still reachable, on the bar where the other verbs are.
+    assert "New" in [action.label for action in space.build_actions()
+                     if hasattr(action, "label")]
 
 
 def test_sidebar_is_searchable_and_selects_workflows() -> None:
@@ -84,8 +105,7 @@ def test_the_page_is_the_document_and_nothing_else() -> None:
     assert widget.findChild(QWidget, "WorkflowMeta") is not None
 
     # The one heading is the open workflow's name, not a fixed page title.
-    titles = [label.text() for label in widget.findChildren(QLabel)
-              if label.objectName() == "Title"]
+    titles = [button.text() for button in widget.findChildren(WorkflowTitle)]
     assert titles == ["duck_walk"]
 
 
@@ -173,43 +193,222 @@ def test_creating_a_workflow_immediately_creates_its_file() -> None:
     assert said == ["Created duck_walk.json"]
 
 
-def test_the_toolbar_leads_with_the_workflows_own_verbs() -> None:
-    """The document's actions come first, before the step vocabulary — a
-    user looking for Save should not have to scan 28 step names to find it."""
+def test_the_toolbar_holds_the_documents_verbs_and_nothing_else() -> None:
+    """The bar makes, saves and deletes workflows. That is all it does.
+
+    The step vocabulary used to live here too — thirty buttons of permanent
+    workspace chrome to edit the one document below them. It moved to the
+    page header, so the bar is short enough to read again.
+    """
     space, _store = populated()
     labels = [action.label for action in space.build_actions()
               if hasattr(action, "label")]
-    assert labels[:3] == ["New", "Save JSON", "Delete Workflow"]
+    assert labels == ["New", "Save JSON", "Delete Workflow"]
     # Still no per-step run/edit controls; steps are read-only for now.
     assert "Run" not in labels
 
 
-def test_the_toolbar_offers_a_button_for_every_template() -> None:
-    """The palette is the toolbar now, not a card in the page body.
-
-    Adding steps is the work of this workspace, and a palette below the
-    document is one the user scrolls past to reach the thing it edits.
-    """
+def test_no_step_template_is_a_toolbar_button() -> None:
+    """The regression the move exists to prevent: a step that drifts back
+    onto the bar puts the wall back one button at a time."""
     space, _store = populated()
     labels = {action.label for action in space.build_actions()
               if hasattr(action, "label")}
     for template in all_templates():
-        assert template.label in labels, template.key
+        assert template.label not in labels, template.key
 
 
-def test_step_buttons_are_dead_until_a_workflow_is_open() -> None:
-    """There is nothing to append a step to, so the button says so by being
-    disabled rather than failing when pressed."""
+def test_the_palette_is_one_menu_per_group_not_a_button_per_step() -> None:
+    """Nine buttons to scan instead of thirty, each opening its own group."""
+    space, _store = populated()
+    palette = StepPalette(space.insert_step)
+
+    groups = palette.findChildren(GroupButton)
+    assert [button.text() for button in groups] == [
+        group.label for group in GROUPS
+    ]
+    for button, group in zip(groups, GROUPS):
+        entries = [action.text() for action in button.menu().actions()]
+        assert entries == [t.label for t in group.templates], group.label
+
+
+def test_the_palette_offers_every_template_exactly_once() -> None:
+    """Grouping is a rearrangement, not a cull: nothing the firmware can do
+    may be lost behind a menu that forgot it."""
+    palette = StepPalette(lambda key: None)
+    keys = [
+        action.data()
+        for button in palette.findChildren(GroupButton)
+        for action in button.menu().actions()
+    ]
+    assert sorted(keys) == sorted(t.key for t in all_templates())
+    assert len(keys) == len(set(keys))
+
+
+def test_the_palette_sits_on_the_header_line_beside_the_name() -> None:
+    """Level with the workflow it appends to, not a window's height below
+    it in the body."""
+    space, _store = populated()
+    header = space.page.build_header()
+    titles = [button.text() for button in header.findChildren(WorkflowTitle)]
+    assert titles == ["duck_walk"]
+    assert header.findChildren(StepPalette), "palette belongs in the header"
+
+    body = space.page.build_page()
+    assert not body.findChildren(StepPalette), "and only in the header"
+
+
+def test_servos_are_one_group_rather_than_three_loose_buttons() -> None:
+    """Elbow, Wrist and Twist are three names for one verb: they belong
+    behind it, not competing with Photo for the same row."""
+    servo = next(group for group in GROUPS if group.label == "Servo")
+    assert [t.label for t in servo.templates] == ["Elbow", "Wrist", "Twist"]
+    assert {t.subject for t in servo.templates} == {"servo"}
+    assert {t.fields["servoName"] for t in servo.templates} == set(JOINTS)
+
+
+def test_step_menus_are_dead_until_a_workflow_is_open() -> None:
+    """There is nothing to append a step to, so the palette says so by being
+    disabled rather than failing when picked."""
     # An empty store is the only way there is genuinely nothing open:
     # `selected` falls back to the first workflow whenever one exists.
     space = WorkflowsWorkspace(repository())
     assert space.selected is None
 
-    steps = [action for action in space.build_actions()
-             if hasattr(action, "label")
-             and action.label not in ("New", "Save JSON", "Delete Workflow")]
-    assert steps, "the palette should still be listed"
-    assert not any(action.clickable for action in steps)
+    # Held in a name: an unreferenced header is collected mid-test, taking
+    # the palette Qt-side with it.
+    header = space.page.build_header()
+    palette = header.findChildren(StepPalette)
+    assert palette, "the palette should still be shown, not hidden"
+    groups = palette[0].findChildren(GroupButton)
+    assert groups, "every group should still be listed"
+    assert not any(button.isEnabled() for button in groups)
+
+
+def test_picking_a_menu_entry_inserts_that_step() -> None:
+    """The wiring the menus exist for: the entry's own template, not the
+    group's first one."""
+    space, _store = populated()
+    space.select_workflow("morning_wave")
+    space.announce = lambda _text: None
+
+    palette = StepPalette(space.insert_step)
+    gripper = palette.buttons["Gripper"]
+    drop = next(a for a in gripper.menu().actions() if a.text() == "Drop")
+    drop.trigger()
+
+    draft = json.loads(space.draft_for(space.selected))
+    assert draft["steps"] == [{"subject": "gripper", "command": "DROP"}]
+
+
+def test_the_file_path_is_not_a_line_on_the_page() -> None:
+    """It was the longest thing on screen and the least often wanted —
+    forty unchanging characters of directory in front of the name already
+    in the title. It lives in the title's menu now."""
+    space, store = populated()
+    body = space.page.build_page()
+
+    path = str(store.path_for("duck_walk"))
+    shown = [label.text() for label in body.findChildren(QLabel)]
+    assert path not in shown
+    assert not any(str(store.directory) in text for text in shown)
+    # The facts worth a line are still on it.
+    facts = [label.text() for label in body.findChildren(QLabel)
+             if label.objectName() == "WorkflowMetaFact"]
+    assert "2 steps" in facts
+    assert "validation on" in facts
+
+
+def test_the_title_is_the_menu_for_the_document_it_names() -> None:
+    space, _store = populated()
+    header = space.page.build_header()
+    title = header.findChildren(WorkflowTitle)[0]
+
+    assert title.text() == "duck_walk"
+    assert [action.text() for action in title.menu().actions()] == [
+        "Rename…", "Copy file path"
+    ]
+
+
+def test_copy_file_path_puts_the_path_on_the_clipboard() -> None:
+    """Where the path went: copying it is what it was actually for."""
+    space, store = populated()
+    said: list[str] = []
+    space.announce = said.append
+
+    header = space.page.build_header()
+    title = header.findChildren(WorkflowTitle)[0]
+    title.menu_actions["copy"].trigger()
+
+    path = str(store.path_for("duck_walk"))
+    assert QApplication.clipboard().text() == path
+    assert said and path in said[0]
+
+
+def test_rename_moves_the_file_rather_than_copying_it() -> None:
+    space, store = populated()
+    said: list[str] = []
+    space.announce = said.append
+
+    assert space.rename("duck_waddle") == ""
+    assert store.find("duck_waddle") is not None
+    assert store.find("duck_walk") is None, "the old file must not survive"
+    assert not store.path_for("duck_walk").exists()
+    assert space.selected.name == "duck_waddle"
+    assert said == ["Renamed to duck_waddle.json"]
+
+
+def test_rename_keeps_edits_that_were_never_saved() -> None:
+    """A rename is a save of the open document under a new name, so the
+    unsaved work in the editor goes with it instead of being discarded."""
+    space, store = populated()
+    space.select_workflow("morning_wave")
+    space.announce = lambda _text: None
+    # Held in a name: an unreferenced body is collected mid-test, taking
+    # the editor `insert_step` writes through with it.
+    body = space.page.build_page()   # the editor is live, as on screen
+    assert body is not None
+    assert space.insert_step("photo") == ""
+
+    assert space.rename("afternoon_wave") == ""
+    saved = store.find("afternoon_wave")
+    assert saved is not None
+    assert saved.steps == ({"subject": "photo"},)
+
+
+def test_rename_refuses_a_name_that_is_not_a_filename() -> None:
+    space, store = populated()
+    problem = space.rename("Duck Walk")
+    assert problem and "lowercase" in problem
+    assert store.find("duck_walk") is not None, "and changes nothing"
+
+
+def test_rename_refuses_to_overwrite_another_workflow() -> None:
+    space, store = populated()
+    problem = space.rename("morning_wave")
+    assert "already exists" in problem
+    # Both survive, with the one that was there first untouched.
+    assert store.find("duck_walk") is not None
+    assert store.find("morning_wave").step_count == 0
+
+
+def test_rename_to_the_same_name_is_a_no_op() -> None:
+    space, _store = populated()
+    said: list[str] = []
+    space.announce = said.append
+    assert space.rename("duck_walk") == ""
+    assert said == [], "nothing happened, so nothing is announced"
+
+
+def test_rename_refuses_to_rename_unparseable_json() -> None:
+    """Same rule the palette follows: never write over JSON we cannot read,
+    because the rewrite would silently discard whatever it says."""
+    space, store = populated()
+    space.remember_draft("duck_walk", "{ not json")
+    problem = space.rename("duck_waddle")
+    assert problem
+    assert store.find("duck_walk") is not None
+    assert store.find("duck_waddle") is None
 
 
 def test_palette_button_appends_a_step_to_the_draft() -> None:

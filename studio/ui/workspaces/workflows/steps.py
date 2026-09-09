@@ -1,21 +1,31 @@
-"""The firmware action vocabulary, as the buttons on the Workflows toolbar.
+"""The firmware action vocabulary, as the step menus on the Workflows page.
 
 `firmware/README.md` is the contract. This module restates the part a workflow
-can use so Studio can offer it as buttons: a person building a routine should
+can use so Studio can offer it as menus: a person building a routine should
 not have to remember that base movement is `baseRotate` with a `controlType`,
 or that a servo takes `servoName` rather than `joint`.
+
+The groups are what the user sees. A `StepGroup` is one button on the page,
+and its templates are that button's menu — so a group's label has to name a
+part of the robot ("Servo", "Base") rather than a category of code, and a
+template's label has to read as a sentence completion under it: Servo ▸
+Elbow, Base ▸ Rotate by steps. Three sibling buttons named Elbow, Wrist and
+Twist are three names for one verb; they belong behind the verb.
 
 Templates carry real, valid defaults rather than empty placeholders. Inserting
 one gives you a step that would run as-is, which makes the palette a starting
 point to edit instead of a form to fill in.
 
 Steps are stored under `subject` (the Rails-era key the workflow file uses),
-while every other field name matches the firmware message exactly. Nothing
-executes workflows yet; when a runner arrives it maps `subject` to `action`.
+while every other field name matches the firmware message exactly.
+`services.workflows.runner.run` is what maps `subject` to `action` when a
+workflow is actually run; the templates here already write firmware action
+names, so that mapping is a passthrough for everything except the legacy
+`rotate`.
 
-Lives beside the toolbar it fills rather than in `models/config/`, where it
+Lives beside the page it fills rather than in `models/config/`, where it
 sat originally: everything there is persisted state backed by a Store, and
-this is a hardcoded list of buttons with exactly one consumer. If a workflow
+this is a hardcoded list of menu entries with exactly one consumer. If a workflow
 *runner* ever needs the same table to validate what it is about to send, that
 is the moment to move it back down — not before.
 """
@@ -73,8 +83,8 @@ class StepGroup:
     templates: tuple[StepTemplate, ...]
 
 
-ARM = StepGroup(
-    "Arm",
+SERVO = StepGroup(
+    "Servo",
     (
         StepTemplate(
             "servo_elbow", "Elbow", "servo",
@@ -94,6 +104,12 @@ ARM = StepGroup(
             {"servoName": "TWIST", "position": 90, "speed": 10},
             "position 0–180; speed is delay per degree in ms.",
         ),
+    ),
+)
+
+ARM = StepGroup(
+    "Arm",
+    (
         StepTemplate(
             "controlik", "Reach (IK)", "controlik",
             "Move the arm to a distance using inverse kinematics.",
@@ -141,7 +157,7 @@ BASE = StepGroup(
     "Base",
     (
         StepTemplate(
-            "base_steps", "Rotate steps", "baseRotate",
+            "base_steps", "Rotate by steps", "baseRotate",
             "Rotate the base by firmware steps.",
             {
                 "controlType": "ENCODER",
@@ -158,7 +174,7 @@ BASE = StepGroup(
             {"controlType": "HOME", "direction": "RIGHT", "speed": "veryslow"},
         ),
         StepTemplate(
-            "base_status", "Base status", "baseRotate",
+            "base_status", "Status", "baseRotate",
             "Ask for the base rotation status.",
             {"controlType": "STATUS"},
             "Replies with a base_rotation object.",
@@ -203,7 +219,7 @@ CALIBRATION = StepGroup(
     "Calibration",
     (
         StepTemplate(
-            "calibration_values", "Read values", "calibrationvalues",
+            "calibration_values", "Read stored values", "calibrationvalues",
             "Ask the robot for every stored calibration value.",
             {},
             "Replies with a calibrationvalues object. Unsaved keys come "
@@ -311,7 +327,7 @@ CUSTOM = StepGroup(
 )
 
 GROUPS: tuple[StepGroup, ...] = (
-    ARM, GRIPPER, BASE, VISION, CALIBRATION, STENCIL, SYSTEM, CUSTOM,
+    SERVO, ARM, GRIPPER, BASE, VISION, CALIBRATION, STENCIL, SYSTEM, CUSTOM,
 )
 
 

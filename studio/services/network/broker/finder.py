@@ -21,6 +21,7 @@ installed" is not the same question as "we can add a robot account".
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import platform
 import re
@@ -398,20 +399,14 @@ def _port_in_range(port: int, spec: str) -> bool:
     return False
 
 
-def _ufw_allows(port: int) -> FirewallVerdict:
-    """Look for an inbound allow rule covering `port` on TCP."""
+def _ufw_inbound_allows(port: int):
+    """Every inbound ufw allow rule covering `port` on TCP, in file order."""
     try:
         lines = UFW_RULES.read_text().splitlines()
     except OSError:
-        # Unreadable rather than absent: say so instead of claiming a block.
-        return FirewallVerdict(firewall="ufw", known=False)
+        return None
 
-    if not _ufw_default_is_deny():
-        return FirewallVerdict(
-            firewall="ufw", known=True, allowed=True,
-            rule="the default inbound policy is ACCEPT",
-        )
-
+    matches = []
     for line in lines:
         match = TUPLE.match(line.strip())
         if match is None:
@@ -424,6 +419,24 @@ def _ufw_allows(port: int) -> FirewallVerdict:
             continue
         if not _port_in_range(port, match["port"]):
             continue
+        matches.append(match)
+    return matches
+
+
+def _ufw_allows(port: int) -> FirewallVerdict:
+    """Look for an inbound allow rule covering `port` on TCP."""
+    matches = _ufw_inbound_allows(port)
+    if matches is None:
+        # Unreadable rather than absent: say so instead of claiming a block.
+        return FirewallVerdict(firewall="ufw", known=False)
+
+    if not _ufw_default_is_deny():
+        return FirewallVerdict(
+            firewall="ufw", known=True, allowed=True,
+            rule="the default inbound policy is ACCEPT",
+        )
+
+    for match in matches:
         source = match["source"]
         where = "" if source in ("0.0.0.0/0", "any", "::/0") else f" from {source}"
         return FirewallVerdict(
@@ -432,6 +445,41 @@ def _ufw_allows(port: int) -> FirewallVerdict:
         )
 
     return FirewallVerdict(firewall="ufw", known=True, allowed=False)
+
+
+def ufw_covers(port: int, subnet: str) -> bool:
+    """Whether some inbound rule already admits `subnet` on `port`.
+
+    Asks about coverage, not about an exact match. A rule sourced from a
+    supernet of `subnet` -- or from anywhere -- admits the robot's network
+    just as well as one written for that exact prefix, and a host that
+    already has such a rule needs no privileged change. Comparing the
+    source text to `subnet` instead would re-request authorization on every
+    check for a host whose broker port was opened more broadly, and the
+    added narrower rule would never be the one found next time.
+    """
+    matches = _ufw_inbound_allows(port)
+    if matches is None:
+        return False
+    if not _ufw_default_is_deny():
+        return True
+    try:
+        wanted = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return False
+    for match in matches:
+        source = match["source"]
+        if source in ("0.0.0.0/0", "any", "::/0"):
+            return True
+        try:
+            allowed = ipaddress.ip_network(source, strict=False)
+        except ValueError:
+            continue
+        if allowed.version != wanted.version:
+            continue
+        if wanted.subnet_of(allowed):
+            return True
+    return False
 
 
 def firewall_allows(port: int) -> FirewallVerdict:

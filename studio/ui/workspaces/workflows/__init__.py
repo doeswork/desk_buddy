@@ -7,17 +7,19 @@ The JSON *is* the workflow, so the page is the editor and little else: a line
 naming the open document, a strip of facts about it, and then the editor for
 every remaining pixel of the window. The ordered step table that used to sit
 between them is gone — it restated the document it sat above, and charged a
-third of the height to do it. Steps are added from the toolbar, which the
-workspace owns and every page keeps.
+third of the height to do it. Steps are added from the palette on the header
+line, one grouped menu per part of the robot; see `palette.py` for why that
+is not the toolbar any more.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
+from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QFormLayout,
@@ -26,21 +28,25 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .steps import GROUPS
+from .palette import StepPalette
 from .steps import find as find_template
 from ....models.config.workflows import (
     NAME_RULE,
     Workflow,
     Workflows,
     step_inserted_into_text,
+    validate_name,
+    workflow_from_text,
     workflows,
 )
 from ...components import ActionSpec, Card, Column, Separator, spacer
@@ -63,24 +69,23 @@ def _button(
 
 
 class WorkflowNavigator(QWidget):
-    """Searchable workflow list, inspired by the Rails secondary nav."""
+    """Searchable workflow list, inspired by the Rails secondary nav.
 
-    def __init__(self, *, on_select, on_new, on_filter) -> None:
+    A search field and the list it filters. It carried a heading and a New
+    button above them; both were second copies of something already on
+    screen. The workspace bar names the workspace you are in — a panel
+    inside Workflows captioned "Workflows" is the app saying it twice — and
+    New is a document verb, so it belongs on the toolbar with Save and
+    Delete rather than once in each place.
+    """
+
+    def __init__(self, *, on_select, on_filter) -> None:
         super().__init__()
         self._on_select = on_select
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
-        heading = QWidget()
-        heading_layout = QHBoxLayout(heading)
-        heading_layout.setContentsMargins(ROW_PADDING, ROW_PADDING, ROW_PADDING, 4)
-        title = QLabel("Workflows")
-        title.setObjectName("CardTitle")
-        heading_layout.addWidget(title, 1)
-        heading_layout.addWidget(_button("New", on_new, primary=True))
-        layout.addWidget(heading)
 
         self.search = QLineEdit()
         self.search.setObjectName("WorkflowSearch")
@@ -207,17 +212,117 @@ class NewWorkflowDialog(QDialog):
         self.accept()
 
 
+class WorkflowTitle(QToolButton):
+    """The open workflow's name, as the menu of things to do to it.
+
+    The name was a label. It is the biggest, most obvious word on the page
+    and it did nothing, while renaming the document meant editing the `name`
+    field inside the JSON and knowing that saving would move the file. This
+    makes the obvious thing the real one: click the name to act on the
+    document the name refers to.
+
+    Styled to still read as the page's title rather than as a control — the
+    heading weight and size are kept, and the menu arrow beside it is what
+    says it can be clicked. `InstantPopup` makes the whole word the trigger,
+    so there is no part of the title that looks live and is not.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        on_rename: Callable[[], None],
+        on_copy_path: Callable[[], None],
+    ) -> None:
+        super().__init__()
+        self.setObjectName("WorkflowTitle")
+        self.setText(name)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.setCursor(Qt.PointingHandCursor)
+
+        menu = QMenu(self)
+        menu.setObjectName("WorkflowTitleMenu")
+        rename = menu.addAction("Rename…")
+        rename.triggered.connect(lambda _checked=False: on_rename())
+        copy = menu.addAction("Copy file path")
+        copy.triggered.connect(lambda _checked=False: on_copy_path())
+        self.setMenu(menu)
+        self.menu_actions = {"rename": rename, "copy": copy}
+
+
+class RenameWorkflowDialog(QDialog):
+    """Rename the open workflow, which is also to rename its file.
+
+    Its own dialog rather than an inline edit on the title: a rename moves a
+    file on disk and can collide with an existing one, so it needs somewhere
+    to say no. The name rule is shown up front for the same reason it is in
+    the New dialog — a workflow name is a filename, and the rule is not
+    guessable from the field.
+    """
+
+    def __init__(self, parent: QWidget | None, current: str, *, on_rename) -> None:
+        super().__init__(parent)
+        self._on_rename = on_rename
+        self.setWindowTitle("Rename Workflow")
+        self.setModal(True)
+        self.setMinimumWidth(430)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.name = QLineEdit(current)
+        self.name.setAccessibleName("Workflow name")
+        self.name.setToolTip(NAME_RULE)
+        self.name.selectAll()
+        form.addRow("Name", self.name)
+        layout.addLayout(form)
+
+        rule = QLabel(NAME_RULE)
+        rule.setObjectName("CardBody")
+        rule.setWordWrap(True)
+        layout.addWidget(rule)
+
+        self.error = QLabel()
+        self.error.setObjectName("FieldError")
+        self.error.setWordWrap(True)
+        self.error.hide()
+        layout.addWidget(self.error)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(_button("Cancel", self.reject))
+        buttons.addWidget(_button("Rename", self.rename, primary=True))
+        layout.addLayout(buttons)
+        self.name.returnPressed.connect(self.rename)
+
+    def rename(self) -> None:
+        problem = self._on_rename(self.name.text())
+        if problem:
+            self.error.setText(problem)
+            self.error.show()
+            return
+        self.accept()
+
+
 class WorkflowMetaStrip(QWidget):
     """One line of facts above the document.
 
     What used to be a summary card and a steps table is a single strip. Both
-    said what the document below them already says — the file the JSON is
-    saved to, how many steps it has — and both cost the editor a third of the
-    window to say it. A row of small facts says the same at the top of the
-    page and gives the height back.
+    said what the document below them already says — how many steps it has,
+    whether it validates — and both cost the editor a third of the window to
+    say it. A row of small facts says the same at the top of the page and
+    gives the height back.
+
+    The file path used to lead this line. It was the longest thing on the
+    page and the least often wanted: an absolute path under
+    ~/.local/share, restating the workflow's own name after forty characters
+    of directory that never change between two workflows. It now lives in the
+    title's menu, one click from where the name is, as something to copy
+    rather than something to read.
     """
 
-    def __init__(self, workflow: Workflow, path: str) -> None:
+    def __init__(self, workflow: Workflow) -> None:
         super().__init__()
         self.setObjectName("WorkflowMeta")
 
@@ -225,8 +330,6 @@ class WorkflowMetaStrip(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(ROW_PADDING)
 
-        layout.addWidget(self._fact(path, mono=True))
-        layout.addWidget(self._dot())
         layout.addWidget(
             self._fact(
                 f"{workflow.step_count} step"
@@ -245,9 +348,9 @@ class WorkflowMetaStrip(QWidget):
         layout.addStretch(1)
 
     @staticmethod
-    def _fact(text: str, *, mono: bool = False) -> QLabel:
+    def _fact(text: str) -> QLabel:
         label = QLabel(text)
-        label.setObjectName("WorkflowFile" if mono else "WorkflowMetaFact")
+        label.setObjectName("WorkflowMetaFact")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         return label
 
@@ -273,11 +376,7 @@ class JsonDocument(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(CARD_GAP)
-        layout.addWidget(
-            WorkflowMetaStrip(
-                workflow, str(workspace.repository.path_for(workflow.name))
-            )
-        )
+        layout.addWidget(WorkflowMetaStrip(workflow))
 
         if workspace.problem:
             problem = QLabel(workspace.problem)
@@ -307,7 +406,7 @@ class EditorPage(Page):
     key = "editor"
     label = "Editor"
     title = "Workflow Studio"
-    # No subtitle. The page is one document and a toolbar of steps; a line of
+    # No subtitle. The page is one document and its step palette; a line of
     # prose above it explains what the document below already shows, and cost
     # two rows of the height the document wants.
     fills_height = True
@@ -323,17 +422,44 @@ class EditorPage(Page):
         )
 
     def build_header(self) -> QWidget:
-        """The open workflow's name, and nothing else.
+        """The open workflow's name, and the steps you can add to it.
 
         A page whose body must fill the window cannot afford a title block
         that repeats what the side panel's highlighted row and the status
         strip both already say. One line naming the open document is what is
         left, and it is the one thing neither of those says at a glance.
+
+        The name is also the menu for acting on the document it names —
+        rename it, or take its path — and the step palette shares the line,
+        pushed to the right. All three belong together: this workflow, what
+        you can do to it, and what goes in it. The pair costs the document no
+        height the name was not already spending.
         """
         workflow = self.workspace.selected
-        title = QLabel(workflow.name if workflow is not None else self.title)
-        title.setObjectName("Title")
-        return title
+        if workflow is None:
+            title: QWidget = QLabel(self.title)
+            title.setObjectName("Title")
+        else:
+            title = WorkflowTitle(
+                workflow.name,
+                on_rename=self.workspace.open_rename,
+                on_copy_path=self.workspace.copy_path,
+            )
+
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(ROW_PADDING)
+        layout.addWidget(title, 0, Qt.AlignVCenter)
+        layout.addStretch(1)
+        layout.addWidget(
+            StepPalette(
+                self.workspace.insert_step if workflow is not None else None
+            ),
+            0,
+            Qt.AlignVCenter,
+        )
+        return holder
 
     def build_page(self) -> QWidget:
         workflow = self.workspace.selected
@@ -355,9 +481,9 @@ class EditorPage(Page):
             # and sits at the top rather than stretching down the window.
             return Column(empty, spacer())
 
-        # The step palette is the toolbar, not a card here: adding steps is
-        # the work of this workspace, and a palette below the document is one
-        # the user scrolls past to reach the thing it edits.
+        # The step palette is on the header line, not a card here: a
+        # palette below the document is one the user scrolls past to reach
+        # the thing it edits.
         return JsonDocument(self.workspace, workflow)
 
 
@@ -391,7 +517,6 @@ class WorkflowsWorkspace(Workspace):
     def build_side(self) -> QWidget:
         panel = WorkflowNavigator(
             on_select=self.select_workflow,
-            on_new=self.open_new,
             on_filter=self.filter_workflows,
         )
         self._reload_side(panel)
@@ -507,6 +632,75 @@ class WorkflowsWorkspace(Workspace):
         self.say(f"Saved {saved.filename}")
         return ""
 
+    def open_rename(self) -> None:
+        workflow = self.selected
+        if workflow is None:
+            return
+        RenameWorkflowDialog(
+            self.widget(), workflow.name, on_rename=self.rename
+        ).exec()
+
+    def rename(self, name: str) -> str:
+        """Rename the open workflow, and the file it is stored in.
+
+        Goes through the same `save_text` the Save button does, on the
+        document's own text with its `name` field rewritten. That is what
+        makes a rename keep unsaved edits instead of silently discarding
+        them — and it is `save`'s `previous_name` that moves the old file
+        rather than leaving a copy behind under the old name.
+        """
+        workflow = self.selected
+        if workflow is None:
+            return "No workflow is open."
+
+        new_name = name.strip()
+        problem = validate_name(new_name)
+        if problem:
+            return problem
+        if new_name == workflow.name:
+            return ""
+        if self.repository.find(new_name) is not None:
+            return f"A workflow called {new_name!r} already exists."
+
+        text = (
+            self.editor.toPlainText()
+            if self.editor is not None
+            else self.draft_for(workflow)
+        )
+        current, problem = workflow_from_text(text)
+        if problem or current is None:
+            return problem or "Fix the JSON before renaming."
+
+        renamed = replace(current, name=new_name)
+        problem = self.repository.save(renamed, previous_name=workflow.name)
+        if problem:
+            return problem
+
+        self._drafts.pop(workflow.name, None)
+        self._drafts.pop(new_name, None)
+        self._selected = new_name
+        self.problem = ""
+        self.editor = None
+        self._reload_side()
+        self.refresh()
+        self.say(f"Renamed to {renamed.filename}")
+        return ""
+
+    def copy_path(self) -> str:
+        """Put the open workflow's file path on the clipboard.
+
+        The path left the page when it stopped being worth a line of its own
+        — forty unchanging characters of directory in front of the name
+        already in the title. Copying is what it was actually for.
+        """
+        workflow = self.selected
+        if workflow is None:
+            return ""
+        path = str(self.repository.path_for(workflow.name))
+        QApplication.clipboard().setText(path)
+        self.say(f"Copied {path}")
+        return path
+
     def confirm_delete(self) -> None:
         workflow = self.selected
         if workflow is None:
@@ -548,18 +742,20 @@ class WorkflowsWorkspace(Workspace):
         self.page.rebuild()
 
     def build_actions(self) -> list:
-        """The workflow's own verbs, then the whole step vocabulary.
+        """The workflow's own verbs. The step vocabulary is not here.
 
-        Every firmware action is a button here rather than a card in the page
-        body: adding steps *is* the work of this workspace, and a palette
-        buried below the document is one the user scrolls past. The bar wraps,
-        so all of them stay visible at any window width.
+        Every firmware action used to be a button on this bar, which put
+        thirty of them in the workspace's permanent chrome to edit the one
+        document below it. They are the document's content, not the
+        workspace's toolset, so they moved to a row of grouped menus on the
+        page's header line — see `palette.py`. What is left is what the bar
+        was always for: make a workflow, save it, delete it.
 
-        Steps are disabled until a workflow is open, for the same reason Save
-        is — there is nothing to add them to.
+        Save and Delete are dead until a workflow is open, because there is
+        nothing for them to act on.
         """
         workflow = self.selected
-        actions = [
+        return [
             ActionSpec("New", on_click=self.open_new),
             ActionSpec(
                 "Save JSON",
@@ -572,21 +768,6 @@ class WorkflowsWorkspace(Workspace):
                 on_click=self.confirm_delete if workflow is not None else None,
             ),
         ]
-
-        for group in GROUPS:
-            actions.append(Separator())
-            for template in group.templates:
-                actions.append(
-                    ActionSpec(
-                        template.label,
-                        on_click=(
-                            partial(self.insert_step, template.key)
-                            if workflow is not None
-                            else None
-                        ),
-                    )
-                )
-        return actions
 
 
 __all__ = ["EditorPage", "WorkflowsWorkspace"]

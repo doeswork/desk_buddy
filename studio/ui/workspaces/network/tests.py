@@ -143,6 +143,46 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(self.store.get(keys.SYSTEM_BROKER_ROBOT_HOST), "192.168.1.2")
         self.space.refresh.assert_called_once()
 
+    def test_a_revisit_rechecks_without_escalating_or_pausing(self):
+        """Returning to Network re-verifies a healthy broker, but the recheck
+        is passive: it cannot prompt for a password, and its failure must not
+        latch the pause that would disable automatic setup entirely."""
+        requests = []
+
+        def operation(request, emit):
+            requests.append(request)
+            return SetupStatus("failed", "Robot network setup is incomplete", True)
+
+        self.space.setup = Coordinator(operation)
+        self.space.setup.status = SetupStatus("ready", "Connected", True)
+        self.space.activate()
+        deadline = time.monotonic() + 2
+        while self.space.setup.running and time.monotonic() < deadline:
+            self.space._poll_setup()
+            time.sleep(0.005)
+        self.space._poll_setup()
+        self.assertTrue(requests[0]["verify_only"])
+        self.assertFalse(self.store.get(keys.SYSTEM_BROKER_SETUP_PAUSED))
+
+    def test_an_explicit_retry_is_not_verify_only_and_may_pause(self):
+        """The counterpart: a retry the user asked for still authorizes, and
+        its failure still pauses automatic attempts as before."""
+        requests = []
+
+        def operation(request, emit):
+            requests.append(request)
+            return SetupStatus("failed", "Broker setup needs attention")
+
+        self.space.setup = Coordinator(operation)
+        self.space.start_setup(retry=True)
+        deadline = time.monotonic() + 2
+        while self.space.setup.running and time.monotonic() < deadline:
+            self.space._poll_setup()
+            time.sleep(0.005)
+        self.space._poll_setup()
+        self.assertFalse(requests[0]["verify_only"])
+        self.assertTrue(self.store.get(keys.SYSTEM_BROKER_SETUP_PAUSED))
+
     def test_failure_and_revoke_pause_future_automatic_attempts(self):
         self.store.set(keys.SYSTEM_BROKER_SETUP_PAUSED, True)
         with mock.patch.object(self.space.setup, "start") as start:
