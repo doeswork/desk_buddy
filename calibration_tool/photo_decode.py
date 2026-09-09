@@ -41,7 +41,21 @@ def decode_photo_message(raw: bytes) -> Optional[DecodedPhoto]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
 
-    if metadata.get("sender") != "firmware" or metadata.get("photo") != "sending_photo":
+    if (
+        metadata.get("schema") != "desk_buddy.photo.v1"
+        or metadata.get("sender") != "firmware"
+        or metadata.get("photo") != "sending_photo"
+        or metadata.get("content_type") != "image/jpeg"
+        or not str(metadata.get("action_id") or "")
+        or metadata.get("type") not in {
+            "photo", "detect_object", "detect_color", "calibrate_depth",
+        }
+        or metadata.get("size") != len(jpeg)
+        or type(metadata.get("width")) is not int
+        or metadata["width"] <= 0
+        or type(metadata.get("height")) is not int
+        or metadata["height"] <= 0
+    ):
         return None
 
     return DecodedPhoto(metadata=metadata, jpeg_bytes=jpeg)
@@ -57,4 +71,3 @@ def save_photo(photo: DecodedPhoto, directory: Path, label: str = "photo") -> Pa
     path = directory / f"{stamp}_{safe_label}{suffix}.jpg"
     path.write_bytes(photo.jpeg_bytes)
     return path
-

@@ -17,7 +17,13 @@ from ...storage import keys
 from ...storage.settings import Settings, settings
 from ..network import mqtt_client
 from ..network.broker.finder import studio_endpoint
-from .access import PASSWORD_ENV, USERNAME_ENV, VisionCredentials, ensure_access
+from .access import (
+    PASSWORD_ENV,
+    USERNAME_ENV,
+    VisionCredentials,
+    ensure_access,
+    robot_routes,
+)
 from .bootstrap import (
     PYTHON_VERSION,
     RUNTIME_REQUIREMENTS,
@@ -26,7 +32,13 @@ from .bootstrap import (
     vision_root,
 )
 from .catalog import BUILTIN_MODELS, DEFAULT_MODEL_ID, ModelManifest, model_manifest
-from .frames import decode_frame, encode_frame
+from .frames import decode_frame, encode_frame, validate_photo_frame
+from ..network.pub_sub.robot_topics import (
+    command_topic,
+    event_topic,
+    photo_topic,
+    vision_topic,
+)
 
 STATUS_TOPIC = "vision/detector/status"
 REQUEST_TOPIC = "vision/detector/request"
@@ -138,7 +150,9 @@ class VisionServiceManager(QObject):
         self._rollback_error = ""
         self._is_rollback = False
         self._pending_jpeg = b""
-        self._pending_source = ""
+        self._pending_photo_topic = ""
+        self._pending_event_topic = ""
+        self._pending_result_topic = ""
         self._autostart_attempted = False
         self._ready_timer = QTimer(self)
         self._ready_timer.setSingleShot(True)
@@ -310,7 +324,9 @@ class VisionServiceManager(QObject):
         self._expected_model_id = ""
         had_detection = bool(self._state.pending_detection)
         self._pending_jpeg = b""
-        self._pending_source = ""
+        self._pending_photo_topic = ""
+        self._pending_event_topic = ""
+        self._pending_result_topic = ""
         self._clear_robot_subscriptions()
         process = self._worker_process
         if process is not None and process.state() != QProcess.NotRunning:
@@ -374,7 +390,9 @@ class VisionServiceManager(QObject):
             return ""
         self.client.reconcile()
         self._pending_jpeg = jpeg
-        self._pending_source = "local"
+        self._pending_photo_topic = ""
+        self._pending_event_topic = ""
+        self._pending_result_topic = RESULT_TOPIC
         self._begin_detection(action_id)
         if not self.client.publish_raw(REQUEST_TOPIC, payload, qos=1):
             self._detection_timer.stop()
@@ -393,13 +411,19 @@ class VisionServiceManager(QObject):
                 self._replace(error="Choose a configured robot first.")
             return ""
         self._clear_robot_subscriptions()
-        topic = f"{robot}/test"
+        commands = command_topic(robot)
+        events = event_topic(robot)
+        photos = photo_topic(robot)
+        results = vision_topic(robot)
         self._robot_unsubscribes.extend((
             self.client.subscribe_raw(
-                topic, lambda name, payload: self._bridge.raw_received.emit(name, payload)
+                photos, lambda name, payload: self._bridge.raw_received.emit(name, payload)
             ),
             self.client.subscribe(
-                topic, lambda name, body: self._bridge.result_received.emit(name, body)
+                results, lambda name, body: self._bridge.result_received.emit(name, body)
+            ),
+            self.client.subscribe(
+                events, lambda name, body: self._bridge.result_received.emit(name, body)
             ),
         ))
         self.client.reconcile()
@@ -410,9 +434,11 @@ class VisionServiceManager(QObject):
         action_id = uuid.uuid4().hex
         active = self.active
         self._pending_jpeg = b""
-        self._pending_source = topic
+        self._pending_photo_topic = photos
+        self._pending_event_topic = events
+        self._pending_result_topic = results
         self._begin_detection(action_id)
-        self.client.publish(topic, {
+        self.client.publish(commands, {
             "sender": "studio",
             "action_id": action_id,
             "action": "detect_object",
@@ -748,10 +774,11 @@ class VisionServiceManager(QObject):
         self._replace(**values)
 
     def _on_raw(self, topic: str, payload: bytes) -> None:
-        if not self._state.pending_detection or topic != self._pending_source:
+        if not self._state.pending_detection or topic != self._pending_photo_topic:
             return
         try:
             frame = decode_frame(payload)
+            validate_photo_frame(frame)
         except ValueError:
             return
         action_id = str(frame.metadata.get("action_id") or "")
@@ -764,9 +791,17 @@ class VisionServiceManager(QObject):
         action_id = str(body.get("action_id") or "")
         if not self._state.pending_detection or action_id != self._state.pending_detection:
             return
-        if topic not in {RESULT_TOPIC, self._pending_source}:
-            return
-        if body.get("sender") != "visual_ai" or body.get("status") not in {"completed", "failed"}:
+        is_vision_result = (
+            topic == self._pending_result_topic
+            and body.get("sender") == "visual_ai"
+            and body.get("status") in {"completed", "failed"}
+        )
+        is_camera_failure = (
+            topic == self._pending_event_topic
+            and body.get("sender") == "firmware"
+            and body.get("status") == "failed"
+        )
+        if not is_vision_result and not is_camera_failure:
             return
         self._detection_timer.stop()
         self._replace(pending_detection="", busy=False)
@@ -835,7 +870,7 @@ class VisionServiceManager(QObject):
                 "username_env": USERNAME_ENV,
                 "password_env": PASSWORD_ENV,
             },
-            "robot_topics": list(credentials.topics[1:] if credentials else ()),
+            "robot_routes": list(robot_routes()) if credentials else [],
             "model": {**manifest.as_dict(), "cache_dir": str(cache_dir)},
         }
         path = self.root / "configs" / f"detector-{launch_id}.json"
@@ -909,6 +944,9 @@ class VisionServiceManager(QObject):
         for unsubscribe in self._robot_unsubscribes:
             unsubscribe()
         self._robot_unsubscribes.clear()
+        self._pending_photo_topic = ""
+        self._pending_event_topic = ""
+        self._pending_result_topic = ""
 
     def _remove_launch_config(self) -> None:
         if self._launch_config is not None:

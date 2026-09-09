@@ -10,6 +10,12 @@ from ...models.config.mqtt_users import generate_password
 from ...models.config.robots import robots
 from ..network.broker import system
 from ..network.broker.finder import LOOPBACK_HOSTS, lan_address, studio_endpoint
+from ..network.pub_sub.robot_topics import (
+    command_topic,
+    event_topic,
+    photo_topic,
+    vision_topic,
+)
 
 VISION_USER = "vision"
 USERNAME_ENV = "DESK_BUDDY_VISION_MQTT_USERNAME"
@@ -26,8 +32,29 @@ class VisionCredentials:
     source: str
 
 
+def robot_routes() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {
+            "robot": robot.name,
+            "command_topic": command_topic(robot.name),
+            "event_topic": event_topic(robot.name),
+            "photo_topic": photo_topic(robot.name),
+            "result_topic": vision_topic(robot.name),
+        }
+        for robot in robots().all()
+    )
+
+
 def required_topics() -> tuple[str, ...]:
-    return ("vision/#", *(f"{robot.name}/test" for robot in robots().all()))
+    topics = ["vision/#"]
+    for route in robot_routes():
+        topics.extend((
+            route["command_topic"],
+            route["event_topic"],
+            route["photo_topic"],
+            route["result_topic"],
+        ))
+    return tuple(topics)
 
 
 def ensure_access(environment: Mapping[str, str] | None = None) -> VisionCredentials:

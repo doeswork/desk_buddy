@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from ...models.config.robots import robots
 from ...services.network import mqtt_client
 from ...services.network.pub_sub import manual_messages
+from ...services.network.pub_sub.robot_topics import command_topic
 from ..components import ActionSpec, Card, Column, Separator
 from ..pages.base import Page
 from ..theme.metrics import CARD_GAP, CARD_SPACING, ROW_PADDING
@@ -108,7 +109,7 @@ class TargetCard(Card):
     def __init__(self, workspace: "ManualWorkspace") -> None:
         super().__init__(
             "Target robot",
-            "Commands publish on the selected robot's /test topic through "
+            "Commands publish on the selected robot's /commands topic through "
             "Studio's configured MQTT account.",
         )
 
@@ -137,7 +138,7 @@ class TargetCard(Card):
         row.addWidget(self.combo, 1)
 
         topic = QLabel(
-            f"{workspace.robot}/test" if workspace.robot else "Network → Robots"
+            command_topic(workspace.robot) if workspace.robot else "Network → Robots"
         )
         topic.setObjectName("ManualTopic")
         row.addWidget(topic)

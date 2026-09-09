@@ -53,8 +53,13 @@ from .pub_sub import (
     PublishResult,
     TrafficRecorder,
     calibration_messages,
+    command_topic,
+    event_topic,
+    heartbeat_topic,
     mqtt_client,
+    photo_topic,
     publish_as,
+    vision_topic,
 )
 
 __all__ = [
@@ -88,6 +93,11 @@ __all__ = [
     "MqttClient",
     "PublishResult",
     "calibration_messages",
+    "command_topic",
+    "event_topic",
+    "heartbeat_topic",
     "mqtt_client",
+    "photo_topic",
     "publish_as",
+    "vision_topic",
 ]

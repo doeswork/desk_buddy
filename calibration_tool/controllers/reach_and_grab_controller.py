@@ -136,7 +136,7 @@ class ReachAndGrabController:
             self.view.status_text.set(f"Failed — {error}")
         self.view.set_result_text(
             f"Reach-and-grab did not produce a terminal result in this wait.\n\n{error}\n\n"
-            "No retry was sent. Check the shared-topic activity log before deciding what to do next."
+            "No retry was sent. Check the MQTT activity log before deciding what to do next."
         )
 
     def display_photo_saved(self, path: Path) -> None:

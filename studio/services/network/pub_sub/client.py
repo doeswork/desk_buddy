@@ -41,8 +41,8 @@ class MqttClient:
         # a set: callbacks are usually bound methods/closures, which are not
         # hashable in a way that would dedupe usefully anyway.
         self._subscribers: dict[str, list[Callback]] = defaultdict(list)
-        # Kept separate so a firmware JPEG can share a topic with ordinary
-        # JSON without changing what any existing subscriber receives.
+        # Kept separate because photo channels carry opaque binary frames while
+        # command/event/service channels carry JSON.
         self._raw_subscribers: dict[str, list[RawCallback]] = defaultdict(list)
         self._host = ""
         self._credentials = ("", "")

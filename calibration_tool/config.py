@@ -63,11 +63,23 @@ class WizardConfig:
 
     @property
     def command_topic(self) -> str:
-        return f"{self.robot_topic.strip().strip('/')}/test"
+        return f"{self.robot_topic.strip().strip('/')}/commands"
+
+    @property
+    def event_topic(self) -> str:
+        return f"{self.robot_topic.strip().strip('/')}/events"
+
+    @property
+    def photo_topic(self) -> str:
+        return f"{self.robot_topic.strip().strip('/')}/photos"
+
+    @property
+    def vision_topic(self) -> str:
+        return f"{self.robot_topic.strip().strip('/')}/vision"
 
     @property
     def heartbeat_topic(self) -> str:
-        return f"{self.robot_topic.strip().strip('/')}/HEARTBEAT"
+        return f"{self.robot_topic.strip().strip('/')}/heartbeat"
 
 
 def load_config() -> WizardConfig:
@@ -109,6 +121,9 @@ def save_config(config: WizardConfig, path: Path = ENV_PATH) -> None:
         f"DESK_BUDDY_MQTT_ADMIN_PASSWORD={_quote_env(config.admin_password)}",
         f"DESK_BUDDY_MQTT_ROBOT_TOPIC={_quote_env(config.robot_topic)}",
         f"DESK_BUDDY_MQTT_COMMAND_TOPIC={_quote_env(config.command_topic)}",
+        f"DESK_BUDDY_MQTT_EVENT_TOPIC={_quote_env(config.event_topic)}",
+        f"DESK_BUDDY_MQTT_PHOTO_TOPIC={_quote_env(config.photo_topic)}",
+        f"DESK_BUDDY_MQTT_VISION_TOPIC={_quote_env(config.vision_topic)}",
         f"DESK_BUDDY_MQTT_HEARTBEAT_TOPIC={_quote_env(config.heartbeat_topic)}",
         f"DESK_BUDDY_MQTT_CLIENT_ID={_quote_env(config.client_id)}",
         f"DESK_BUDDY_MQTT_SENDER={_quote_env(config.sender)}",
@@ -123,4 +138,3 @@ def save_config(config: WizardConfig, path: Path = ENV_PATH) -> None:
         path.chmod(0o600)
     except OSError:
         pass
-

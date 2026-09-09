@@ -21,7 +21,7 @@ class TopicsPage(Page):
 
     title = "Topics"
     subtitle = "The fixed message contracts Studio uses across the system."
-    status = "1 fixed topic"
+    status = f"{len(TOPICS)} fixed channels"
 
     def build_page(self) -> QWidget:
         return Column(*(TopicCard(topic) for topic in TOPICS))
@@ -39,7 +39,7 @@ class TopicCard(Card):
         layout.addWidget(self._detail("Publisher", topic.publisher))
         layout.addWidget(self._detail("Consumers", topic.consumers))
 
-        heading = QLabel("Calibration messages")
+        heading = QLabel(topic.groups_title)
         heading.setObjectName("CardTitle")
         layout.addSpacing(CARD_SPACING * 2)
         layout.addWidget(heading)
