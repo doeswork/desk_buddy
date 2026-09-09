@@ -253,8 +253,11 @@ QProgressBar#VisionProgress {{
 QProgressBar#VisionProgress::chunk {{ background: {p.accent}; }}
 
 /* ---- Workflow Studio ---- */
+/* The search field is the first thing in the panel now that the heading
+   above it is gone, so its top margin matches its sides rather than the
+   4px that only had to clear a caption. */
 QLineEdit#WorkflowSearch {{
-    margin: {px(4)} {px(8)} {px(7)} {px(8)};
+    margin: {px(8)} {px(8)} {px(7)} {px(8)};
     padding: {TIGHT_V} {px(7)};
     background: {p.background};
     border: {HAIRLINE} solid {p.border};
@@ -268,22 +271,63 @@ QLabel#WorkflowFile {{
 }}
 QLabel#WorkflowMetaFact {{ color: {p.muted}; font-size: {px(11)}; }}
 QLabel#WorkflowMetaDot {{ color: {p.border}; font-size: {px(11)}; }}
-QPushButton#WorkflowStepChip {{
-    background: {p.background};
+/* The title is a menu now, but it is still the page's heading: it keeps
+   QLabel#Title's size and weight and paints nothing of its own, so what
+   marks it clickable is the arrow beside it and the hover, not a box drawn
+   around the workflow's name. */
+QToolButton#WorkflowTitle {{
+    background: transparent;
+    color: {p.text};
+    border: none;
+    border-radius: {RADIUS};
+    padding: 0 {px(14)} 0 0;   /* room on the right for the arrow */
+    font-size: {px(18)};
+    font-weight: 600;
+    text-align: left;
+}}
+QToolButton#WorkflowTitle:hover {{ color: {p.accent}; }}
+QToolButton#WorkflowTitle:pressed, QToolButton#WorkflowTitle:open {{
+    color: {p.accent_dark};
+}}
+QToolButton#WorkflowTitle::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: {px(10)};
+}}
+/* The step palette sits on the header line, so its buttons are chrome beside
+   a title rather than controls in a form: outlined, small, and joined into
+   one strip by a shared border, the way the toolbar's buttons are one strip.
+   Named QToolButton because each opens a menu of the group's steps. */
+QToolButton#PaletteGroup {{
+    background: {p.panel};
     color: {p.text};
     border: {HAIRLINE} solid {p.border};
-    border-radius: {RADIUS};
-    padding: {TIGHT_V} {px(9)};
+    border-radius: 0;
+    margin-left: -{HAIRLINE};   /* neighbours share one border, not two */
+    padding: {TIGHT_V} {px(8)};
+    padding-right: {px(4)};     /* the arrow supplies the rest */
     font-size: {px(11)};
 }}
-QPushButton#WorkflowStepChip:hover {{
+QToolButton#PaletteGroup:hover:!disabled {{
+    background: {p.muted_bg};
+    border-color: {p.accent};
+}}
+QToolButton#PaletteGroup:pressed, QToolButton#PaletteGroup:open {{
     background: {p.accent};
     color: {p.on_accent};
     border-color: {p.accent};
 }}
-QPushButton#WorkflowStepChip:pressed {{
-    background: {p.accent_dark};
-    border-color: {p.accent_dark};
+QToolButton#PaletteGroup:disabled {{
+    background: transparent;
+    color: {p.muted};
+    border-style: dashed;
+}}
+/* Qt reserves a fixed slot for the indicator and draws the arrow in it; left
+   alone it is wide enough to double the button. */
+QToolButton#PaletteGroup::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: {px(9)};
 }}
 QPlainTextEdit#WorkflowJson {{
     background: {p.background};

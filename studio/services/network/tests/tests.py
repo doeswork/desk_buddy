@@ -404,6 +404,62 @@ def test_unreadable_rules_are_unknown_never_blocked() -> None:
     assert not verdict.blocked, "unknown must never present as blocked"
 
 
+def test_a_broader_rule_covers_the_robot_subnet() -> None:
+    """The regression that made Network ask for a password on every visit.
+
+    The stock rule here is sourced from 192.168.0.0/16, which already admits
+    a robot on 192.168.16.0/24. Comparing the rule's source text to the
+    subnet instead of testing containment read this as "not allowed", so
+    setup escalated to an authorization prompt, added a narrower duplicate
+    rule that the next scan never reached, and asked again -- forever.
+    """
+    with with_ufw():
+        assert install.ufw_covers(1883, "192.168.16.0/24")
+        assert install.ufw_covers(1883, "192.168.0.0/16"), "an exact match still counts"
+
+
+def test_coverage_stops_at_an_unrelated_subnet() -> None:
+    """Containment, not blanket approval: a rule for one network says
+    nothing about another, and claiming otherwise would skip setup a host
+    genuinely needs."""
+    with with_ufw():
+        assert not install.ufw_covers(1883, "10.0.0.0/24")
+        assert not install.ufw_covers(1883, "192.169.0.0/24")
+
+
+def test_an_anywhere_rule_covers_every_subnet() -> None:
+    with with_ufw():
+        assert install.ufw_covers(8080, "192.168.16.0/24")
+        assert install.ufw_covers(8080, "10.4.4.0/24")
+
+
+def test_coverage_respects_port_protocol_and_direction() -> None:
+    """Same reasoning as the verdict reader: a UDP or outbound rule lets no
+    robot in, so it must not suppress setup."""
+    with with_ufw():
+        assert not install.ufw_covers(1884, "192.168.16.0/24")  # no rule
+        assert not install.ufw_covers(5353, "192.168.16.0/24")  # udp only
+        assert not install.ufw_covers(2222, "192.168.16.0/24")  # outbound only
+        assert install.ufw_covers(9050, "192.168.16.0/24")      # inside a range
+
+
+def test_coverage_follows_the_default_policy_and_unreadable_rules() -> None:
+    """A default-ACCEPT firewall admits everything, so nothing needs adding.
+    Unreadable rules are the opposite case: Studio cannot confirm coverage,
+    and must not skip setup on the strength of a file it could not read."""
+    with with_ufw(policy="ACCEPT"):
+        assert install.ufw_covers(1884, "192.168.16.0/24")
+    with with_ufw():
+        with mock.patch.object(install, "UFW_RULES", Path("/nonexistent/rules")):
+            assert not install.ufw_covers(1883, "192.168.16.0/24")
+
+
+def test_a_malformed_subnet_never_claims_coverage() -> None:
+    with with_ufw():
+        assert not install.ufw_covers(1883, "")
+        assert not install.ufw_covers(1883, "not-a-subnet")
+
+
 def test_firewalld_is_reported_as_unknown() -> None:
     """Its state spans zones, runtime-vs-permanent rules and interfaces.
     Guessing wrong is worse than saying so, so it is deliberately not

@@ -234,15 +234,17 @@ def local_network() -> tuple[str, str]:
 
 
 def firewall_ready(number: int, subnet: str) -> bool:
-    from .finder import _ufw_enabled, _ufw_allows
+    from .finder import _ufw_enabled, ufw_covers
     firewall = "ufw" if _ufw_enabled() else ""
     if not firewall and executable("firewall-cmd") and run(["firewall-cmd", "--state"]).returncode == 0:
         firewall = "firewalld"
     if not firewall:
         return True
     if firewall == "ufw":
-        verdict = _ufw_allows(number)
-        return verdict.allowed and (" from " not in verdict.rule or verdict.rule.endswith(" from " + subnet))
+        # Coverage, not an exact rule match: a broader existing rule already
+        # admits the robot's subnet, and asking for authorization to add a
+        # narrower duplicate would repeat on every check.
+        return ufw_covers(number, subnet)
     if firewall == "firewalld":
         rule = f'rule family="ipv4" source address="{subnet}" port port="{number}" protocol="tcp" accept'
         zone = "--zone=" + firewalld_zone()
@@ -292,6 +294,19 @@ def perform(request: dict, emit) -> SetupStatus:
         network_allowed = False  # The authorized helper can inspect protected rules.
     if not (authenticated and public and network_allowed and grant_ready):
         action = "network" if authenticated and public and grant_ready else "setup"
+        if request.get("verify_only"):
+            # A passive revisit re-checks and reports; it never escalates to a
+            # password prompt. Only an explicit retry may ask for authorization,
+            # so a precondition that keeps reading as unmet cannot turn every
+            # visit to Network into another authorization dialog.
+            return SetupStatus(
+                "failed" if connected else "cancelled",
+                "Studio is connected. Robot network setup is incomplete."
+                if connected
+                else "Automatic setup is paused. Retry setup to enable it.",
+                connected, user=name,
+                detail="Retry setup to finish configuring the broker.",
+            )
         try:
             data = authorize({**request, "action": action, "reuse": authenticated, "subnet": subnet}, env, emit)
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:

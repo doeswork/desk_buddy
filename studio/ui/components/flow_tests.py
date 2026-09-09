@@ -1,9 +1,13 @@
 """A toolbar that wraps rather than hiding its tail.
 
-The toolbar carries every firmware action in the Workflows workspace — more buttons
-than fit on one row of any usable window. The two alternatives Qt offers are
+No workspace ships enough actions to wrap at present — Workflows used to,
+carrying every firmware action, until that vocabulary moved to the page's
+own step palette. The wrapping stays because the alternatives Qt offers are
 both a form of disappearance: a "»" chevron folds the tail away, and forcing
-a minimum width lets the toolbar decide how wide the app must be.
+a minimum width lets the toolbar decide how wide the app must be. So the
+tests below supply their own overflowing action list rather than borrowing a
+workspace's, which is also what keeps them from breaking the next time one
+changes its buttons.
 
     QT_QPA_PLATFORM=offscreen python -m studio.ui.components.flow_tests
 """
@@ -86,17 +90,23 @@ def test_clearing_removes_every_button() -> None:
 
 
 def test_the_bar_keeps_its_rows_across_workspace_switches() -> None:
-    """Leaving Workflows and coming back must not collapse the palette.
+    """Leaving a wrapping workspace and coming back must not collapse it.
 
     It did: the buttons were all still there, but the bar was one row tall
     and the other rows were clipped outside it. A freshly built button has
     not been sized by the style yet, so the first few measurements come back
     as zero — and the height that finally stuck was whatever a later stray
     resize computed, not the real one.
+
+    Driven through a stand-in workspace with enough actions to wrap. The
+    real ones are all short enough to fit on one row today, and a test for
+    what happens to the *second* row cannot be written against a bar that
+    only ever has one.
     """
     from PySide6.QtWidgets import QPushButton
 
     from ..main_window import MainWindow
+    from .action_spec import ActionSpec
 
     window = MainWindow()
     window.debug_dock.setVisible(False)
@@ -106,23 +116,46 @@ def test_the_bar_keeps_its_rows_across_workspace_switches() -> None:
 
     index = {space.key: i for i, space in enumerate(window.workspaces)}
 
+    # The overflow is borrowed onto a real workspace rather than pushed at
+    # the bar directly: the bug is in what the *switch* does to the bar, and
+    # a switch rebuilds it from the workspace it lands on — so a bar handed
+    # its buttons from outside that path is wiped by the next rebuild and
+    # tests nothing.
+    stand_in = window.workspaces[index["workflows"]]
+    stand_in.build_actions = lambda: [
+        ActionSpec(f"Action number {n}", on_click=lambda: None)
+        for n in range(40)
+    ]
+
     def settle(key: str) -> None:
         window.select_workspace(index[key])
         _app.processEvents()
         _app.processEvents()
 
     bar = window.toolbar
+    # Away and back before measuring. The window may already be showing the
+    # stand-in's workspace, in which case the bar on screen was built from
+    # its real actions and the borrowed ones have not been asked for yet.
+    settle("vision")
     settle("workflows")
     first = bar.height()
-    rows = len({b.geometry().y() for b in bar._flow.findChildren(QPushButton)})
-    assert rows > 1, "the palette should need more than one row at 1280px"
+    # The bar's own height is what says how many rows it took. Neither of
+    # the two obvious alternatives works offscreen: the platform has not
+    # necessarily moved the buttons into their rows yet, so their geometry
+    # is all y=0, and `heightForWidth` re-measures from that same unplaced
+    # state and answers 0. `_resize_to_rows` has already banked the real
+    # number here.
+    one_row = max(b.sizeHint().height() for b in bar._flow.findChildren(QPushButton))
+    assert first > one_row, (
+        "the stand-in should need more than one row at 1280px", first, one_row
+    )
 
-    for other in ("network", "vision", "calibration", "manual"):
+    for other in ("network", "vision", "calibration"):
         settle(other)
         settle("workflows")
         assert bar.height() == first, (other, bar.height(), first)
-        # And every row is inside the bar, not clipped below it.
-        assert bar._flow.heightForWidth(window.width()) <= bar.height()
+        # And still more than the one row it used to collapse to.
+        assert bar.height() > one_row, (other, bar.height(), one_row)
 
     window.close()
 

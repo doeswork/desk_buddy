@@ -7,7 +7,8 @@ between the pages *inside* a workspace is the side panel's job.
 Its right-hand end carries the two facts that are true no matter where you
 are: is the broker up, and is the robot there. They live here rather than in
 the Network workspace because they stay relevant while you are somewhere else
-— a robot that drops offline matters most when you are driving it from Manual.
+— a robot that drops offline matters most when you are driving it by hand
+from the tray's Manual Control tab.
 """
 
 from __future__ import annotations

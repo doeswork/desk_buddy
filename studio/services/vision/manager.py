@@ -146,6 +146,9 @@ class VisionServiceManager(QObject):
         self._detection_timer = QTimer(self)
         self._detection_timer.setSingleShot(True)
         self._detection_timer.timeout.connect(self._detection_timed_out)
+        # Studio owns no worker yet, so every config already on disk was left
+        # by a previous run that did not get to clean up after itself.
+        self._sweep_stale_configs()
 
     @property
     def state(self) -> VisionState:
@@ -604,6 +607,11 @@ class VisionServiceManager(QObject):
         self._credentials = credentials
         if self._worker_running():
             self.stop()
+        # `stop()` removes the config only when a worker was actually running.
+        # A relaunch over a dead worker — a crash, or a failed start — would
+        # otherwise strand the previous file, and these hold broker
+        # connection details, so they must not accumulate.
+        self._remove_launch_config()
         launch_id = uuid.uuid4().hex
         config = self._write_config(
             manifest, cache_dir=self._model_path(manifest),
@@ -914,6 +922,29 @@ class VisionServiceManager(QObject):
         if self._launch_config is not None:
             self._launch_config.unlink(missing_ok=True)
         self._launch_config = None
+
+    def _sweep_stale_configs(self) -> None:
+        """Delete launch configs no live worker is reading.
+
+        A config outlives its worker whenever Studio does not shut it down
+        itself — a crash, a kill, a machine that lost power. Nothing ever
+        reads one again, but each holds the broker host and the account the
+        detector authenticates with, so leaving them to pile up spreads
+        those across a directory that only grows.
+        """
+        keep = self._launch_config
+        try:
+            stale = sorted((self.root / "configs").glob("detector-*.json"))
+        except OSError:
+            return
+        for path in stale:
+            if keep is not None and path == keep:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                # A file we cannot remove is not worth failing a launch over.
+                continue
 
     def _clean_path(self, path: Path) -> None:
         candidate = path.resolve()

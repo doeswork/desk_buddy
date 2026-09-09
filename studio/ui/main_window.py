@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
             self._traffic_recorder,
             lambda: self.debug_dock.setVisible(False),
             broker_host=network.broker_host,
+            current_page=self._page_widget,
+            page_header=self._page_header,
         )
 
         self.debug_dock = QDockWidget("Debug Tray", self)
@@ -144,6 +146,43 @@ class MainWindow(QMainWindow):
         self.debug_toggle.setText("Debug Tray")
         self.debug_toggle.setShortcut("Ctrl+`")
         self.view_menu.addAction(self.debug_toggle)
+
+    def _page_widget(self) -> list[tuple[str, QWidget | None]]:
+        """What the Page Text tab reads: the toolbar, then the page.
+
+        Not the whole window. The menu bar, the workspace bar and the tray
+        itself are chrome the reader already knows about, and the tray would
+        be describing itself. The toolbar is the one piece of chrome that
+        earns its place: it holds the workspace's verbs, and "the Start
+        button was greyed out" is exactly the kind of thing this tab exists
+        to carry — it belongs to the workspace rather than the page, so the
+        page's own widget would miss it.
+
+        The page is read only if it has been built, so inspecting a
+        workspace never constructs a screen the user has not opened.
+        """
+        page = self.workspace.page
+        return [
+            ("Toolbar", self.toolbar),
+            (f"Page: {page.label}" if page.label else "Page", page.built()),
+        ]
+
+    def _page_header(self) -> list[str]:
+        """Where the capture was taken: the workspace, and the page in it.
+
+        Read off the navigation rather than off the widgets. A page's title
+        label is what it chose to display and need not match the name the
+        user clicked to get there; the keys are what the app itself
+        navigates by, so they are what a bug report should be able to quote
+        back. Both name and key go down: the label is what the reader
+        recognizes, the key is what a developer greps for.
+        """
+        workspace = self.workspace
+        page = workspace.page
+        return [
+            f"Workspace: {workspace.label} ({workspace.key})",
+            f"Page: {page.label} ({page.key})",
+        ]
 
     def _build_workspaces(self) -> None:
         self.stack = QStackedWidget()

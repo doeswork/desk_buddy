@@ -74,6 +74,9 @@ class NetworkWorkspace(Workspace):
         self.grant_problem = ""
         self.setup = Coordinator()
         self._setup_timer = None
+        # Whether the in-flight attempt is a passive revisit, which may report
+        # a problem but must never pause setup or prompt for a password.
+        self._setup_verify_only = False
         # Applying passwd/ACL edits is intentionally independent of setup.
         # A refused reload must not turn a healthy broker into a failed one.
         self.account_reload = AccountReloadCoordinator()
@@ -101,14 +104,24 @@ class NetworkWorkspace(Workspace):
         return self.environment.wsl and host in ("", "localhost", "127.0.0.1", "::1")
 
     def activate(self) -> None:
-        """Check/setup MQTT after an explicit Network visit or launch hook."""
+        """Check/setup MQTT after an explicit Network visit or launch hook.
+
+        A revisit re-verifies, but never escalates: setup that has already run
+        once in this session re-checks in verify-only mode, so a precondition
+        that keeps reading as unmet reports itself on the page instead of
+        raising a password prompt on every visit to Network. "Retry setup" is
+        the explicit gesture that may ask for authorization.
+        """
         if self.robot_access.running or self.account_reload.running:
             return
         if self.setup.status.state == "ready" and not self.setup.running:
             self.setup.attempted = False
+            self.start_setup(verify_only=True)
+            return
         self.start_setup()
 
-    def start_setup(self, *, retry: bool = False, action: str = "setup") -> None:
+    def start_setup(self, *, retry: bool = False, action: str = "setup",
+                    verify_only: bool = False) -> None:
         store = settings()
         if self.setup.running or (self.setup.attempted and not retry):
             return
@@ -121,9 +134,11 @@ class NetworkWorkspace(Workspace):
                        user=name, password=password, port=system.port(store),
                        host=store.get(keys.SYSTEM_BROKER_HOST), action=action,
                        robot_host=store.get(keys.SYSTEM_BROKER_ROBOT_HOST),
-                       network_ready=store.get(keys.SYSTEM_BROKER_NETWORK_READY))
+                       network_ready=store.get(keys.SYSTEM_BROKER_NETWORK_READY),
+                       verify_only=verify_only)
         if not self.setup.start(request, retry=retry):
             return
+        self._setup_verify_only = verify_only
         store.set(keys.SYSTEM_BROKER_SETUP_PAUSED, action == "revoke")
         store.set(keys.SYSTEM_BROKER_VERIFIED, False)
         store.sync()
@@ -149,7 +164,12 @@ class NetworkWorkspace(Workspace):
         store.set(keys.SYSTEM_BROKER_VERIFIED, state.connected)
         store.set(keys.SYSTEM_BROKER_ROBOT_HOST, state.robot_host)
         store.set(keys.SYSTEM_BROKER_NETWORK_READY, state.network_ready)
-        store.set(keys.SYSTEM_BROKER_SETUP_PAUSED, state.state in ("failed", "cancelled"))
+        # A verify-only re-check never asked for authorization, so its failure
+        # says the preconditions still read as unmet -- not that the user
+        # declined. Latching the pause here would disable automatic setup on
+        # the strength of a check the user never saw.
+        if not self._setup_verify_only:
+            store.set(keys.SYSTEM_BROKER_SETUP_PAUSED, state.state in ("failed", "cancelled"))
         if state.reload_rule:
             store.set(keys.SYSTEM_BROKER_RELOAD_RULE, True)
         if state.access_revoked:

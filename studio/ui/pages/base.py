@@ -151,6 +151,16 @@ class Page:
         self._widget = scroll
         return scroll
 
+    def built(self) -> QWidget | None:
+        """This page's widget if it has one, without building it.
+
+        `widget()` is the builder and always returns something. A reader
+        that only wants to look at what is already on screen — the tray's
+        Page Text tab — must not be the thing that constructs a page, so it
+        asks this instead and gets None for a page never visited.
+        """
+        return self._widget
+
     def rebuild(self) -> None:
         """Rebuild the header and body in place, after this page's state
         changed.

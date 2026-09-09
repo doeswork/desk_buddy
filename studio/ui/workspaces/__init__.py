@@ -1,4 +1,4 @@
-"""The five workspaces, in the workspace bar order.
+"""The four workspaces, in the workspace bar order.
 
 A workspace is a top-level area and owns many pages; the workspace bar switches between
 workspaces, the side panel switches between one workspace's pages.
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from .base import Workspace
 from .calibration import CalibrationWorkspace
-from .manual import ManualWorkspace
 from .network import NetworkWorkspace
 from .vision import VisionWorkspace
 from .workflows import WorkflowsWorkspace
@@ -22,7 +21,6 @@ WORKSPACE_CLASSES = [
     CalibrationWorkspace,
     WorkflowsWorkspace,
     VisionWorkspace,
-    ManualWorkspace,
 ]
 
 
