@@ -1,8 +1,8 @@
 """Reach and Grab: approach distance and grip force for picking things up.
 
 `detect_object` is a photo action (MQTT_SPEC.md §6), like Visual's
-`calibrate_depth` — same reply shape, same scope for this pass: trigger the
-capture and confirm it was requested, without decoding the binary frame or
+`calibrate_depth`. This page waits for the firmware's terminal capture event
+without decoding the binary frame or
 driving the external reach-and-grab orchestration described in §6's "External
 reach-and-grab orchestration" (that is a Vision-server flow to monitor, not
 one for this page to replay).
@@ -43,9 +43,6 @@ class ReachGrabPage(StepPage):
         phrase = self._phrase.strip() or None
         action_id = send_detect_object(client, self.workspace.robot, phrase=phrase)
         self.send(action_id, waiting_text="Requesting a detection capture…")
-
-    def is_terminal(self, payload: dict) -> bool:
-        return payload.get("status") == "in_progress" and payload.get("log") == "sent"
 
     def on_completed(self, payload: dict) -> None:
         super().on_completed({"captured": True, "phrase": self._phrase})

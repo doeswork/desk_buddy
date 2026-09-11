@@ -7,6 +7,7 @@ from .commands import (
     describe_ports,
     mqtt_provisioning_command,
     parse_usb_ports,
+    profile_provisioning_command,
     wifi_provisioning_command,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "describe_ports",
     "mqtt_provisioning_command",
     "parse_usb_ports",
+    "profile_provisioning_command",
     "wifi_provisioning_command",
 ]

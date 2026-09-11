@@ -532,6 +532,79 @@ class BrokerReport:
         return chip_for(self.port)
 
 
+@dataclass(frozen=True)
+class BrokerHealth:
+    """The one liveness answer shared by the broker chrome and Network.
+
+    ``windows_forwarding_listener`` is ``None`` until WSL has actually
+    inspected the Windows boundary.  Unknown is intentionally different from
+    false: dismissing an administrator prompt must not be presented as a
+    confirmed forwarding failure.
+    """
+
+    port: int
+    local_listener: bool
+    windows_forwarding_listener: bool | None = None
+    detail: str = ""
+
+    @property
+    def listening(self) -> bool:
+        return self.local_listener and self.windows_forwarding_listener is not False
+
+    @property
+    def issue(self) -> bool:
+        return not self.listening
+
+    @property
+    def available(self) -> bool:
+        """Compatibility-friendly name for callers asking if it can be used."""
+        return self.listening
+
+    @property
+    def tooltip(self) -> str:
+        return self.detail or f"MQTT broker is not listening on port {self.port}."
+
+    @property
+    def chip(self) -> str:
+        return chip_for(self.port if self.local_listener else 0)
+
+
+def broker_health(
+    *,
+    backend=None,
+    windows_forwarding_listener: bool | None = None,
+    broker=None,
+) -> BrokerHealth:
+    """Probe the local MQTT listener once and combine an optional WSL result."""
+    from . import system
+
+    broker = broker or system.describe(backend, connect=False)
+    port = broker.port or SYSTEM_PORT
+    if not broker.reachable:
+        return BrokerHealth(
+            port=port,
+            local_listener=False,
+            windows_forwarding_listener=windows_forwarding_listener,
+            detail=f"MQTT broker is not listening on port {port}.",
+        )
+    if windows_forwarding_listener is False:
+        return BrokerHealth(
+            port=port,
+            local_listener=True,
+            windows_forwarding_listener=False,
+            detail=(
+                f"MQTT broker is listening locally on port {port}, but the "
+                "Windows-facing WSL forwarding listener is unavailable."
+            ),
+        )
+    return BrokerHealth(
+        port=port,
+        local_listener=True,
+        windows_forwarding_listener=windows_forwarding_listener,
+        detail=f"MQTT broker is listening on port {port}.",
+    )
+
+
 def chip_for(port: int) -> str:
     """The chip's wording, in one place."""
     if not port:

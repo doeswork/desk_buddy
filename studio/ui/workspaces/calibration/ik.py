@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ....services.network.pub_sub.calibration_messages import send_hover_point
 from ....services.network.pub_sub.manual_messages import send_servo
+from ....services.network.pub_sub.robot_topics import heartbeat_topic
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 from .arm_pose import POSES, ArmPoseView
 from .step import StepPage
@@ -79,7 +80,7 @@ class IKPage(StepPage):
         if not robot or self._live_unsubscribe is not None:
             return
         self._live_unsubscribe = self.workspace.client().subscribe(
-            f"{robot}/HEARTBEAT", self._on_heartbeat
+            heartbeat_topic(robot), self._on_heartbeat
         )
 
     def _on_heartbeat(self, _topic: str, payload: dict) -> None:

@@ -11,20 +11,19 @@ MQTT credentials are never passed to PowerShell.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import ipaddress
 import json
 import queue
 import subprocess
 import sys
-import tempfile
 import threading
 import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..broker.setup_platform import Environment, executable, run
+from ...wsl import windows as host_windows
 
 
 @dataclass(frozen=True)
@@ -35,10 +34,10 @@ class AccessStatus:
     ready: bool = False
     detail: str = ""
     action: str = ""
+    checked: bool = False
 
 
-class AuthorizationCancelled(RuntimeError):
-    pass
+AuthorizationCancelled = host_windows.AuthorizationCancelled
 
 
 def _trace(message: str) -> None:
@@ -56,21 +55,10 @@ def _result_detail(result: subprocess.CompletedProcess) -> str:
 
 
 def powershell(script: str, *, timeout: int = 30) -> subprocess.CompletedProcess:
-    tool = executable("powershell.exe")
-    if not tool:
-        raise RuntimeError(
-            "Windows PowerShell is unavailable. Enable WSL Windows "
-            "interoperability, then retry."
-        )
-    encoded = base64.b64encode(script.encode("utf-16le")).decode()
-    return run(
-        [tool, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-        timeout=timeout,
-    )
+    return host_windows.powershell(script, timeout=timeout, runner=run, locator=executable)
 
 
-def quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+quote = host_windows.quote
 
 
 def decode(result: subprocess.CompletedProcess) -> dict:
@@ -144,6 +132,7 @@ $old = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
 $owned = [bool]$old
 $rule = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
 $needs = $false
+$reason = ''
 if ($rule -and -not $old) {{ throw 'A firewall rule with this name already exists and is not owned by Studio.' }}
 if (-not $old -or $old.HostAddress -ne $hostAddress -or $old.Target -ne $target -or $old.Port -ne $port -or $old.Mode -ne $mode -or $old.Profile -ne $profile -or $old.Subnet -ne $subnet) {{ $needs = $true }}
 $filter = $rule | Get-NetFirewallPortFilter
@@ -168,6 +157,17 @@ if ($mode -eq 'nat') {{
     if (-not ($current | Where-Object {{ $_.Address -eq $hostAddress -and $_.Target -eq $target -and $_.TargetPort -eq $port }})) {{ $needs = $true }}
     $listener = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Where-Object {{ $_.LocalAddress -in @($hostAddress, '0.0.0.0', '::') }})
     if ($listener.Count -and -not $current.Count) {{ throw 'Another Windows application is using the broker port. It was preserved.' }}
+    # A registry entry can survive after its live listener has disappeared.
+    # Reapply our entry in that case, even when all recorded values match.
+    if (-not $listener.Count) {{
+        $needs = $true
+        $reason = "Windows has no forwarding listener on ${{hostAddress}}:$port. Retry robot access to recreate Studio's forwarding entry."
+    }}
+    $ipHelper = Get-Service -Name iphlpsvc -ErrorAction Stop
+    if ($ipHelper.Status -ne 'Running') {{
+        $needs = $true
+        $reason = 'Windows IP Helper is stopped. Retry robot access to start it and repair forwarding.'
+    }}
 }} else {{
     if (-not $hyperAvailable) {{ throw 'This Windows version cannot configure mirrored WSL firewall rules. Use NAT mode or configure the firewall manually.' }}
     $hyper = Get-NetFirewallHyperVRule -Name $hyperName -ErrorAction SilentlyContinue
@@ -175,6 +175,10 @@ if ($mode -eq 'nat') {{
     if (-not $hyper -or $hyper.LocalPorts -notcontains "$port" -or ($hyper.RemoteAddresses -notcontains $subnet -and $hyper.RemoteAddresses -notcontains $subnetMask)) {{ $needs = $true }}
 }}
 if ($needs -and $apply) {{
+    if ($mode -eq 'nat' -and $ipHelper.Status -ne 'Running') {{
+        Start-Service -Name iphlpsvc -ErrorAction Stop
+        (Get-Service -Name iphlpsvc).WaitForStatus('Running', [TimeSpan]::FromSeconds(10))
+    }}
     # All conflicts are checked before the first mutation. Pending values make
     # an interrupted write recognizable and safely repairable on the next run.
     New-Item -Path $key -Force | Out-Null
@@ -213,13 +217,18 @@ if ($needs -and $apply) {{
 }}
 $reachable = $false
 if (-not $needs) {{
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {{
-        $task = $client.ConnectAsync($hostAddress, $port)
-        if ($task.Wait(3000) -and $client.Connected) {{ $reachable = $true }}
-    }} catch {{ $reachable = $false }} finally {{ $client.Dispose() }}
+    # PortProxy may take a moment to establish its listener after netsh exits.
+    $attempts = if ($apply) {{ 5 }} else {{ 1 }}
+    for ($attempt = 0; $attempt -lt $attempts -and -not $reachable; $attempt++) {{
+        if ($attempt -gt 0) {{ Start-Sleep -Milliseconds 400 }}
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {{
+            $task = $client.ConnectAsync($hostAddress, $port)
+            if ($task.Wait(3000) -and $client.Connected) {{ $reachable = $true }}
+        }} catch {{ $reachable = $false }} finally {{ $client.Dispose() }}
+    }}
 }}
-@{{ needed=$needs; owned=$owned; host=$hostAddress; reachable=$reachable }} | ConvertTo-Json -Compress
+@{{ needed=$needs; owned=$owned; host=$hostAddress; reachable=$reachable; reason=$reason }} | ConvertTo-Json -Compress
 }} catch {{ @{{ error=$_.Exception.Message }} | ConvertTo-Json -Compress }}
 """
 
@@ -346,13 +355,16 @@ def _inspect(context: dict) -> AccessStatus:
                 "repair",
                 "Windows robot access needs repair.",
                 detail=(
+                    reply.get("reason") or
                     "The Windows or WSL network address, broker port, network "
                     "profile, or forwarding rules changed."
                 ),
+                checked=True,
             )
         return AccessStatus(
             "disabled",
             "Robots cannot reach this WSL broker until Windows access is enabled.",
+            checked=True,
         )
     if not reply.get("reachable"):
         return AccessStatus(
@@ -363,6 +375,7 @@ def _inspect(context: dict) -> AccessStatus:
                 "Windows-facing MQTT port did not answer. Check the broker "
                 "and the Windows IP Helper service, then retry."
             ),
+            checked=True,
         )
     return AccessStatus(
         "ready",
@@ -373,6 +386,7 @@ def _inspect(context: dict) -> AccessStatus:
             "Windows access is configured and the port answered locally. "
             "A physical robot connection has not yet been confirmed."
         ),
+        checked=True,
     )
 
 
@@ -390,89 +404,9 @@ def inspect(env: Environment, port: int, emit=lambda *_args, **_fields: None) ->
 
 
 def _elevated(script: str, windows_temp: str, *, timeout: int = 180) -> dict:
-    converted = run(["wslpath", "-u", windows_temp])
-    if converted.returncode or not converted.stdout.strip():
-        raise RuntimeError("Cannot access the Windows temporary directory.")
-    with tempfile.TemporaryDirectory(
-        prefix="desk-buddy-", dir=converted.stdout.strip()
-    ) as directory:
-        output = Path(directory) / "result.json"
-        program = Path(directory) / "network.ps1"
-        converted_paths = {
-            name: run(["wslpath", "-w", str(path)])
-            for name, path in (("output", output), ("program", program))
-        }
-        if any(
-            result.returncode or not result.stdout.strip()
-            for result in converted_paths.values()
-        ):
-            raise RuntimeError("Cannot create the Windows setup result file.")
-        win_output = converted_paths["output"].stdout.strip()
-        win_program = converted_paths["program"].stdout.strip()
-        program.write_text(
-            "& {\n" + script + "\n} | Out-File -LiteralPath "
-            + quote(win_output) + " -Encoding utf8\n",
-            encoding="utf-8-sig",
-        )
-        # Keep the outer command tiny. Encoding the complete network program
-        # here and then encoding this launcher again exceeds Windows' process
-        # command-line limit as the script grows, yielding no result file.
-        launcher = (
-            "$ErrorActionPreference = 'Stop'; "
-            "$reply = try { "
-            "$exe = Join-Path $PSHOME 'powershell.exe'; "
-            f"$program = {quote(win_program)}; "
-            "$args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass "
-            "-File \"' + $program + '\"'; "
-            "$p = Start-Process -FilePath $exe -Verb RunAs -Wait -PassThru "
-            "-ArgumentList $args; "
-            "@{ exitCode=[int]$p.ExitCode } "
-            "} catch { @{ error=$_.Exception.Message; "
-            "nativeCode=[int]$_.Exception.NativeErrorCode } }; "
-            "$reply | ConvertTo-Json -Compress"
-        )
-        _trace(
-            "requesting Windows administrator approval "
-            f"program={win_program} result={win_output}"
-        )
-        result = powershell(launcher, timeout=timeout)
-        _trace("administrator launcher finished: " + _result_detail(result))
-        try:
-            launch = json.loads((result.stdout or "").lstrip("\ufeff").strip())
-        except ValueError:
-            launch = {}
-        if launch.get("nativeCode") == 1223:
-            raise AuthorizationCancelled(
-                "Windows authorization was cancelled. Studio remains "
-                "connected locally."
-            )
-        if launch.get("error"):
-            raise RuntimeError(
-                "Windows could not start the administrator helper: "
-                + str(launch["error"])
-            )
-        if result.returncode or launch.get("exitCode") not in (0, None):
-            raise RuntimeError(
-                "Windows administrator helper failed ("
-                + _result_detail(result)
-                + f", child exit={launch.get('exitCode')})."
-            )
-        if not output.exists():
-            raise RuntimeError(
-                "Windows administrator helper returned without a result file "
-                f"({win_output}; {_result_detail(result)})."
-            )
-        try:
-            reply = json.loads(output.read_text(encoding="utf-8-sig"))
-        except ValueError as error:
-            raise RuntimeError(
-                "Windows did not return the network setup result."
-            ) from error
-        if reply.get("error"):
-            _trace("administrator helper reported: " + str(reply["error"]))
-            raise RuntimeError(reply["error"])
-        _trace("administrator helper completed successfully")
-        return reply
+    return host_windows.elevated(script, windows_temp, timeout=timeout,
+                                 runner=run, ps_runner=powershell, trace=_trace,
+                                 program_name="network.ps1")
 
 
 def enable(env: Environment, port: int, emit=lambda *_args, **_fields: None) -> AccessStatus:
@@ -512,6 +446,7 @@ def disable(env: Environment, port: int, emit=lambda *_args, **_fields: None) ->
     return AccessStatus(
         "disabled",
         "Windows robot access is disabled.",
+        checked=True,
     )
 
 

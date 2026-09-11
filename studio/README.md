@@ -46,6 +46,10 @@ is the Windows LAN address; `0.0.0.0` is only a listener bind address. A ready
 card verifies the Windows-facing TCP port, not a connection from a physical
 robot.
 
+In NAT mode, a saved forwarding entry can exist without an active Windows
+listener. Studio detects this as a repair: **Retry robot access** recreates
+its forwarding entry, starts IP Helper if stopped, and checks the port again.
+
 Cancelled or failed setup stays paused until **Retry setup**. Revoking account
 management also pauses automatic setup; the system broker continues running.
 Native Windows and macOS retain manual installation instructions.
@@ -69,6 +73,19 @@ automated tests do not establish that platform coverage.
 The Flash Firmware tab requires `arduino-cli` and the Espressif ESP32 board
 core. Its three sketch libraries are pinned under `../firmware/vendor` and do
 not need to be installed separately in the Arduino IDE.
+
+Flash Firmware is a guided setup: save a named robot profile, choose an
+existing local Mosquitto account or create a new account scoped to
+`<username>/#`, then configure Wi-Fi and MQTT over USB serial after upload.
+The profile is kept in Studio's user-only app data and the ESP32 keeps the
+same values in its `wifi` and `mqtt` NVS namespaces, so a power cycle does not
+require joining the startup access point again. Studio confirms the combined
+serial save and the robot's MQTT heartbeat before registering it under
+Network → Robots. **Erase first** clears NVS; the selected profile is restored
+automatically when the USB link is available.
+If upload succeeds but serial acknowledgement is interrupted, **Retry Robot
+Setup** resends the saved combined profile after the next firmware heartbeat;
+it does not compile or flash the ESP32 again.
 
 ## Package it
 

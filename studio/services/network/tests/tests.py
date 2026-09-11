@@ -271,6 +271,37 @@ def test_chip_says_where_the_broker_is() -> None:
     assert install.chip_for(1883) == "● broker on 1883"
 
 
+def test_broker_health_distinguishes_local_listener_from_missing_listener() -> None:
+    from ..broker import system
+
+    up = system.SystemBroker(
+        host="127.0.0.1", port=1883, reachable=True, user="studio",
+        has_password=True, installed=True, service_active=True,
+    )
+    down = system.SystemBroker(
+        host="127.0.0.1", port=1883, reachable=False, user="studio",
+        has_password=True, installed=True, service_active=True,
+    )
+    with mock.patch.object(system, "describe", return_value=up):
+        assert not install.broker_health().issue
+    with mock.patch.object(system, "describe", return_value=down):
+        health = install.broker_health()
+        assert health.issue
+        assert "1883" in health.tooltip
+
+
+def test_broker_health_only_warns_for_confirmed_wsl_forwarding_failure() -> None:
+    from ..broker import system
+
+    up = system.SystemBroker(
+        host="127.0.0.1", port=1883, reachable=True, user="studio",
+        has_password=True, installed=True, service_active=True,
+    )
+    with mock.patch.object(system, "describe", return_value=up):
+        assert not install.broker_health(windows_forwarding_listener=None).issue
+        assert install.broker_health(windows_forwarding_listener=False).issue
+
+
 # ---- Firewall detection --------------------------------------------------
 
 def test_firewall_hint_matches_the_detected_firewall() -> None:

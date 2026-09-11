@@ -1,7 +1,7 @@
 """MQTT commands sent by Studio's Manual Controller.
 
 The page owns presentation; this module owns the firmware contract. Every
-command is addressed to the selected robot's ``{user}/test`` topic and is
+command is addressed to the selected robot's ``{user}/commands`` topic and is
 published through :class:`MqttClient`, whose connection authenticates with
 Studio's configured MQTT credentials.
 """
@@ -9,6 +9,7 @@ Studio's configured MQTT credentials.
 from __future__ import annotations
 
 from .client import MqttClient
+from .robot_topics import command_topic
 
 SENDER = "studio"
 JOINTS = ("ELBOW", "WRIST", "TWIST")
@@ -17,13 +18,9 @@ BASE_DIRECTIONS = ("LEFT", "RIGHT")
 BASE_SPEEDS = ("veryslow", "slow", "regular", "fast", "superfast")
 
 
-def topic_for(robot: str) -> str:
-    return f"{robot}/test"
-
-
 def _send(client: MqttClient, robot: str, action: str, **fields) -> str:
     return client.publish(
-        topic_for(robot),
+        command_topic(robot),
         {"sender": SENDER, "action": action, **fields},
     )
 

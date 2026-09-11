@@ -20,11 +20,19 @@ void ActionController::dispatch(const String& message) {
     // ignore our own status messages
     const char* sender = doc["sender"].as<const char*>();
     if (sender && strcmp(sender, "firmware") == 0) return;
+    if (!sender || !sender[0]) {
+        Serial.println("[Missing sender]");
+        return;
+    }
 
     // extract action_id (if present)
     String actionId;
     if      (doc["action_id"].is<const char*>()) actionId = doc["action_id"].as<const char*>();
     else if (doc["action_id"].is<long>())        actionId = String(doc["action_id"].as<long>());
+    if (!actionId.length()) {
+        Serial.println("[Missing action_id]");
+        return;
+    }
 
     // set workflow context for all outgoing messages in this dispatch
     if (doc["workflow_id"].is<long>()) {
@@ -75,9 +83,7 @@ void ActionController::dispatch(const String& message) {
     }
 
     // publish in_progress for known actions
-    if (actionId.length()) {
-        BuddyMQTT::sendInProgress(actionId, actionType, phrase, nullptr, -1, useModelJson);
-    }
+    BuddyMQTT::sendInProgress(actionId, actionType, phrase, nullptr, -1, useModelJson);
 
     ActionRouter::Context ctx{message, actionId, actionType, phrase, useModelJson};
     String detailsJson;
@@ -105,8 +111,14 @@ void ActionController::dispatch(const String& message) {
         BuddyMQTT::sendCompletedDetails(actionId, route->replyLabel, detailsJson, "", status, phrase);
         break;
 
-      case ActionRouter::ReplyStyle::PhotoInProgress:
-        BuddyMQTT::sendInProgress(actionId, actionType, phrase, "sent", -1, useModelJson);
+      case ActionRouter::ReplyStyle::PhotoTerminal:
+        if (ok) {
+          BuddyMQTT::sendCompleted(actionId, actionType, "completed", phrase);
+        } else {
+          BuddyMQTT::sendCompletedDetails(
+            actionId, "error", detailsJson, actionType, "failed", phrase
+          );
+        }
         break;
 
       case ActionRouter::ReplyStyle::HandlerOwned:

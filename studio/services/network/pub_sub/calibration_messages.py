@@ -5,23 +5,20 @@ which ones are required are a firmware contract, not a page's business. Each
 function here builds one `calibrate`-family request and publishes it,
 returning the action_id the caller subscribes on for the reply.
 
-    {mqtt_user}/test    every calibration request and response, per §1
+    {mqtt_user}/commands    every calibration request, per §1
 """
 
 from __future__ import annotations
 
 from .client import MqttClient
+from .robot_topics import command_topic
 
 SENDER = "calibration_tool"
 
 
-def topic_for(robot: str) -> str:
-    return f"{robot}/test"
-
-
 def _send(client: MqttClient, robot: str, action: str, **fields) -> str:
     payload = {"sender": SENDER, "action": action, **fields}
-    return client.publish(topic_for(robot), payload)
+    return client.publish(command_topic(robot), payload)
 
 
 # ---- Base + Perch (§4.3, §5.1) --------------------------------------------
@@ -83,9 +80,8 @@ def send_hover_point(
 
 # ---- Visual / Reach and Grab: photo actions (§6) --------------------------
 # These trigger a capture rather than a `calibrate` write; the firmware's
-# only reply is an in_progress/log:"sent" pair plus a binary photo frame, not
-# a completed/failed calibration result. Full frame decoding is out of scope
-# for this pass — see PLAN.md — so these only confirm the request went out.
+# frame is published separately from the terminal completed/failed event. Full
+# frame decoding is owned by Vision rather than these command builders.
 
 def send_calibrate_depth(client: MqttClient, robot: str) -> str:
     return _send(client, robot, "calibrate_depth")

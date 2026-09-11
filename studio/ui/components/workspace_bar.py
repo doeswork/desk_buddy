@@ -13,8 +13,8 @@ the Network workspace because they stay relevant while you are somewhere else
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup
-from PySide6.QtWidgets import QLabel, QMainWindow, QToolBar
+from PySide6.QtGui import QAction, QActionGroup, QIcon
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QStyle, QToolBar
 
 from .spacer import spacer
 
@@ -31,8 +31,10 @@ class WorkspaceBar(QToolBar):
         self._group = QActionGroup(window)
         self._group.setExclusive(True)
         self.actions_by_index: list[QAction] = []
+        self._buttons_by_action: dict[QAction, object] = {}
+        self._workspaces = list(workspaces)
 
-        for index, workspace in enumerate(workspaces):
+        for index, workspace in enumerate(self._workspaces):
             action = QAction(workspace.label, window)
             action.setCheckable(True)
             action.triggered.connect(lambda _checked, i=index: on_select(i))
@@ -45,6 +47,7 @@ class WorkspaceBar(QToolBar):
             button = self.widgetForAction(action)
             if button is not None:
                 button.setCursor(Qt.PointingHandCursor)
+                self._buttons_by_action[action] = button
 
         self.addWidget(spacer())
 
@@ -69,3 +72,25 @@ class WorkspaceBar(QToolBar):
 
     def set_robot(self, text: str) -> None:
         self.connection_label.setText(text)
+
+    def set_issue(self, workspace_key: str, issue: bool, detail: str = "") -> None:
+        """Put a theme-aware warning icon on one workspace tab."""
+        for action, workspace in zip(self.actions_by_index, self._workspaces):
+            if workspace.key == workspace_key:
+                self._set_action_issue(
+                    action, issue, detail, self._buttons_by_action.get(action)
+                )
+                return
+
+    @staticmethod
+    def _set_action_issue(action: QAction, issue: bool, detail: str, button=None) -> None:
+        if issue:
+            action.setIcon(QApplication.style().standardIcon(QStyle.SP_MessageBoxWarning))
+            action.setToolTip(detail)
+            if button is not None:
+                button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        else:
+            action.setIcon(QIcon())
+            action.setToolTip("")
+            if button is not None:
+                button.setToolButtonStyle(Qt.ToolButtonTextOnly)

@@ -2,6 +2,7 @@
 
 #include "camera_pins.h"
 #include "ActionPhoto.h"
+#include "CameraFrameLease.h"
 #include "BuddyWifi.h"
 #include "BuddyMQTT.h"
 
@@ -13,6 +14,25 @@
 
 namespace {
   bool cameraInited = false;
+
+  struct CaptureDiagnostics {
+    const String& id;
+    uint32_t started = millis();
+    uint32_t captureMs = 0;
+    uint32_t publishMs = 0;
+    size_t bytes = 0;
+    const char* stage = "capture";
+    ~CaptureDiagnostics() {
+      if (!bytes) captureMs = millis() - started;
+      Serial.printf("[photo] action_id=%s capture_ms=%lu publish_ms=%lu bytes=%u internal_heap=%u psram=%u stage=%s elapsed_ms=%lu\n",
+        id.c_str(), (unsigned long)captureMs, (unsigned long)publishMs,
+        (unsigned)bytes,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), stage,
+        (unsigned long)(millis() - started));
+    }
+  };
+
 
   String readJsonString(const JsonVariantConst& v) {
     if (v.is<const char*>()) {
@@ -35,13 +55,13 @@ namespace {
   }
 
   void logMem(const char* tag) {
-    size_t dram = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t dram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     size_t ps   = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     Serial.printf("[%s] Free DRAM: %u  Free PSRAM: %u\n", tag, (unsigned)dram, (unsigned)ps);
   }
 
   bool tryInit(framesize_t fs, int jpeg_quality) {
-    camera_config_t config;
+    camera_config_t config{};
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer   = LEDC_TIMER_0;
     config.pin_pwdn     = PWDN_GPIO_NUM;
@@ -129,20 +149,28 @@ namespace {
     return cameraInited;
   }
 
+  bool failPhoto(String& details, const char* code, const char* message) {
+    StaticJsonDocument<192> error;
+    error["code"] = code;
+    error["message"] = message;
+    serializeJson(error, details);
+    return false;
+  }
+
 }
 
 void ActionPhoto::initializeCamera() {
   initCamera();
 }
 
-void ActionPhoto::run(const String &message, int useModel) {
+bool ActionPhoto::run(const String &message, String& errorDetails, int useModel) {
   // Parse JSON payload
   DynamicJsonDocument doc(512);
   auto err = deserializeJson(doc, message);
   if (err) {
     Serial.print("JSON parse error: ");
     Serial.println(err.c_str());
-    return;
+    return failPhoto(errorDetails, "invalid_request", "The photo request is not valid JSON.");
   }
 
   String sender   = readJsonString(doc["sender"]);
@@ -164,19 +192,22 @@ void ActionPhoto::run(const String &message, int useModel) {
   Serial.println("this is the action ^");
   if (!(action == "photo" || action == "detect_color" || action == "detect_object" || action == "calibrate_depth")) {
     Serial.println("Not a photo action; skipping");
-    return;
+    return failPhoto(errorDetails, "unsupported_photo_action", "The requested action does not capture a photo.");
   }
   if (!BuddyWifi::isConnected()) {
     Serial.println("WiFi not connected; skipping camera");
-    return;
+    return failPhoto(errorDetails, "wifi_unavailable", "Wi-Fi is not connected.");
   }
+
+  CaptureDiagnostics diagnostics{actionId};
 
   // Ensure camera ready (with fallbacks)
   if (!cameraInited) {
     initCamera();
     if (!cameraInited) {
       Serial.println("Camera init failed");
-      return;
+      diagnostics.stage = "camera_init_failed";
+      return failPhoto(errorDetails, "camera_init_failed", "The camera could not be initialized.");
     }
   }
 
@@ -193,24 +224,39 @@ void ActionPhoto::run(const String &message, int useModel) {
     Serial.println("Camera capture failed (fb=null), attempting one recovery re-init...");
     if (!recoverCameraOnce()) {
       Serial.println("Recovery re-init failed");
-      return;
+      diagnostics.stage = "camera_recovery_failed";
+      return failPhoto(errorDetails, "camera_recovery_failed", "The camera could not be reinitialized after a capture failure.");
     }
     fb = esp_camera_fb_get();
     if (!fb) {
       Serial.println("Camera capture failed again");
-      return;
+      diagnostics.stage = "camera_capture_failed";
+      return failPhoto(errorDetails, "camera_capture_failed", "The camera did not return a frame after recovery.");
     }
   }
 
+  CameraFrameLease lease(fb);
+  diagnostics.captureMs = millis() - diagnostics.started;
+  diagnostics.bytes = fb->len;
+  diagnostics.stage = "publish_failed";
+  const uint32_t publishStarted = millis();
   Serial.printf("Photo captured: %d bytes\n", fb->len);
 
-  bool published = BuddyMQTT::publishStatusPhoto(actionId, sender, fb->buf, fb->len, phrase, useModel, useModelJson);
+  bool published = BuddyMQTT::publishPhoto(
+    actionId, action, sender, fb->buf, fb->len, fb->width, fb->height,
+    phrase, useModel, useModelJson
+  );
+  diagnostics.publishMs = millis() - publishStarted;
   if (published) {
-    Serial.printf("Photo payload published to status topic (%d bytes)\n", fb->len);
+    diagnostics.stage = "written";
+    Serial.printf("Photo payload published to photo topic (%d bytes)\n", fb->len);
   } else {
     Serial.println("Photo publish failed");
   }
 
-  // Always return FB to free memory ASAP
-  esp_camera_fb_return(fb);
+  // The lease returns the framebuffer before diagnostics are printed.
+  if (!published) {
+    return failPhoto(errorDetails, "photo_publish_failed", "The complete photo frame could not be published.");
+  }
+  return true;
 }

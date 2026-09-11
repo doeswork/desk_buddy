@@ -7,7 +7,8 @@ one. Rows are inert until the thing behind them exists.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QWidget
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QListWidget, QListWidgetItem, QStyle, QWidget
 
 
 class SidePanel(QListWidget):
@@ -27,3 +28,14 @@ class SidePanel(QListWidget):
             if not enabled:
                 item.setFlags(Qt.NoItemFlags)
             self.addItem(item)
+
+    def set_issue(self, row: int, issue: bool, detail: str = "") -> None:
+        if not 0 <= row < self.count():
+            return
+        item = self.item(row)
+        if issue:
+            item.setIcon(QApplication.style().standardIcon(QStyle.SP_MessageBoxWarning))
+            item.setToolTip(detail)
+        else:
+            item.setIcon(QIcon())
+            item.setToolTip("")

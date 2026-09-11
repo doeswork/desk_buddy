@@ -81,7 +81,13 @@ VISION_SELECTED_MODEL = Key("vision/selected_model", str, "owlv2-base")
 VISION_ACTIVE_MODEL = Key("vision/active_model", str, "")
 VISION_AUTO_START = Key("vision/auto_start", bool, False)
 
+# Selection only; Studio never attaches a Windows USB device at startup.
+WSL_USB_SELECTION = Key("serial/wsl_usb_selection", str, "")
+ROBOT_SELECTED_PROFILE = Key("serial/robot_selected_profile", str, "")
+
 ALL = (
+    WSL_USB_SELECTION,
+    ROBOT_SELECTED_PROFILE,
     THEME,
     ZOOM_INDEX,
     GEOMETRY,
