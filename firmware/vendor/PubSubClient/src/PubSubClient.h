@@ -106,7 +106,7 @@ private:
    // Returns the size of the header
    // Note: the header is built at the end of the first MQTT_MAX_HEADER_SIZE bytes, so will start
    //       (MQTT_MAX_HEADER_SIZE - <returned size>) bytes into the buffer
-   size_t buildHeader(uint8_t header, uint8_t* buf, uint16_t length);
+   size_t buildHeader(uint8_t header, uint8_t* buf, uint32_t length);
    IPAddress ip;
    const char* domain;
    uint16_t port;
@@ -166,6 +166,8 @@ public:
    // Finish off this publish message (started with beginPublish)
    // Returns 1 if the packet was sent successfully, 0 if there was an error
    int endPublish();
+   // Close an incomplete streamed packet without appending MQTT bytes.
+   void abortPublish();
    // Write a single byte of payload (only to be used with beginPublish/endPublish)
    virtual size_t write(uint8_t);
    // Write size bytes from buffer into the payload (only to be used with beginPublish/endPublish)

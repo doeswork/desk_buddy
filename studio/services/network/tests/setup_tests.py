@@ -424,6 +424,17 @@ class WindowsTests(unittest.TestCase):
         self.assertIn("-LocalPorts $port -RemoteAddresses $subnet", script)
         self.assertNotIn("DefaultInboundAction", script)
 
+    def test_missing_nat_listener_triggers_repair_even_with_matching_rules(self):
+        script = self.script("nat", True)
+        check = script.index("if (-not $listener.Count)")
+        repair = script.index("if ($needs -and $apply)")
+        self.assertLess(check, repair)
+        self.assertIn("$needs = $true", script[check:repair])
+        self.assertIn("portproxy delete v4tov4", script[repair:])
+        self.assertIn("portproxy add v4tov4", script[repair:])
+        self.assertIn("Start-Service -Name iphlpsvc", script[repair:])
+        self.assertNotIn("Restart-Service", script)
+
     def test_public_profile_and_custom_port_are_scoped(self):
         script = windows.network_script(
             name="DeskBuddy-abc123", mode="nat", host="192.168.1.10",
@@ -565,6 +576,30 @@ class WindowsTests(unittest.TestCase):
         status = windows.inspect(WSL, 1883)
         self.assertEqual(status.state, "repair")
         self.assertFalse(status.ready)
+
+    def test_missing_listener_reason_reaches_user_and_retry_rechecks(self):
+        context = dict(name="DeskBuddy-abc123", mode="nat", host="192.168.1.10",
+                       target="172.20.0.2", subnet="192.168.1.0/24", port=1883,
+                       profile="Private", temp="C:\\Temp")
+        missing = dict(needed=True, owned=True, reachable=False,
+                       reason="Windows has no forwarding listener on 192.168.1.10:1883.")
+        ready = dict(needed=False, owned=True, reachable=True, host=context["host"])
+        def result(data):
+            return subprocess.CompletedProcess([], 0, json.dumps(data), "")
+        with mock.patch.object(windows, "_context", return_value=context), \
+                mock.patch.object(windows, "powershell", side_effect=[result(missing), result(missing), result(ready)]), \
+                mock.patch.object(windows, "_elevated", return_value=ready) as elevated:
+            status = windows.inspect(WSL, 1883)
+            self.assertEqual(status.state, "repair")
+            self.assertEqual(status.detail, missing["reason"])
+            self.assertTrue(windows.enable(WSL, 1883).ready)
+        elevated.assert_called_once()
+
+    def test_context_finds_wslinfo_outside_path(self):
+        self.windows_mock()
+        with mock.patch.object(windows, "executable", return_value=""), \
+                mock.patch.object(windows.Path, "exists", return_value=True):
+            self.assertEqual(windows._context(WSL, 1883)["mode"], "nat")
 
     def test_inspection_requires_a_windows_side_tcp_connection(self):
         self.windows_mock()

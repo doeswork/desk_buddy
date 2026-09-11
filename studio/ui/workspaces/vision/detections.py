@@ -46,7 +46,14 @@ class DetectionsPage(Page):
     def status(self) -> str:
         state = self.workspace.manager.state
         if state.pending_detection:
-            return "Detection in progress"
+            stage = {
+                "preparing": "Preparing MQTT connection",
+                "waiting_camera": "Waiting for camera",
+                "capturing": "Robot is capturing",
+                "waiting_detection": "Photo received · waiting for detection",
+                "waiting_photo": "Detection received · waiting for photo",
+            }.get(state.detection_stage, "Detection in progress")
+            return stage + (" · taking longer than expected" if state.detection_delayed else "")
         if self._result and self._result.get("status") == "completed":
             return "Detection preview complete"
         if self._result and self._result.get("status") == "failed":

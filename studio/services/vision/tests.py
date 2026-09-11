@@ -58,6 +58,12 @@ def raises(kind, call) -> Exception:
 class FakeClient:
     def __init__(self, *, running: bool = True) -> None:
         self.running = running
+        self.connected = running
+        self.connection_revision = 0
+        self.acknowledged = True
+        self.accept_publish = True
+        self.connection_watchers = []
+        self.subscription_watchers = []
         self.status = "Connected" if running else "Broker is not running"
         self.json_subscribers: dict[str, list] = {}
         self.raw_subscribers: dict[str, list] = {}
@@ -66,6 +72,23 @@ class FakeClient:
 
     def reconcile(self) -> None:
         pass
+
+    def watch_connection(self, callback):
+        self.connection_watchers.append(callback)
+        return lambda: self.connection_watchers.remove(callback)
+
+    def watch_subscriptions(self, callback):
+        self.subscription_watchers.append(callback)
+        return lambda: self.subscription_watchers.remove(callback)
+
+    def subscriptions_ready(self, topics):
+        return self.connected and self.acknowledged
+
+    def publish_checked(self, topic, payload, *, qos=1):
+        if not self.connected or not self.accept_publish:
+            return False
+        self.publish(topic, payload, qos=qos)
+        return True
 
     def subscribe(self, topic, callback):
         self.json_subscribers.setdefault(topic, []).append(callback)
@@ -326,7 +349,7 @@ def test_robot_preview_is_always_non_motion_and_requires_live_mqtt() -> None:
         )
         action_id = manager.detect_robot("black", "mug")
         topic, body, qos = client.json_sent[-1]
-        assert action_id and topic == "black/test" and qos == 1
+        assert action_id and topic == "black/commands" and qos == 1
         assert body["use_model"] is False
         assert body["model_name"] == BUILTIN_MODELS[0].source
 
@@ -472,7 +495,7 @@ def test_known_vision_account_is_restricted_to_service_and_robot_topics() -> Non
             mock.patch.object(access.system, "accounts", return_value=[known]), \
             mock.patch.object(access.system, "set_topics", return_value=change) as set_topics:
         value = access.ensure_access({})
-    expected = ("vision/#", "black/test", "silver/test")
+    expected = ("vision/#", *(f"{robot}/{kind}" for robot in ("black", "silver") for kind in ("commands", "events", "photos", "vision")))
     set_topics.assert_called_once_with("vision", expected)
     assert value.topics == expected and value.password == "recorded"
 
@@ -506,7 +529,7 @@ def test_vision_acl_with_isolated_mosquitto() -> None:
         acl_file.write_text(
             "user vision\n"
             "topic readwrite vision/#\n"
-            "topic readwrite black/test\n\n"
+            "topic readwrite black/vision\n\n"
             "user observer\n"
             "topic readwrite #\n",
             encoding="utf-8",
@@ -593,8 +616,8 @@ def test_vision_acl_with_isolated_mosquitto() -> None:
             vision.publish("vision/check", b"allowed", qos=1).wait_for_publish(3)
             assert delivered.wait(3) and received[-1] == ("vision/check", b"allowed")
             delivered.clear()
-            vision.publish("black/test", b"robot-allowed", qos=1).wait_for_publish(3)
-            assert delivered.wait(3) and received[-1] == ("black/test", b"robot-allowed")
+            vision.publish("black/vision", b"robot-allowed", qos=1).wait_for_publish(3)
+            assert delivered.wait(3) and received[-1] == ("black/vision", b"robot-allowed")
             delivered.clear()
             vision.publish("unrelated/check", b"denied", qos=1).wait_for_publish(3)
             assert not delivered.wait(0.3)
@@ -618,8 +641,9 @@ class PublishingClient:
     def publish(self, topic, payload, **options) -> None:
         self.sent.append((topic, json.loads(payload), options))
 
-    def subscribe(self, topic, **options) -> None:
+    def subscribe(self, topic, **options):
         self.sent.append(("subscribed", topic, options))
+        return 0, len(self.sent)
 
 
 class FakeDetector:
@@ -642,6 +666,9 @@ def service() -> tuple[DetectorService, PublishingClient]:
     manifest = BUILTIN_MODELS[0]
     instance = DetectorService({
         "launch_id": "test-launch",
+        "robot_routes": [{"robot": "black", "command_topic": "black/commands",
+                          "event_topic": "black/events", "photo_topic": "black/photos",
+                          "result_topic": "black/vision"}],
         "mqtt": {"username_env": USERNAME_ENV, "password_env": PASSWORD_ENV},
         "model": {**manifest.as_dict(), "cache_dir": "/unused"},
     })
@@ -677,8 +704,10 @@ def test_fake_worker_completes_local_preview_and_selects_best_box() -> None:
 def test_fake_worker_republishes_exact_ready_status_after_reconnect() -> None:
     instance, client = service()
     instance.loaded = True
-    instance.robot_topics = ("black/test",)
     instance._on_connect(client, None, None, 0, None)
+    assert not instance._subscriptions_ready
+    for mid in tuple(instance._subscription_mids):
+        instance._on_subscribe(client, None, mid, [1], None)
     status = [body for topic, body, _options in client.sent if topic == "vision/detector/status"][-1]
     assert status["state"] == "ready"
     assert status["model_id"] == BUILTIN_MODELS[0].source
@@ -698,29 +727,28 @@ def test_fake_worker_rejects_motion_model_mismatch_and_reused_ids() -> None:
     }, JPEG)
     instance._receive_local(mismatch)
 
-    message = lambda body: SimpleNamespace(topic="black/test", payload=json.dumps(body).encode())
+    message = lambda body: SimpleNamespace(topic="black/commands", payload=json.dumps(body).encode())
     request = {"action": "detect_object", "action_id": "same", "phrase": "mug", "sender": "studio"}
     instance._on_message(None, None, message(request))
     instance._on_message(None, None, message(request))
     errors = [body["error"]["code"] for _topic, body, _options in client.sent if body.get("status") == "failed"]
     assert errors == [
-        "automatic_execution_not_available", "model_mismatch", "duplicate_action_id",
+        "automatic_execution_not_available", "model_mismatch",
     ]
-    assert instance.requests == {}
+    assert len(instance.requests) == 1
 
 
-def test_robot_photo_action_id_mismatch_is_terminal() -> None:
+def test_robot_photo_action_id_mismatch_is_ignored() -> None:
     instance, client = service()
-    request = SimpleNamespace(topic="black/test", payload=json.dumps({
+    request = SimpleNamespace(topic="black/commands", payload=json.dumps({
         "action": "detect_object", "action_id": "expected", "phrase": "mug", "sender": "studio",
     }).encode())
     instance._on_message(None, None, request)
     instance._on_message(None, None, SimpleNamespace(
-        topic="black/test", payload=encode_frame({"action_id": "different"}, JPEG),
+        topic="black/photos", payload=encode_frame({"action_id": "different"}, JPEG),
     ))
-    result = [body for topic, body, _options in client.sent if topic == "black/test"][-1]
-    assert result["action_id"] == "expected"
-    assert result["error"]["code"] == "action_id_mismatch"
+    assert len(instance.requests) == 1
+    assert not [body for topic, body, _options in client.sent if topic == "black/vision"]
 
 
 def test_malformed_correlated_images_are_terminal_failures() -> None:
@@ -731,13 +759,13 @@ def test_malformed_correlated_images_are_terminal_failures() -> None:
     }, JPEG).replace(b"\xff\xd9}", b"bad}")
     instance._receive_local(malformed_local)
 
-    request = SimpleNamespace(topic="black/test", payload=json.dumps({
+    request = SimpleNamespace(topic="black/commands", payload=json.dumps({
         "action": "detect_object", "action_id": "broken-robot",
         "phrase": "mug", "sender": "studio",
     }).encode())
     instance._on_message(None, None, request)
     instance._on_message(None, None, SimpleNamespace(
-        topic="black/test", payload=b'{"action_id":"broken-robot","payload":not-jpeg}',
+        topic="black/photos", payload=b'{"action_id":"broken-robot","payload":not-jpeg}',
     ))
 
     failures = [
@@ -750,18 +778,20 @@ def test_malformed_correlated_images_are_terminal_failures() -> None:
 
 def test_fake_firmware_robot_preview_returns_correlated_boxes() -> None:
     instance, client = service()
-    request = SimpleNamespace(topic="black/test", payload=json.dumps({
+    request = SimpleNamespace(topic="black/commands", payload=json.dumps({
         "action": "detect_object", "action_id": "robot-1", "phrase": "red mug",
         "sender": "studio", "use_model": False, "model_name": DEFAULT_MODEL_ID,
     }).encode())
     instance._on_message(None, None, request)
     instance._on_message(None, None, SimpleNamespace(
-        topic="black/test", payload=encode_frame({
+        topic="black/photos", payload=encode_frame({
+            "schema": "desk_buddy.photo.v1", "content_type": "image/jpeg",
+            "type": "detect_object", "width": 100, "height": 50, "size": len(JPEG),
             "sender": "firmware", "action_id": "robot-1", "photo": "sending_photo",
         }, JPEG),
     ))
     run_one_job(instance)
-    result = [body for topic, body, _options in client.sent if topic == "black/test"][-1]
+    result = [body for topic, body, _options in client.sent if topic == "black/vision"][-1]
     assert result["action_id"] == "robot-1" and result["status"] == "completed"
     assert result["detection_batch"]["detections"][0]["label"] == "red mug"
 

@@ -53,6 +53,7 @@ jobs:
           python -m studio.services.network.tests.system_tests
           python -m studio.services.vision.tests
           python -m studio.ui.components.serial_tests
+          python -m studio.ui.components.install_firmware_flasher_tests
           python -m studio.ui.components.flow_tests
           python -m studio.ui.workspaces.network.tests
           python -m studio.ui.workspaces.calibration.tests

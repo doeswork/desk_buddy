@@ -1,4 +1,5 @@
 #include "BuddyMQTT.h"
+#include "MqttStream.h"
 #include "BuddyWifi.h"
 #include "ActionController.h"
 #include "ActionOTA.h"
@@ -14,6 +15,8 @@
 #include <LED.h>
 #include <ArduinoJson.h>
 #include <cstring>
+#include <lwip/sockets.h>
+#include <errno.h>
 
 namespace {
   // —— Default broker settings (TLS) - can be overridden via web config ————
@@ -46,8 +49,29 @@ namespace {
   // broker fails the TCP handshake outright and reports rc=-2, which reads
   // as "broker unreachable" rather than "wrong transport" — so Studio's own
   // local broker, which has no certificates to offer, needs the plain one.
+  bool streamingPublication = false;
+  // NetworkClient::write retries internally, potentially blocking beyond our
+  // deadline. During plaintext streams, let MqttStream own partial-write retries.
+  class PlainMqttClient : public WiFiClient {
+   public:
+    using WiFiClient::write;
+    size_t write(const uint8_t* data, size_t length) override {
+      if (!streamingPublication) return WiFiClient::write(data, length);
+      const int socket = fd();
+      if (socket < 0) return 0;
+      const int sent = ::send(socket, data, length, MSG_DONTWAIT);
+      if (sent >= 0) return size_t(sent);
+      if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) stop();
+      return 0;
+    }
+  };
+  struct StreamMode {
+    StreamMode() { streamingPublication = true; }
+    ~StreamMode() { streamingPublication = false; }
+  };
+
   WiFiClientSecure tlsClient;     // TLS transport (cloud broker)
-  WiFiClient       plainClient;   // Plaintext transport (local broker)
+  PlainMqttClient  plainClient;   // Plaintext transport (local broker)
   PubSubClient     mqttClient(tlsClient);
 
   bool inited = false;
@@ -599,36 +623,13 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
   sendCompletedDetails(actionId, "calibrationvalues", jsonOut, "calibrationvalues");
 }
 
-// Write all bytes with small sub-chunks and retry if partial writes happen.
-// Returns true when exactly 'len' bytes have been pushed.
-bool writeAll(PubSubClient& client, const uint8_t* data, size_t len) {
-  const size_t SUB_CHUNK = 20224;          // conservative for WiFiClientSecure
-  const unsigned long PER_WRITE_TIMEOUT_MS = 2000;
-
-  size_t sent = 0;
-  while (sent < len) {
-    size_t toSend = len - sent;
-    if (toSend > SUB_CHUNK) toSend = SUB_CHUNK;
-
-    unsigned long start = millis();
-    size_t wrote = client.write(data + sent, toSend);
-
-    if (wrote == 0) {
-      // Give the stack a moment, then time out if it keeps failing
-      delay(5);
-      if (millis() - start > PER_WRITE_TIMEOUT_MS) {
-        return false;
-      }
-      continue; // retry this sub-chunk
-    }
-
-    sent += wrote;
-    // Yield so WiFi/TLS can progress
-    delay(1);
-  }
-  return true;
+// The transport itself bounds individual socket writes; this budget also
+// bounds retries and total time across all streamed segments.
+static bool writeAll(MqttStream& stream, const uint8_t* data, size_t length) {
+  return stream.write(mqttClient, data, length,
+                      []() { return uint32_t(millis()); },
+                      [](unsigned ms) { delay(ms); });
 }
-
 
 bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t length) {
   ensureInited();
@@ -640,15 +641,17 @@ bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t l
     Serial.println("publishBinary: MQTT not connected");
     return false;
   }
+  StreamMode mode;
+  MqttStream stream(millis());
   if (!mqttClient.beginPublish(topic.c_str(), length, false)) {
     Serial.println("publishBinary: beginPublish failed");
     return false;
   }
 
-  bool ok = writeAll(mqttClient, data, length);
+  bool ok = writeAll(stream, data, length);
   if (!ok) {
     Serial.println("publishBinary: writeAll failed");
-    mqttClient.endPublish(); // end regardless to flush/reset state
+    mqttClient.abortPublish();
     return false;
   }
 
@@ -701,29 +704,32 @@ bool BuddyMQTT::publishPhoto(const String& actionId, const String& type, const S
   const char  suffix[] = "}";
 
   size_t totalLen = prefix.length() + length + (sizeof(suffix) - 1);
+  if (totalLen > 8UL * 1024 * 1024) return false;
+  StreamMode mode;
+  MqttStream stream(millis());
   if (!mqttClient.beginPublish(topic, totalLen, false)) {
     Serial.println("publishPhoto: beginPublish failed");
     return false;
   }
 
   // prefix
-  if (!writeAll(mqttClient, reinterpret_cast<const uint8_t*>(prefix.c_str()), prefix.length())) {
+  if (!writeAll(stream, reinterpret_cast<const uint8_t*>(prefix.c_str()), prefix.length())) {
     Serial.println("publishPhoto: prefix writeAll failed");
-    mqttClient.endPublish();
+    mqttClient.abortPublish();
     return false;
   }
 
   // binary JPEG
-  if (!writeAll(mqttClient, data, length)) {
+  if (!writeAll(stream, data, length)) {
     Serial.println("publishPhoto: binary writeAll failed");
-    mqttClient.endPublish();
+    mqttClient.abortPublish();
     return false;
   }
 
   // suffix
-  if (!writeAll(mqttClient, reinterpret_cast<const uint8_t*>(suffix), sizeof(suffix) - 1)) {
+  if (!writeAll(stream, reinterpret_cast<const uint8_t*>(suffix), sizeof(suffix) - 1)) {
     Serial.println("publishPhoto: suffix writeAll failed");
-    mqttClient.endPublish();
+    mqttClient.abortPublish();
     return false;
   }
 

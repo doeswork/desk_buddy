@@ -29,9 +29,9 @@ The username also identifies the robot's topics:
 Important transport behavior:
 
 - Topic direction is part of the contract. Firmware receives only `commands`, so its own events, photos, and third-party Vision results cannot enter the command dispatcher.
-- MQTT uses TLS but the ESP32 currently calls `setInsecure()`, so it does not verify the broker certificate.
+- MQTT follows the saved TLS preference: local plaintext is supported; when TLS is enabled the ESP32 currently calls `setInsecure()` and does not verify the broker certificate.
 - PubSubClient uses QoS 0 and non-retained publishes. The subscription also uses QoS 0.
-- The ordinary MQTT buffer is `6144` bytes. Command dispatch uses a `512`-byte ArduinoJson document, so requests should remain compact.
+- The ordinary MQTT buffer is `6144` bytes. Vendored ArduinoJson 7.2.1 allocates documents dynamically; the legacy `DynamicJsonDocument(512)` argument is not a parsing limit. Studio preflights the encoded capture command against the real MQTT buffer, including topic/header overhead.
 - Action handlers are synchronous. A long servo, base calibration, stencil step, photo capture, or OTA operation blocks dispatch and may prevent MQTT maintenance until it returns.
 - The receive path uses a single-command slot: one incoming command wakes the listen loop and is dispatched immediately. The slot is cleared only when its message is copied for dispatch, so a follow-up command received by MQTT maintenance immediately after the previous terminal response is preserved. Send one stateful command at a time and wait for its exact matching terminal response.
 
@@ -484,12 +484,29 @@ The camera tries SVGA (`800x600`), VGA (`640x480`), then QVGA (`320x240`), with 
 
 1. Normal `in_progress`, with `type` equal to the requested photo action.
 2. One binary-framed photo message on `{mqtt_user}/photos` when capture succeeds.
-3. A terminal event on `{mqtt_user}/events`: `completed` only after the complete frame is accepted by the MQTT client, otherwise `failed` with a structured `error` object.
+3. A terminal event on `{mqtt_user}/events`: `completed` only after the complete frame is written to the transport, otherwise `failed` with a structured `error` object when the connection remains usable. Written bytes are not a delivery acknowledgement. An incomplete stream closes the socket immediately, so its failure may be serial-only until the consumer times out.
 
-Consumers should subscribe to both `events` and `photos` before publishing the command, then correlate both channels by the mandatory request `action_id`.
+Consumers should register callbacks and wait for successful subscription acknowledgements on `events` and `photos` before publishing the command, then correlate both channels by the mandatory request `action_id`.
 Vision services also observe correlated failed photo events so they can stop waiting immediately instead of emitting a later photo timeout.
 
 ### Binary framing
+
+The photo envelope is capped at 8 MiB. PubSubClient uses a patched 32-bit
+Remaining Length encoder; streamed payloads above 65,535 bytes no longer wrap.
+The ordinary MQTT buffer remains 6,144 bytes. Stream chunks are 4 KiB with a
+shared 2-second no-progress and 15-second total budget across header/prefix/JPEG/
+suffix. Plaintext stream writes bypass the core's internal blocking retry loop;
+TLS writes use the configured 2,000 ms socket timeout. Deadlines are checked
+between socket calls. MQTT keepalive remains 30 seconds and socket read timeout
+2 seconds. No other MQTT packets are emitted while a photo packet is open.
+
+A short header or failed payload closes the underlying transport without sending
+MQTT DISCONNECT. `endPublish()` is not a flush, acknowledgement, or abort API.
+Normal maintenance handles reconnection. Camera configuration is zero-initialized
+and the framebuffer is returned when the capture action exits on success or failure.
+Serial `[photo]` logs correlate capture/publication durations, bytes, internal heap,
+PSRAM, and stage with the action ID. Physical timing and recovery validation is
+tracked in `VISION_MQTT_FLOW.md` sections 12–13.
 
 The photo message is deliberately not valid JSON and is not base64 encoded. It is:
 
@@ -648,7 +665,7 @@ Holding the BOOT button for three seconds performs a connection reset outside MQ
 | --- | --- |
 | Incoming command with `sender:"firmware"` | Ignored before command allocation/dispatch |
 | Command JSON without `action` | Ignored |
-| Command is too large for the `512`-byte dispatch document | Dispatcher JSON parse error; no MQTT response |
+| Command exceeds the 6,144-byte MQTT receive buffer, cannot allocate JSON memory, or is malformed | May be discarded or produce serial parse diagnostics with no MQTT response; Studio rejects oversized encoded capture requests before publication |
 | Dispatcher cannot parse JSON | No response |
 | Missing or unknown/case-mismatched `action` | No response |
 | Known action with ID | Initial `in_progress`, then action-specific behavior |

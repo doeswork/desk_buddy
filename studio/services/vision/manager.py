@@ -74,6 +74,8 @@ class VisionState:
     busy: bool = False
     start_with_studio: bool = False
     pending_detection: str = ""
+    detection_stage: str = ""
+    detection_delayed: bool = False
 
     @property
     def ready(self) -> bool:
@@ -87,6 +89,8 @@ class _MqttBridge(QObject):
     status_received = Signal(object)
     result_received = Signal(str, object)
     raw_received = Signal(str, bytes)
+    connection_received = Signal(bool)
+    subscriptions_changed = Signal()
 
 
 class VisionServiceManager(QObject):
@@ -153,6 +157,11 @@ class VisionServiceManager(QObject):
         self._pending_photo_topic = ""
         self._pending_event_topic = ""
         self._pending_result_topic = ""
+        self._pending_publish = None
+        self._required_topics: tuple[str, ...] = ()
+        self._request_sent = False
+        self._sent_connection_revision = 0
+        self._pending_vision_result = None
         self._autostart_attempted = False
         self._ready_timer = QTimer(self)
         self._ready_timer.setSingleShot(True)
@@ -160,6 +169,18 @@ class VisionServiceManager(QObject):
         self._detection_timer = QTimer(self)
         self._detection_timer.setSingleShot(True)
         self._detection_timer.timeout.connect(self._detection_timed_out)
+        self._preparation_timer = QTimer(self)
+        self._preparation_timer.setSingleShot(True)
+        self._preparation_timer.timeout.connect(lambda: self._fail_detection(
+            "Could not prepare MQTT subscriptions within 10 seconds. " + self.client.status))
+        self._hint_timer = QTimer(self)
+        self._hint_timer.setSingleShot(True)
+        self._hint_timer.timeout.connect(lambda: self._replace(detection_delayed=True)
+                                        if self._state.pending_detection else None)
+        self._bridge.connection_received.connect(self._on_connection, Qt.QueuedConnection)
+        self._bridge.subscriptions_changed.connect(self._try_send_detection, Qt.QueuedConnection)
+        self._connection_unsubscribe = self.client.watch_connection(self._bridge.connection_received.emit)
+        self._subscription_unsubscribe = self.client.watch_subscriptions(self._bridge.subscriptions_changed.emit)
 
     @property
     def state(self) -> VisionState:
@@ -319,7 +340,7 @@ class VisionServiceManager(QObject):
     def stop(self) -> None:
         cancelling_start = self._state.operation in {"start", "rollback"}
         self._ready_timer.stop()
-        self._detection_timer.stop()
+        self._clear_detection_transport()
         self._expected_launch_id = ""
         self._expected_model_id = ""
         had_detection = bool(self._state.pending_detection)
@@ -351,7 +372,7 @@ class VisionServiceManager(QObject):
             operation="" if cancelling_start else self._state.operation,
             phase="" if cancelling_start else self._state.phase,
             progress_message="" if cancelling_start else self._state.progress_message,
-            pending_detection="",
+            pending_detection="", detection_stage="", detection_delayed=False,
             error="Detection cancelled because the detector stopped." if had_detection else self._state.error,
         )
 
@@ -393,16 +414,9 @@ class VisionServiceManager(QObject):
         self._pending_photo_topic = ""
         self._pending_event_topic = ""
         self._pending_result_topic = RESULT_TOPIC
-        self._begin_detection(action_id)
-        if not self.client.publish_raw(REQUEST_TOPIC, payload, qos=1):
-            self._detection_timer.stop()
-            self._replace(
-                pending_detection="",
-                error=f"Could not publish the photo: {self.client.status}",
-            )
-            return ""
         self.photo_received.emit(jpeg)
-        return action_id
+        self._prepare_detection(action_id, REQUEST_TOPIC, payload, (RESULT_TOPIC,))
+        return action_id if self._state.pending_detection else ""
 
     def detect_robot(self, robot: str, prompt: str) -> str:
         clean = prompt.strip()
@@ -411,20 +425,13 @@ class VisionServiceManager(QObject):
                 self._replace(error="Choose a configured robot first.")
             return ""
         self._clear_robot_subscriptions()
-        commands = command_topic(robot)
-        events = event_topic(robot)
-        photos = photo_topic(robot)
-        results = vision_topic(robot)
+        commands, events, photos, results = (
+            command_topic(robot), event_topic(robot), photo_topic(robot), vision_topic(robot)
+        )
         self._robot_unsubscribes.extend((
-            self.client.subscribe_raw(
-                photos, lambda name, payload: self._bridge.raw_received.emit(name, payload)
-            ),
-            self.client.subscribe(
-                results, lambda name, body: self._bridge.result_received.emit(name, body)
-            ),
-            self.client.subscribe(
-                events, lambda name, body: self._bridge.result_received.emit(name, body)
-            ),
+            self.client.subscribe_raw(photos, self._bridge.raw_received.emit),
+            self.client.subscribe(results, self._bridge.result_received.emit),
+            self.client.subscribe(events, self._bridge.result_received.emit),
         ))
         self.client.reconcile()
         if not self.client.running:
@@ -434,19 +441,64 @@ class VisionServiceManager(QObject):
         action_id = uuid.uuid4().hex
         active = self.active
         self._pending_jpeg = b""
+        self.photo_received.emit(b"")
         self._pending_photo_topic = photos
         self._pending_event_topic = events
         self._pending_result_topic = results
-        self._begin_detection(action_id)
-        self.client.publish(commands, {
-            "sender": "studio",
-            "action_id": action_id,
-            "action": "detect_object",
-            "phrase": clean,
-            "use_model": False,
+        command = {
+            "sender": "studio", "action_id": action_id, "action": "detect_object",
+            "phrase": clean, "use_model": False,
             "model_name": active.source if active is not None else self._state.active_model_id,
-        }, qos=1)
-        return action_id
+        }
+        # PubSubClient's receive buffer is a real byte bound. ArduinoJson 7's
+        # deprecated document capacity argument is not. Match publish_checked's
+        # JSON encoding and allow the maximum MQTT header used by the firmware.
+        packet_bytes = 5 + 2 + len(commands.encode("utf-8")) + len(json.dumps(command).encode("utf-8"))
+        if packet_bytes > 6144:
+            self._replace(error="The detection request exceeds the robot's 6144-byte MQTT buffer. Shorten the prompt.")
+            self._clear_robot_subscriptions()
+            return ""
+        self._prepare_detection(action_id, commands, command, (photos, results, events))
+        return action_id if self._state.pending_detection else ""
+
+    def _prepare_detection(self, action_id, topic, payload, required_topics) -> None:
+        self._pending_publish = (topic, payload)
+        self._required_topics = required_topics
+        self._request_sent = False
+        self._pending_vision_result = None
+        self._begin_detection(action_id)
+        self._preparation_timer.start(10_000)
+        self._try_send_detection()
+
+    def _try_send_detection(self) -> None:
+        if not self._state.pending_detection or self._pending_publish is None:
+            return
+        if not self.client.subscriptions_ready(self._required_topics):
+            return
+        topic, payload = self._pending_publish
+        self._pending_publish = None  # Consume once, before any callback can re-enter.
+        self._preparation_timer.stop()
+        self._request_sent = True
+        self._sent_connection_revision = self.client.connection_revision
+        self._replace(detection_stage="waiting_camera" if self._pending_photo_topic else "waiting_detection")
+        try:
+            accepted = (self.client.publish_raw(topic, payload, qos=1) if isinstance(payload, bytes)
+                        else self.client.publish_checked(topic, payload, qos=1))
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._fail_detection(f"Could not publish detection request: {exc}")
+            return
+        if not accepted:
+            self._fail_detection(f"Could not publish detection request: {self.client.status}")
+
+    def _on_connection(self, connected: bool) -> None:
+        if not connected and self._request_sent and self._state.pending_detection:
+            # Qt can deliver an old disconnect after a new session is ready.
+            # Fail requests sent on the old session, not a newly prepared one.
+            if (not self.client.connected
+                    or self.client.connection_revision != self._sent_connection_revision):
+                self._fail_detection("MQTT connection lost during detection. It was not retried.")
+        elif connected:
+            self._try_send_detection()
 
     def shutdown(self) -> None:
         if self._state.operation == "install":
@@ -455,6 +507,8 @@ class VisionServiceManager(QObject):
         self._clear_robot_subscriptions()
         self._status_unsubscribe()
         self._result_unsubscribe()
+        self._connection_unsubscribe()
+        self._subscription_unsubscribe()
 
     # ---- install sequence -------------------------------------------------
     def _create_runtime(self) -> None:
@@ -772,6 +826,8 @@ class VisionServiceManager(QObject):
         elif mqtt_state == "error":
             values["error"] = str(body.get("last_error") or "The worker reported a startup error.")
         self._replace(**values)
+        if mqtt_state in {"offline", "error"} and self._state.pending_detection:
+            self._fail_detection("The detector became unavailable during detection. It was not retried.")
 
     def _on_raw(self, topic: str, payload: bytes) -> None:
         if not self._state.pending_detection or topic != self._pending_photo_topic:
@@ -786,6 +842,9 @@ class VisionServiceManager(QObject):
             return
         self._pending_jpeg = frame.jpeg
         self.photo_received.emit(frame.jpeg)
+        self._replace(detection_stage="waiting_detection")
+        if self._pending_vision_result is not None:
+            self._finish_detection(self._pending_vision_result)
 
     def _on_result(self, topic: str, body: dict) -> None:
         action_id = str(body.get("action_id") or "")
@@ -801,25 +860,50 @@ class VisionServiceManager(QObject):
             and body.get("sender") == "firmware"
             and body.get("status") == "failed"
         )
+        if (topic == self._pending_event_topic and body.get("sender") == "firmware"
+                and body.get("status") == "in_progress" and not self._pending_jpeg):
+            self._replace(detection_stage="capturing")
+            return
         if not is_vision_result and not is_camera_failure:
             return
+        if is_vision_result and body.get("status") == "completed" and not self._pending_jpeg:
+            self._pending_vision_result = dict(body)
+            self._replace(detection_stage="waiting_photo")
+            return
+        self._finish_detection(body)
+
+    def _clear_detection_transport(self) -> None:
         self._detection_timer.stop()
-        self._replace(pending_detection="", busy=False)
-        self.detection_result.emit(dict(body))
+        self._preparation_timer.stop()
+        self._hint_timer.stop()
+        self._pending_publish = None
+        self._pending_vision_result = None
+        self._request_sent = False
+        self._required_topics = ()
+
+    def _finish_detection(self, body: dict) -> None:
+        self._clear_detection_transport()
         self._clear_robot_subscriptions()
+        self._replace(pending_detection="", busy=False, detection_stage="", detection_delayed=False)
+        self.detection_result.emit(dict(body))
 
-    def _begin_detection(self, action_id: str) -> None:
-        self._replace(pending_detection=action_id, error="")
-        self._detection_timer.start(DETECTION_TIMEOUT_MS)
-
-    def _detection_timed_out(self) -> None:
+    def _fail_detection(self, message: str) -> None:
         if not self._state.pending_detection:
             return
-        self._replace(
-            pending_detection="",
-            error="Detection timed out after 120 seconds. It was not retried.",
-        )
+        self._clear_detection_transport()
         self._clear_robot_subscriptions()
+        self._replace(pending_detection="", busy=False, detection_stage="", detection_delayed=False, error=message)
+
+    def _begin_detection(self, action_id: str) -> None:
+        self._replace(pending_detection=action_id, error="", detection_stage="preparing", detection_delayed=False)
+        self._detection_timer.start(DETECTION_TIMEOUT_MS)
+        self._hint_timer.start(30_000)
+
+    def _detection_timed_out(self) -> None:
+        if self._pending_vision_result is not None:
+            self._fail_detection("Incomplete preview: detection arrived but its photo did not arrive within 120 seconds. It was not retried.")
+        else:
+            self._fail_detection("Detection timed out after 120 seconds. It was not retried.")
 
     def _can_detect(self, prompt: str) -> bool:
         if not prompt:

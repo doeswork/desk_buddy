@@ -7,7 +7,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -28,14 +28,20 @@ from ...services.firmware import (
     describe_ports,
     parse_usb_ports,
 )
+from .install_firmware_flasher import InstallFirmwareFlasher
 
 
 class FirmwareFlash(QWidget):
     """Runs Arduino CLI asynchronously; all expected failures stay in its console."""
 
+    flash_activity = Signal(bool)
+    empty_scan = Signal()
+
     def __init__(self, before_flash: Callable[[str], None] | None = None) -> None:
         super().__init__()
         self._before_flash = before_flash
+        self._flashing = False
+        self._port_setup_busy = False
         self.sketch = Path(__file__).resolve().parents[3] / "firmware"
         self._task = ""
         self._captured = bytearray()
@@ -44,6 +50,8 @@ class FirmwareFlash(QWidget):
         self._process.readyReadStandardOutput.connect(self._read_output)
         self._process.finished.connect(self._finished)
         self._process.errorOccurred.connect(self._process_error)
+        self._installer = InstallFirmwareFlasher(self)
+        self._installer.busy_changed.connect(self._setup_running)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 5, 0, 0)
@@ -139,7 +147,8 @@ class FirmwareFlash(QWidget):
         selected = self._has_selected_port()
         self.port_requirement.setVisible(not selected)
         self.flash_button.setEnabled(
-            selected and self._process.state() == QProcess.NotRunning
+            selected and not self._port_setup_busy and not self._task
+            and self._process.state() == QProcess.NotRunning
         )
 
     @staticmethod
@@ -158,9 +167,12 @@ class FirmwareFlash(QWidget):
         return text.split(" — ", 1)[0]
 
     def scan(self) -> None:
-        self._start("scan", ["board", "list", "--format", "json"])
+        self._installer.ensure(lambda: self._start("scan", ["board", "list", "--format", "json"]))
 
     def compile(self) -> None:
+        self._installer.ensure(self._compile_ready)
+
+    def _compile_ready(self) -> None:
         self._start(
             "build",
             build_command(
@@ -171,6 +183,12 @@ class FirmwareFlash(QWidget):
         )
 
     def flash(self) -> None:
+        if not self._port_setup_busy and self.selected_port:
+            self._installer.ensure(self._flash_ready)
+
+    def _flash_ready(self) -> None:
+        if self._port_setup_busy:
+            return
         port = self.selected_port
         if not port:
             self._append("ERROR: Select a USB port before flashing. Try List USB Devices.")
@@ -187,8 +205,6 @@ class FirmwareFlash(QWidget):
         if answer != QMessageBox.Yes:
             self._append("Flash cancelled.")
             return
-        if self._before_flash is not None:
-            self._before_flash(port)
         self._start(
             "flash",
             build_command(
@@ -201,10 +217,12 @@ class FirmwareFlash(QWidget):
         )
 
     def _start(self, task: str, arguments: list[str]) -> None:
+        if task == "flash" and self._port_setup_busy:
+            return
         if self._process.state() != QProcess.NotRunning:
             self._append("A firmware command is already running.")
             return
-        program = shutil.which("arduino-cli")
+        program = self._installer.program or shutil.which("arduino-cli")
         if not program:
             self._append(
                 "ERROR: arduino-cli was not found. Install Arduino CLI and the Espressif ESP32 core, then try again."
@@ -217,6 +235,11 @@ class FirmwareFlash(QWidget):
             return
 
         self._task = task
+        if task == "flash":
+            self._flashing = True
+            self.flash_activity.emit(True)
+            if self._before_flash is not None:
+                self._before_flash(self.selected_port)
         self._captured.clear()
         self._append(f"\n$ arduino-cli {shlex.join(arguments)}")
         self.status.setText({"scan": "Scanning USB…", "build": "Compiling…", "flash": "Flashing…"}[task])
@@ -246,6 +269,8 @@ class FirmwareFlash(QWidget):
                 elif not ports:
                     self.port.setEditText(previous)
             self._append(describe_ports(ports))
+            if not ports:
+                self.empty_scan.emit()
         elif task == "scan" and self._captured:
             self._append(bytes(self._captured).decode(errors="replace").rstrip())
         if exit_code == 0:
@@ -267,6 +292,9 @@ class FirmwareFlash(QWidget):
             self._set_running(False)
 
     def _set_running(self, running: bool) -> None:
+        if not running and self._flashing:
+            self._flashing = False
+            self.flash_activity.emit(False)
         for control in (
             self.scan_button, self.build_button,
             self.port, self.speed, self.erase_first, self.verbose,
@@ -275,13 +303,25 @@ class FirmwareFlash(QWidget):
         self.stop_button.setEnabled(running)
         self._update_flash_availability()
 
+    def set_port_setup_busy(self, busy: bool) -> None:
+        self._port_setup_busy = busy
+        self._update_flash_availability()
+
+    def _setup_running(self, running: bool) -> None:
+        self._task = "setup" if running else ""
+        self._set_running(running)
+
     def stop(self) -> None:
+        if self._installer.busy:
+            self._installer.stop()
+            return
         if self._process.state() == QProcess.NotRunning:
             return
         self._append("Stopping firmware command…")
         self._process.kill()
 
     def shutdown(self) -> None:
+        self._installer.shutdown()
         if self._process.state() != QProcess.NotRunning:
             self._process.kill()
             self._process.waitForFinished(1000)

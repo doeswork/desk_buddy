@@ -38,6 +38,7 @@ def decode_frame(payload: bytes) -> BinaryFrame:
 
 def validate_photo_frame(frame: BinaryFrame) -> None:
     """Validate metadata specific to an ESP32 photo publication."""
+    _validate_jpeg(frame.jpeg)
     metadata = frame.metadata
     if (
         metadata.get("schema") != PHOTO_SCHEMA

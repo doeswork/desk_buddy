@@ -46,6 +46,10 @@ is the Windows LAN address; `0.0.0.0` is only a listener bind address. A ready
 card verifies the Windows-facing TCP port, not a connection from a physical
 robot.
 
+In NAT mode, a saved forwarding entry can exist without an active Windows
+listener. Studio detects this as a repair: **Retry robot access** recreates
+its forwarding entry, starts IP Helper if stopped, and checks the port again.
+
 Cancelled or failed setup stays paused until **Retry setup**. Revoking account
 management also pauses automatic setup; the system broker continues running.
 Native Windows and macOS retain manual installation instructions.

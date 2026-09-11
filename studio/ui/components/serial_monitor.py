@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QPalette, QPen, QTextCursor
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 from PySide6.QtWidgets import (
@@ -113,6 +113,10 @@ def password_eye(on_toggled) -> PasswordEyeButton:
 class SerialMonitor(QWidget):
     """Owns one serial connection and renders its expected errors locally."""
 
+    connection_opened = Signal(str)
+    connection_closed = Signal(str)  # manual, flash, or lost
+    empty_scan = Signal()
+
     # How long without a SerialHeartbeat line before the board reads as gone
     # rather than merely quiet — a little over the firmware's own 2s
     # interval, so one skipped line from USB jitter does not flip the chip.
@@ -121,6 +125,7 @@ class SerialMonitor(QWidget):
     def __init__(self, *, broker_host: Callable[[], str] = lambda: "") -> None:
         super().__init__()
         self._broker_host = broker_host
+        self._port_reserved = False
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._incoming_lines = ""
         self.serial = QSerialPort(self)
@@ -278,6 +283,7 @@ class SerialMonitor(QWidget):
             self._append_line(
                 "No USB serial devices found. Connect the ESP32-S3-CAM and scan again."
             )
+            self.empty_scan.emit()
 
     def toggle_connection(self) -> None:
         if self.serial.isOpen():
@@ -286,6 +292,8 @@ class SerialMonitor(QWidget):
             self.connect()
 
     def connect(self) -> None:
+        if self._port_reserved or self.serial.isOpen():
+            return
         port = self.selected_port
         if not port:
             self._append_line("ERROR: Select a USB port before connecting.")
@@ -323,8 +331,10 @@ class SerialMonitor(QWidget):
         self.status.setText(f"Connected to {port} at {baud:,} baud")
         self._append_line(f"\nConnected to {port} at {baud:,} baud.")
         self._refresh_board_status()
+        self.connection_opened.emit(port)
 
     def disconnect(self, *, for_flash: bool = False) -> None:
+        self.connection_closed.emit("flash" if for_flash else "manual")
         if not self.serial.isOpen():
             return
         port = self.serial.portName()
@@ -340,6 +350,7 @@ class SerialMonitor(QWidget):
         self.disconnect(for_flash=True)
 
     def _set_connected(self, connected: bool) -> None:
+        self.connect_button.setEnabled(not self._port_reserved)
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self.port.setEnabled(not connected)
         self.baud.setEnabled(not connected)
@@ -349,6 +360,10 @@ class SerialMonitor(QWidget):
         self.send_button.setEnabled(connected)
         self.wifi_button.setEnabled(connected)
         self.mqtt_button.setEnabled(connected)
+
+    def set_port_reserved(self, reserved: bool) -> None:
+        self._port_reserved = reserved
+        self._set_connected(self.serial.isOpen())
 
     def _read(self) -> None:
         data = bytes(self.serial.readAll())
@@ -601,6 +616,7 @@ class SerialMonitor(QWidget):
         if error in (QSerialPort.ResourceError, QSerialPort.DeviceNotFoundError):
             self.serial.close()
             self._set_connected(False)
+            self.connection_closed.emit("lost")
 
     def _append_text(self, text: str) -> None:
         if not text:
