@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
             self._traffic_recorder,
             lambda: self.debug_dock.setVisible(False),
             broker_host=network.broker_host,
+            network=network,
         )
 
         self.debug_dock = QDockWidget("Debug Tray", self)
@@ -190,7 +191,14 @@ class MainWindow(QMainWindow):
         self.refresh_broker()
 
     def refresh_broker(self) -> None:
-        self.workspace_bar.set_broker(chip_text())
+        network = next((workspace for workspace in self.workspaces if workspace.key == "network"), None)
+        if network is not None:
+            health = network.broker_health()
+            self.workspace_bar.set_broker(health.chip)
+            self.workspace_bar.set_issue("network", health.issue, health.tooltip)
+            network.set_issue("broker", health.issue, health.tooltip)
+        else:
+            self.workspace_bar.set_broker(chip_text())
         self._traffic_recorder.reconcile()
         vision = next((workspace for workspace in self.workspaces if workspace.key == "vision"), None)
         if vision is not None:
@@ -482,4 +490,9 @@ class MainWindow(QMainWindow):
         if side is not None:
             side.setFixedWidth(self._side_width())
             self.side_dock.setWidget(side)
+        health = getattr(workspace, "_last_health", None)
+        if health is not None:
+            if hasattr(self, "workspace_bar"):
+                self.workspace_bar.set_issue("network", health.issue, health.tooltip)
+            workspace.set_issue("broker", health.issue, health.tooltip)
         self.status_label.setText(workspace.status)

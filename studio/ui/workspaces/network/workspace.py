@@ -18,6 +18,7 @@ from PySide6.QtCore import QTimer
 from ....storage import keys
 from ....storage.settings import settings
 from ....services.network import report
+from ....services.network.broker.finder import BrokerHealth, broker_health
 from ....services.network.broker import system
 from ....services.network.broker.setup import (
     AccountReloadCoordinator,
@@ -57,6 +58,7 @@ class NetworkWorkspace(Workspace):
     def __init__(self) -> None:
         super().__init__()
         self._report = None
+        self._last_health: BrokerHealth | None = None
         # Set when a change to the broker's accounts fails, so the page can
         # say so rather than looking as though the change took.
         self.account_problem = ""
@@ -299,6 +301,26 @@ class NetworkWorkspace(Workspace):
         MQTT provisioning dialog, say — should read."""
         from ....services.network.broker.finder import robot_endpoint
         return robot_endpoint()[0]
+
+    def broker_health(self) -> BrokerHealth:
+        """Return local and, when known, WSL Windows-facing liveness."""
+        forwarding = None
+        if self.wsl_robot_access_available():
+            access = self.robot_access.status
+            if getattr(access, "checked", False):
+                forwarding = access.ready
+        # The timer owns the poll. Cache that exact answer so the status chip,
+        # Network tab, and Broker row all render one observation.
+        store = settings()
+        broker = system.describe(store, connect=False)
+        self._system = broker
+        health = broker_health(
+            backend=store,
+            windows_forwarding_listener=forwarding,
+            broker=broker,
+        )
+        self._last_health = health
+        return health
 
     # ---- shared state ----------------------------------------------------
     def broker(self):

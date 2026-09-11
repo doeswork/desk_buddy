@@ -34,6 +34,7 @@ class AccessStatus:
     ready: bool = False
     detail: str = ""
     action: str = ""
+    checked: bool = False
 
 
 AuthorizationCancelled = host_windows.AuthorizationCancelled
@@ -358,10 +359,12 @@ def _inspect(context: dict) -> AccessStatus:
                     "The Windows or WSL network address, broker port, network "
                     "profile, or forwarding rules changed."
                 ),
+                checked=True,
             )
         return AccessStatus(
             "disabled",
             "Robots cannot reach this WSL broker until Windows access is enabled.",
+            checked=True,
         )
     if not reply.get("reachable"):
         return AccessStatus(
@@ -372,6 +375,7 @@ def _inspect(context: dict) -> AccessStatus:
                 "Windows-facing MQTT port did not answer. Check the broker "
                 "and the Windows IP Helper service, then retry."
             ),
+            checked=True,
         )
     return AccessStatus(
         "ready",
@@ -382,6 +386,7 @@ def _inspect(context: dict) -> AccessStatus:
             "Windows access is configured and the port answered locally. "
             "A physical robot connection has not yet been confirmed."
         ),
+        checked=True,
     )
 
 
@@ -441,6 +446,7 @@ def disable(env: Environment, port: int, emit=lambda *_args, **_fields: None) ->
     return AccessStatus(
         "disabled",
         "Windows robot access is disabled.",
+        checked=True,
     )
 
 

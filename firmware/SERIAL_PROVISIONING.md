@@ -47,12 +47,31 @@ After saving, firmware responds without including the password:
 {"serial_provisioning":"mqtt","status":"saved","server":"mqtt.deskbuddy.ai"}
 ```
 
+## Complete profile
+
+Studio's guided flash flow sends both namespaces together and firmware
+restarts only after both writes verify:
+
+```json
+{"desk_buddy_command":"set_profile","wifi":{"ssid":"Network name","password":"wifi-password"},"mqtt":{"server":"192.168.1.50","port":1883,"user":"robot-1","password":"mqtt-password","client_id":"robot-1","tls":false}}
+```
+
+All fields are required and validated before either namespace changes. A
+failure rolls back the other namespace. The acknowledgement contains only
+the non-secret result:
+
+```json
+{"serial_provisioning":"profile","status":"saved","server":"192.168.1.50"}
+```
+
 ## Common behavior
 
-Both commands restart the robot on success and connect using the new
+The three commands restart the robot on success and connect using the new
 settings. Invalid commands receive a response with `status:"error"` and do
-not restart. The existing DeskBuddy access-point web form remains available
-as the no-USB fallback for either.
+not restart. Normal Studio flashing preserves NVS (`EraseFlash=none`); using
+the explicit **Erase first** option clears these saved settings, after which
+Studio restores the selected profile over USB. The existing DeskBuddy
+access-point web form remains available as the no-USB fallback.
 
 Serial provisioning assumes physical access to the robot. Credentials travel
 over the USB cable rather than over a network, but the serial link itself is

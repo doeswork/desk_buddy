@@ -182,6 +182,14 @@ class Workspace:
         self._side.setCurrentRow(row)
         self._side.blockSignals(False)
 
+    def set_issue(self, key: str, issue: bool, detail: str = "") -> None:
+        """Set a warning on a linked side-panel row, if one exists."""
+        if self._side is None or not hasattr(self._side, "set_issue"):
+            return
+        keys = [link_key for link_key, _label in self.links()]
+        if key in keys:
+            self._side.set_issue(keys.index(key), issue, detail)
+
     # ---- assembly --------------------------------------------------------
     def widget(self) -> QWidget:
         """Every page, stacked. Built once, on first use."""

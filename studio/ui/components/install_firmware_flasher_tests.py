@@ -10,9 +10,12 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QProcess
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from ...models.config.robot_profiles import RobotProfile
+from ...services.network.broker.system import AccountChange
 from ...services.firmware import install_firmware_flasher as tools
 from .firmware_flash import FirmwareFlash
+from .robot_profile_dialog import RobotProfileDialog
 
 APP = QApplication.instance() or QApplication([])
 READY = b'{"platforms":[{"id":"esp32:esp32","installed_version":"3.3.0"}]}'
@@ -70,6 +73,29 @@ class BootstrapTests(unittest.TestCase):
 
 class SetupTests(unittest.TestCase):
     def setUp(self):
+        self.profile = RobotProfile(
+            profile_id="test-profile",
+            name="Test robot",
+            wifi_ssid="Test Wi-Fi",
+            wifi_password="wifi-password",
+            broker_server="broker.example",
+            mqtt_user="test-robot",
+            mqtt_password="mqtt-password",
+            client_id="test-robot",
+            broker_kind="custom",
+        )
+        self.profile_store = Mock()
+        self.profile_store.all.return_value = []
+        self.profile_store.find.return_value = None
+        patch("studio.ui.components.firmware_flash.profiles", return_value=self.profile_store).start()
+        patch("studio.ui.components.firmware_flash.settings", return_value=Mock()).start()
+        patch("studio.ui.components.firmware_flash.users", return_value=Mock()).start()
+        patch.object(
+            RobotProfileDialog,
+            "exec",
+            return_value=QDialog.DialogCode.Accepted,
+        ).start()
+        patch.object(RobotProfileDialog, "profile", return_value=self.profile).start()
         self.view = FirmwareFlash()
         self.setup = self.view._installer
         self.start = patch.object(self.setup._process, "start").start()
@@ -186,6 +212,83 @@ class SetupTests(unittest.TestCase):
             self.finish(READY)
         self.assertEqual(run.call_args.args[0], "flash")
         self.assertEqual(self.question.call_args.args[1], "Flash firmware?")
+
+    def test_account_reload_wait_is_async_and_then_resumes_flash(self):
+        network = Mock()
+        network.create_account.return_value = AccountChange(changed=True)
+        network.account_reload_pending.return_value = True
+        network.account_reload.running = True
+        network.account_problem = ""
+        view = FirmwareFlash(network=network)
+        profile = RobotProfile(
+            profile_id="local-profile",
+            name="Local robot",
+            wifi_ssid="Test Wi-Fi",
+            wifi_password="wifi-password",
+            broker_server="192.168.0.248",
+            mqtt_user="local-robot",
+            mqtt_password="mqtt-password",
+            client_id="local-robot",
+        )
+        view._pending_profile = profile
+        view._pending_flash_arguments = ["compile", "--upload"]
+        try:
+            with patch.object(QApplication, "processEvents") as nested_events, \
+                    patch.object(view, "_start") as start:
+                self.assertFalse(view._prepare_local_account(profile))
+                nested_events.assert_not_called()
+                start.assert_not_called()
+                self.assertTrue(view._account_reload_timer.isActive())
+
+                network.account_reload_pending.return_value = False
+                view._poll_account_reload()
+
+                start.assert_called_once_with("flash", ["compile", "--upload"])
+                self.assertFalse(view._account_reload_timer.isActive())
+        finally:
+            view.shutdown()
+            view.close()
+
+    def test_profile_waits_for_first_serial_heartbeat_after_reconnect(self):
+        monitor = Mock()
+        monitor.send_profile.return_value = ""
+        self.view._serial_monitor = monitor
+        self.view._pending_profile = self.profile
+        self.view._provision_state = "reconnect"
+
+        self.view._serial_opened("/dev/ttyUSB0")
+        self.assertEqual(self.view._provision_state, "serial-ready")
+        monitor.send_profile.assert_not_called()
+
+        self.view._serial_heartbeat({"serial_heartbeat": True, "uptime_ms": 1000})
+        monitor.send_profile.assert_called_once_with(self.profile)
+        self.assertEqual(self.view._provision_state, "ack")
+
+    def test_saved_profile_can_be_retried_without_flashing(self):
+        monitor = Mock()
+        monitor.serial.isOpen.return_value = True
+        self.view._serial_monitor = monitor
+        self.view.port.addItem("/dev/ttyUSB0", "/dev/ttyUSB0")
+        self.profile_store.find.return_value = self.profile
+
+        with patch.object(self.view, "_start") as flash:
+            self.view.retry_provisioning()
+
+        flash.assert_not_called()
+        self.assertIs(self.view._pending_profile, self.profile)
+        self.assertEqual(self.view._provision_state, "serial-ready")
+        monitor.send_profile.assert_not_called()
+
+    def test_transport_rejection_fails_profile_without_waiting_for_timeout(self):
+        self.view._pending_profile = self.profile
+        self.view._provision_state = "ack"
+        with patch.object(self.view, "_fail_provisioning") as failed:
+            self.view._provision_response({
+                "serial_provisioning": "error",
+                "status": "error",
+                "error": "Command must be valid JSON",
+            })
+        failed.assert_called_once_with("Command must be valid JSON")
 
     def test_duplicate_actions_do_not_overlap_setup(self):
         self.setup.ensure(self.callback)

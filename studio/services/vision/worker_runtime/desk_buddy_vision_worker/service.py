@@ -47,6 +47,7 @@ class DetectorService:
     def __init__(self, config: dict) -> None:
         self.config = config
         self.launch_id = str(config["launch_id"])
+        self.owner_pid = int(config.get("owner_pid") or 0)
         self.detector = HuggingFaceDetector(config["model"])
         self.client = None
         self.stop_event = threading.Event()
@@ -126,6 +127,8 @@ class DetectorService:
                 signal.signal(signal.SIGTERM, stop)
                 signal.signal(signal.SIGINT, stop)
             while not self.stop_event.wait(0.25):
+                if not self._owner_alive():
+                    break
                 self._expire_requests()
             clean_exit = True
             return 0
@@ -149,6 +152,18 @@ class DetectorService:
             if loop_started:
                 client.disconnect()
                 client.loop_stop()
+
+    def _owner_alive(self) -> bool:
+        """Keep a serving worker scoped to the Studio process that launched it."""
+        if self.owner_pid <= 0:
+            return True  # Backward-compatible configs used by worker tests/tools.
+        if os.name == "posix":
+            return os.getppid() == self.owner_pid
+        try:
+            os.kill(self.owner_pid, 0)
+        except OSError:
+            return False
+        return True
 
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
         code = getattr(reason_code, "value", reason_code)

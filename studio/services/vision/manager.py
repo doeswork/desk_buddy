@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal as process_signal
 import shutil
 import time
 import uuid
@@ -111,6 +112,7 @@ class VisionServiceManager(QObject):
         super().__init__()
         self.root = Path(root) if root is not None else vision_root()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._terminate_orphaned_workers()
         self.preferences = preferences or settings()
         selected = self.preferences.get(keys.VISION_SELECTED_MODEL)
         active = self.preferences.get(keys.VISION_ACTIVE_MODEL)
@@ -948,6 +950,11 @@ class VisionServiceManager(QObject):
         config = {
             "schema": "desk_buddy.vision.worker-config.v1",
             "launch_id": launch_id,
+            # The worker checks this while serving. If Studio is killed or
+            # crashes before QProcess can terminate its child, the detector
+            # exits instead of becoming an orphan that fights the next launch
+            # for the fixed MQTT client ID.
+            "owner_pid": os.getpid(),
             "mqtt": {
                 "host": credentials.host if credentials else "127.0.0.1",
                 "port": credentials.port if credentials else 1883,
@@ -960,6 +967,58 @@ class VisionServiceManager(QObject):
         path = self.root / "configs" / f"detector-{launch_id}.json"
         self._write_json(path, config)
         return path
+
+    def _terminate_orphaned_workers(self) -> None:
+        """Stop pre-fix detector children whose Studio parent is already gone.
+
+        New workers self-terminate using ``owner_pid``. This guarded Linux
+        scan handles workers created by older builds: both their worker
+        archive and launch config must belong to this exact user-data root,
+        and their current parent must be init. A detector still owned by a
+        live Studio process is never touched.
+        """
+        proc = Path("/proc")
+        if os.name != "posix" or not proc.is_dir():
+            return
+        config_root = (self.root / "configs").resolve()
+        bootstrap_root = (self.root / "bootstrap").resolve()
+        for entry in proc.iterdir():
+            if not entry.name.isdigit() or int(entry.name) == os.getpid():
+                continue
+            try:
+                arguments = [
+                    part.decode("utf-8", errors="replace")
+                    for part in (entry / "cmdline").read_bytes().split(b"\0")
+                    if part
+                ]
+                config_index = arguments.index("--config") + 1
+                config = Path(arguments[config_index]).resolve()
+                worker = next(
+                    Path(argument).resolve()
+                    for argument in arguments
+                    if Path(argument).name.startswith("vision-worker-")
+                    and Path(argument).suffix == ".pyz"
+                )
+                status = (entry / "status").read_text(encoding="utf-8")
+                parent_pid = int(next(
+                    line.split(":", 1)[1].strip()
+                    for line in status.splitlines()
+                    if line.startswith("PPid:")
+                ))
+                parent_command = (proc / str(parent_pid) / "cmdline").read_bytes()
+            except (OSError, ValueError, StopIteration):
+                continue
+            if config.parent != config_root or worker.parent != bootstrap_root:
+                continue
+            parent_program = parent_command.split(b"\0", 1)[0].decode(
+                "utf-8", errors="replace"
+            )
+            if parent_pid != 1 and Path(parent_program).name != "init":
+                continue
+            try:
+                os.kill(int(entry.name), process_signal.SIGTERM)
+            except (OSError, ValueError):
+                continue
 
     def _process_environment(self, *, include_credentials: bool) -> QProcessEnvironment:
         environment = QProcessEnvironment()

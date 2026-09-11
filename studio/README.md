@@ -74,6 +74,19 @@ The Flash Firmware tab requires `arduino-cli` and the Espressif ESP32 board
 core. Its three sketch libraries are pinned under `../firmware/vendor` and do
 not need to be installed separately in the Arduino IDE.
 
+Flash Firmware is a guided setup: save a named robot profile, choose an
+existing local Mosquitto account or create a new account scoped to
+`<username>/#`, then configure Wi-Fi and MQTT over USB serial after upload.
+The profile is kept in Studio's user-only app data and the ESP32 keeps the
+same values in its `wifi` and `mqtt` NVS namespaces, so a power cycle does not
+require joining the startup access point again. Studio confirms the combined
+serial save and the robot's MQTT heartbeat before registering it under
+Network → Robots. **Erase first** clears NVS; the selected profile is restored
+automatically when the USB link is available.
+If upload succeeds but serial acknowledgement is interrupted, **Retry Robot
+Setup** resends the saved combined profile after the next firmware heartbeat;
+it does not compile or flash the ESP32 again.
+
 ## Package it
 
 Python is not a compiled language, so nothing becomes a `.exe` on its own. A

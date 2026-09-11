@@ -432,6 +432,7 @@ def test_config_and_logs_never_persist_the_mqtt_password() -> None:
             launch_id="secret-test",
         )
         assert secret not in config.read_text(encoding="utf-8")
+        assert json.loads(config.read_text(encoding="utf-8"))["owner_pid"] == os.getpid()
         manager._credentials = credentials
         manager._append_log(f"dependency printed {secret}\n".encode())
         assert secret not in (manager.root / "logs" / "detector.log").read_text(encoding="utf-8")
@@ -676,6 +677,16 @@ def service() -> tuple[DetectorService, PublishingClient]:
     client = PublishingClient()
     instance.client = client
     return instance, client
+
+
+def test_worker_stops_serving_when_its_studio_parent_is_gone() -> None:
+    instance, _client = service()
+    instance.owner_pid = 12345
+    with mock.patch(
+        "studio.services.vision.worker_runtime.desk_buddy_vision_worker.service.os.getppid",
+        return_value=54321,
+    ):
+        assert not instance._owner_alive()
 
 
 def run_one_job(instance: DetectorService) -> None:

@@ -38,6 +38,7 @@ class DebugTray(QWidget):
         on_close: Callable[[], None],
         *,
         broker_host: Callable[[], str],
+        network=None,
     ) -> None:
         super().__init__()
         self.setObjectName("DebugTray")
@@ -73,7 +74,11 @@ class DebugTray(QWidget):
         self.mqtt_tab = self._build_mqtt_tab()
         self.errors_tab = self._build_errors_tab()
         self.serial_tab = SerialMonitor(broker_host=broker_host)
-        self.firmware_tab = FirmwareFlash(self.serial_tab.disconnect_for_flash)
+        self.firmware_tab = FirmwareFlash(
+            self.serial_tab.disconnect_for_flash,
+            serial_monitor=self.serial_tab,
+            network=network,
+        )
         # Keep Windows interop and USB lifecycle code out of native serial paths.
         from ...services.wsl.windows import is_wsl
         self.wsl_serial = None

@@ -28,7 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from ...models.config.mqtt_users import STUDIO_NAME
-from ...services.firmware import mqtt_provisioning_command, wifi_provisioning_command
+from ...models.config.robot_profiles import RobotProfile
+from ...services.firmware import (
+    mqtt_provisioning_command,
+    profile_provisioning_command,
+    wifi_provisioning_command,
+)
 from ...services.network.broker import system as broker_system
 from ...services.network import (
     SYSTEM_PORT,
@@ -116,6 +121,8 @@ class SerialMonitor(QWidget):
     connection_opened = Signal(str)
     connection_closed = Signal(str)  # manual, flash, or lost
     empty_scan = Signal()
+    provisioning_response = Signal(object)
+    heartbeat_received = Signal(object)
 
     # How long without a SerialHeartbeat line before the board reads as gone
     # rather than merely quiet — a little over the firmware's own 2s
@@ -384,6 +391,7 @@ class SerialMonitor(QWidget):
                 self._last_heartbeat = response
                 self._last_heartbeat_at = time.monotonic()
                 self._refresh_board_status()
+                self.heartbeat_received.emit(response)
                 continue
 
             kind = response.get("serial_provisioning")
@@ -394,14 +402,18 @@ class SerialMonitor(QWidget):
             # meant the one class of error most likely to happen was the one
             # class Studio could not report. A robot that answered "Command
             # must be valid JSON" looked like a successful save.
-            if kind not in ("wifi", "mqtt", "error"):
+            if kind not in ("wifi", "mqtt", "profile", "error"):
                 continue
             if kind == "wifi":
                 label = "Wi-Fi"
             elif kind == "mqtt":
                 label = "MQTT settings"
+            elif kind == "profile":
+                label = "Connection profile"
             else:
                 label = "Provisioning"
+
+            self.provisioning_response.emit(response)
 
             if response.get("status") == "saved":
                 self.status.setText(f"{label} saved; robot restarting…")
@@ -454,6 +466,35 @@ class SerialMonitor(QWidget):
             return
         dialog = WifiDialog(self, on_save=self._send_wifi)
         dialog.exec()
+
+    def send_profile(self, profile: RobotProfile) -> str:
+        """Send the atomic profile command without asking a second question."""
+        if not self.serial.isOpen():
+            return "The serial monitor is not connected."
+        try:
+            command = profile_provisioning_command(
+                wifi_ssid=profile.wifi_ssid,
+                wifi_password=profile.wifi_password,
+                server=profile.broker_server,
+                port=profile.broker_port,
+                user=profile.mqtt_user,
+                password=profile.mqtt_password,
+                client_id=profile.client_id,
+                tls=profile.tls,
+            )
+        except ValueError as error:
+            return str(error)
+        error = self._write_all(command)
+        if error:
+            self._append_line(f"ERROR: Could not send connection profile: {error}")
+            self.status.setText("Profile setup failed")
+            return f"Could not send connection profile: {error}"
+        self.status.setText("Saving connection profile; waiting for robot…")
+        self._append_line(
+            f"Sent Wi-Fi and MQTT profile for “{profile.name}”. Passwords omitted. "
+            "Waiting for the robot to confirm."
+        )
+        return ""
 
     def _send_wifi(self, ssid: str, password: str) -> str | None:
         """Validate and send one Wi-Fi command.
