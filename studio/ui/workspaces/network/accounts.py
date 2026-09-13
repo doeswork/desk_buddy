@@ -508,9 +508,14 @@ class CredentialsCard(QWidget):
         row = QHBoxLayout()
         row.setSpacing(0)
 
+        # Minimum rather than fixed, so the captions still form a column but
+        # a longer label or a larger zoom widens it instead of clipping the
+        # word. 84px fitted these labels at zoom 1.0 and nowhere above it.
         caption = QLabel(label)
         caption.setObjectName("CardBody")
-        caption.setFixedWidth(84)
+        caption.setMinimumWidth(
+            max(84, caption.fontMetrics().horizontalAdvance(label) + ROW_PADDING * 2)
+        )
         row.addWidget(caption)
 
         field = QLineEdit(value)

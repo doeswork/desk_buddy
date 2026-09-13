@@ -20,10 +20,11 @@ from PySide6.QtCore import QSettings
 from ...storage.settings import Settings
 from ...storage.store import Store
 from ..config.calibrations import Calibration, Calibrations
+from ..config.current_robot import CurrentRobot
 from ..config.mqtt_topics import TOPIC_PATTERN, default_topics, validate_topic
 from ..config.mqtt_users import STUDIO_NAME, MqttUser, Users
 from ..config.prefrences import Preferences
-from ..config.robots import Robots
+from ..config.robots import Robot, Robots
 from ..config.robot_profiles import RobotProfile, RobotProfiles
 from ..data.app_errors import AppErrors
 from ..data.database import Database, SCHEMA_VERSION
@@ -471,6 +472,72 @@ def test_forget_may_drop_studio_where_remove_may_not() -> None:
     assert store.remove(STUDIO_NAME)  # refused, returns a reason
     store.forget(STUDIO_NAME)
     assert store.find(STUDIO_NAME) is None
+
+
+# ---- the app-wide robot selection ---------------------------------------
+class FakeRegistry:
+    """Stands in for `Robots`; only `all()` and `find()` are ever used."""
+
+    def __init__(self, *names: str) -> None:
+        self.entries = [Robot(name=name) for name in names]
+
+    def all(self) -> list:
+        return list(self.entries)
+
+    def find(self, name: str):
+        return next((r for r in self.entries if r.name == name), None)
+
+
+def fresh_selection(*names: str) -> tuple[CurrentRobot, FakeRegistry]:
+    path = Path(tempfile.mktemp(suffix=".ini"))
+    registry = FakeRegistry(*names)
+    store = Settings(QSettings(str(path), QSettings.IniFormat))
+    return CurrentRobot(store=store, registry=lambda: registry), registry
+
+
+def test_the_selection_defaults_to_the_first_robot() -> None:
+    """A fresh install has chosen nothing, and every page still needs a
+    target rather than an empty picker each one special-cases."""
+    selection, _ = fresh_selection("black", "white")
+    assert selection.name == "black"
+
+
+def test_the_selection_is_empty_when_no_robot_is_marked() -> None:
+    selection, _ = fresh_selection()
+    assert selection.name == ""
+    assert selection.record is None
+
+
+def test_selecting_a_robot_is_remembered() -> None:
+    selection, _ = fresh_selection("black", "white")
+    selection.select("white")
+    assert selection.name == "white"
+
+
+def test_a_selection_the_registry_forgot_falls_back() -> None:
+    """The reflash case: the chosen account is gone, so holding the name
+    would publish to a topic nothing subscribes to. Fall back instead."""
+    selection, registry = fresh_selection("black", "white")
+    selection.select("white")
+    registry.entries = [Robot(name="robot-1")]
+    assert selection.name == "robot-1"
+
+
+def test_watchers_hear_about_a_change() -> None:
+    selection, _ = fresh_selection("black", "white")
+    seen: list[str] = []
+    unwatch = selection.watch(seen.append)
+
+    selection.select("white")
+    assert seen == ["white"]
+
+    # Selecting what is already selected is not a change.
+    selection.select("white")
+    assert seen == ["white"]
+
+    unwatch()
+    selection.select("black")
+    assert seen == ["white"]
 
 
 def main() -> int:

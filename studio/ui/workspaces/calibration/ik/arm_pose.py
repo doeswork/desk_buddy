@@ -148,10 +148,21 @@ class ArmPoseView(QWidget):
         self.setMinimumSize(210, 150)
 
     def set_live(self, elbow: float, wrist: float, twist: float) -> None:
-        """Show where the arm actually is. Repaints only on a real change."""
+        """Show where the arm actually is, in *screen* degrees.
+
+        Screen degrees, not servo degrees. The caller converts, because only
+        it knows this robot's mapping — see `servo_frame`. Passing a raw
+        heartbeat angle here is what drew the live arm through the table.
+        """
         live = (elbow, wrist, twist)
         if live != self._live:
             self._live = live
+            self.update()
+
+    def clear_live(self) -> None:
+        """Stop drawing the live arm — used while the mapping is unknown."""
+        if self._live is not None:
+            self._live = None
             self.update()
 
     # ---- drawing ---------------------------------------------------------
@@ -387,12 +398,13 @@ class ArmPoseView(QWidget):
         return UNITS_PER_INCH / 25.4
 
     def _draw_arm(self, painter, origin, scale, elbow, wrist, pen) -> None:
-        """One arm, from the two angles that decide its shape.
+        """One arm, from the two screen angles that decide its shape.
 
-        Servo degrees are not screen degrees: 0-180 on the elbow sweeps the
-        upper arm from leaning back to reaching forward, and the wrist angle
-        is measured against the upper arm rather than the table. Mapping them
-        here is what makes the drawing move the way the real arm does.
+        Both angles are already in the drawing's own space — elbow measured
+        from straight up, wrist relative to the upper arm. This routine does
+        no servo conversion and must not start doing one: the target pose and
+        the live arm both arrive here in screen degrees precisely so they can
+        be compared, which is the only thing this widget is for.
         """
         painter.setPen(pen)
 
@@ -403,13 +415,7 @@ class ArmPoseView(QWidget):
         base_top = QPointF(origin.x(), origin.y() - SHOULDER_HEIGHT * scale)
 
         # Screen angles are measured from straight up, swinging forward over
-        # the table. The elbow servo is taken as that same angle directly: 0
-        # stands the upper arm up, 180 lays it flat forward.
-        #
-        # This is a drawing convention, not a claim about the servo horns —
-        # which is the honest position to take, because how a given robot's
-        # horns are mounted is precisely what this calibration measures and
-        # what Studio therefore cannot know in advance.
+        # the table: 0 stands the upper arm up, 180 lays it flat forward.
         upper = math.radians(elbow)
         joint = QPointF(
             base_top.x() + math.sin(upper) * UPPER_ARM * scale,

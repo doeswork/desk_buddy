@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from .card import Card
 
+from ...models.config.current_robot import CurrentRobot
 from ...models.config.robots import Robot
 from ...services.manual_controller import live_actions
 from .manual_control import ManualControl
@@ -56,11 +57,27 @@ class Registry:
         return next((robot for robot in self.entries if robot.name == name), None)
 
 
+class MemorySettings:
+    """Settings without a file, so a test never writes the real preferences."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+
+    def get(self, key):
+        return self.values.get(key.name, key.default)
+
+    def set(self, key, value) -> None:
+        self.values[key.name] = value
+
+
 def tab(entries=(Robot("black", "Black Buddy"),)) -> tuple[ManualControl, RecordingClient, Registry]:
     registry = Registry(entries)
     client = RecordingClient()
-    # The registry is the service's now, so that is where it is patched.
-    patcher = mock.patch.object(live_actions, "robots", lambda: registry)
+    # The selection is app-wide now, so the shared CurrentRobot is what gets
+    # patched — pointed at this test's registry and at settings that live in
+    # memory, so selecting a robot here cannot rewrite the user's real choice.
+    selection = CurrentRobot(store=MemorySettings(), registry=lambda: registry)
+    patcher = mock.patch.object(live_actions, "current_robot", lambda: selection)
     patcher.start()
     control = ManualControl()
     control.live.client = lambda: client
@@ -113,7 +130,7 @@ def test_slider_previews_without_publishing_then_sends_on_commit() -> None:
 
         elbow.committed.emit(126)
         topic, payload = client.sent[-1]
-        assert topic == "black/test"
+        assert topic == "black/commands"
         assert payload["sender"] == "studio"
         assert payload["servoName"] == "ELBOW"
         assert payload["position"] == 126
@@ -167,7 +184,7 @@ def test_picking_another_robot_rebuilds_against_it() -> None:
         # The rebuilt cards publish to the new robot, not the old one.
         control.live.photo()
         topic, _payload = client.sent[-1]
-        assert topic == "white/test"
+        assert topic == "white/commands"
     finally:
         close_tab(control)
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ...models.config.robots import robots
+from ...models.config.current_robot import current_robot
 from ..network import mqtt_client
 from ..network.pub_sub import manual_messages
 
@@ -45,14 +45,15 @@ class LiveActions:
         announce: Callable[[str], None] | None = None,
         refresh: Callable[[], None] | None = None,
     ) -> None:
-        self._robot = ""
         self._announce = announce
         self._refresh = refresh
         self._known_robots = self.robot_snapshot()
 
     # ---- which robot ------------------------------------------------------
+    # The selection is app-wide, not the controller's: pointing the tray tab
+    # at a robot points Calibration and Vision at the same one.
     def robots(self) -> list:
-        return robots().all()
+        return current_robot().available()
 
     def robot_snapshot(self) -> tuple[tuple[str, str], ...]:
         """Enough of the registry to notice it changed elsewhere.
@@ -64,27 +65,18 @@ class LiveActions:
 
     @property
     def robot(self) -> str:
-        """The robot commands go to, as a name.
-
-        Falls back to the first available rather than holding a selection
-        that no longer exists: a robot can be deleted on Network → Robots
-        while this controller is open, and a stale name would publish to a
-        topic nothing is listening on.
-        """
-        if self._robot and robots().find(self._robot) is not None:
-            return self._robot
-        available = self.robots()
-        return available[0].name if available else ""
+        """The robot commands go to, as a name."""
+        return current_robot().name
 
     @property
     def selected_robot(self):
         """The full record, for anything that needs more than the name."""
-        return robots().find(self.robot) if self.robot else None
+        return current_robot().record
 
     def select_robot(self, name: str) -> None:
         if name == self.robot:
             return
-        self._robot = name
+        current_robot().select(name)
         self.changed()
 
     def robots_changed(self) -> bool:

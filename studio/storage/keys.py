@@ -85,6 +85,12 @@ VISION_AUTO_START = Key("vision/auto_start", bool, False)
 WSL_USB_SELECTION = Key("serial/wsl_usb_selection", str, "")
 ROBOT_SELECTED_PROFILE = Key("serial/robot_selected_profile", str, "")
 
+# ---- Robot --------------------------------------------------------------
+# Which robot every workspace sends commands to. An account name, resolved
+# through the robot registry on read — see models/config/current_robot.py for
+# why a name is stored here rather than a record.
+CURRENT_ROBOT = Key("robot/current", str, "")
+
 ALL = (
     WSL_USB_SELECTION,
     ROBOT_SELECTED_PROFILE,
@@ -108,4 +114,5 @@ ALL = (
     VISION_SELECTED_MODEL,
     VISION_ACTIVE_MODEL,
     VISION_AUTO_START,
+    CURRENT_ROBOT,
 )

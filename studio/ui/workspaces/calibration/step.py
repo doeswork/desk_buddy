@@ -98,8 +98,16 @@ class StepPage(Page):
         return bool(self.workspace.robot) and not self._pending
 
     def build_robot_picker(self) -> QWidget:
+        """Which robot this step calibrates — always shown, even for one.
+
+        Hiding the picker below two robots meant the only way to see what
+        Studio was aimed at was to read the topic in the MQTT log. A robot
+        reflashed under a new account name is a *different* robot to the
+        registry, so "you only have one" is exactly when being pointed at the
+        wrong one is hardest to notice.
+        """
         available = self.workspace.robots()
-        if len(available) < 2:
+        if not available:
             return QWidget()
 
         holder = QWidget()
