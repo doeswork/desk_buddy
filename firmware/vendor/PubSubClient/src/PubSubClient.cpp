@@ -524,6 +524,11 @@ boolean PubSubClient::publish_P(const char* topic, const uint8_t* payload, unsig
 }
 
 boolean PubSubClient::beginPublish(const char* topic, unsigned int plength, boolean retained) {
+    if (!topic || !buffer || bufferSize < MQTT_MAX_HEADER_SIZE + 2) return false;
+    const size_t topicLength = strlen(topic);
+    if (!topicLength || topicLength > 65535 ||
+        topicLength > size_t(bufferSize - MQTT_MAX_HEADER_SIZE - 2) ||
+        plength > 268435455UL - 2 - topicLength) return false;
     if (connected()) {
         // Send the header and variable length field
         uint16_t length = MQTT_MAX_HEADER_SIZE;
@@ -535,13 +540,22 @@ boolean PubSubClient::beginPublish(const char* topic, unsigned int plength, bool
         size_t hlen = buildHeader(header, this->buffer, plength+length-MQTT_MAX_HEADER_SIZE);
         uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),length-(MQTT_MAX_HEADER_SIZE-hlen));
         lastOutActivity = millis();
-        return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
+        if (rc != (length-(MQTT_MAX_HEADER_SIZE-hlen))) {
+            abortPublish();
+            return false;
+        }
+        return true;
     }
     return false;
 }
 
 int PubSubClient::endPublish() {
  return 1;
+}
+
+void PubSubClient::abortPublish() {
+    if (_client) _client->stop();
+    _state = MQTT_DISCONNECTED;
 }
 
 size_t PubSubClient::write(uint8_t data) {
@@ -554,12 +568,13 @@ size_t PubSubClient::write(const uint8_t *buffer, size_t size) {
     return _client->write(buffer,size);
 }
 
-size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
+size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint32_t length) {
+    if (length > 268435455UL) return 0;
     uint8_t lenBuf[4];
     uint8_t llen = 0;
     uint8_t digit;
     uint8_t pos = 0;
-    uint16_t len = length;
+    uint32_t len = length;
     do {
 
         digit = len  & 127; //digit = len %128

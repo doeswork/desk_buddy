@@ -320,7 +320,9 @@ class MqttRobot:
             if rc_value == 0:
                 self.state.broker_connected = True
                 self.state.last_error = ""
-                client.subscribe(config.command_topic)
+                client.subscribe(config.event_topic)
+                client.subscribe(config.photo_topic)
+                client.subscribe(config.vision_topic)
                 client.subscribe(config.heartbeat_topic)
                 self._emit("status", "Connected to MQTT broker")
             else:
@@ -556,9 +558,12 @@ class MqttRobot:
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         raw = bytes(msg.payload)
-        decoded_photo = decode_photo_message(raw)
-        if decoded_photo:
-            self._handle_photo(decoded_photo)
+        if self.config and msg.topic == self.config.photo_topic:
+            decoded_photo = decode_photo_message(raw)
+            if decoded_photo:
+                self._handle_photo(decoded_photo)
+            else:
+                self._emit("raw_message", {"topic": msg.topic, "text": "Invalid photo frame"})
             return
 
         text = raw.decode("utf-8", errors="replace")
@@ -608,6 +613,13 @@ class MqttRobot:
             if pending and pending.get("want") == "json":
                 pending["result"] = data
                 pending["event"].set()
+            elif pending and data.get("status") == "failed":
+                if pending.get("want") == "photo":
+                    pending["result"] = data
+                    pending["event"].set()
+                elif pending.get("want") == "visual_calibration":
+                    pending["response"] = data
+                    pending["photo_event"].set()
 
     def _handle_visual_calibration_result(self, data: Dict[str, Any]) -> bool:
         message_type = str(data.get("type") or data.get("action") or "").lower()
@@ -650,12 +662,15 @@ class MqttRobot:
         if not is_tracked and not (pending and pending.get("want") == "reach_and_grab"):
             return False
 
-        # Firmware detect_object messages are camera progress only. Only the
-        # Visual AI terminal response may finish the overall operation.
-        if sender == "firmware" and status != "in_progress":
+        # Firmware completion means the JPEG reached MQTT, but Vision still
+        # owns successful workflow completion. A firmware failure is terminal
+        # because there is no photo for Vision to process.
+        if sender == "firmware" and status == "completed":
             return False
 
-        terminal = sender == "visual_ai" and status in {"completed", "failed"}
+        terminal = (
+            sender == "visual_ai" and status in {"completed", "failed"}
+        ) or (sender == "firmware" and status == "failed")
         if terminal:
             if self.state.active_reach_and_grab_action_id == target:
                 self.state.active_reach_and_grab_action_id = ""
@@ -673,7 +688,7 @@ class MqttRobot:
             if pending and pending.get("want") == "reach_and_grab":
                 pending["response"] = data
                 pending["result_event"].set()
-        return sender == "visual_ai"
+        return terminal
 
     def _handle_photo(self, photo: DecodedPhoto) -> None:
         self._emit("photo", photo)

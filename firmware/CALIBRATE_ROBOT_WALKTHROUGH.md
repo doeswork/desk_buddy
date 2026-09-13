@@ -20,14 +20,17 @@ MQTT topics:
 
 | Topic | Use |
 | --- | --- |
-| `{mqtt_user}/test` | Commands, replies, status, debug, and photo messages |
-| `{mqtt_user}/HEARTBEAT` | Heartbeat telemetry |
+| `{mqtt_user}/commands` | Commands |
+| `{mqtt_user}/events` | Firmware replies, status, and debug messages |
+| `{mqtt_user}/photos` | Binary photo frames |
+| `{mqtt_user}/vision` | Vision-service results |
+| `{mqtt_user}/heartbeat` | Heartbeat telemetry |
 
 Command rules:
 
 - Use a unique `action_id` for every direct MQTT command.
 - Do not publish commands with `sender:"firmware"`.
-- Ignore unrelated `count`, `heartbeat`, `debug`, and non-matching `action_id` messages.
+- On the event topic, ignore `debug` and non-matching `action_id` messages.
 - Most commands publish `in_progress`, then `completed` or `failed`.
 
 ## Helper Setup
@@ -39,14 +42,13 @@ python3 -m pip install paho-mqtt
 export DESK_BUDDY_MQTT_BROKER="mqtt.deskbuddy.ai"
 export DESK_BUDDY_MQTT_ADMIN_USER="YOUR_ADMIN_MQTT_USERNAME"
 export DESK_BUDDY_MQTT_ADMIN_PASSWORD="YOUR_ADMIN_MQTT_PASSWORD"
-export DESK_BUDDY_MQTT_COMMAND_TOPIC="esp32_5/test"
-export DESK_BUDDY_MQTT_HEARTBEAT_TOPIC="esp32_5/HEARTBEAT"
+export DESK_BUDDY_MQTT_ROBOT_TOPIC="esp32_5"
 export DESK_BUDDY_MQTT_CA_CERT="./mqtt-ca.crt"
 cd /home/jeffy4080/robots/desk_buddy
 python3 manually_calibrate_robot.py --help
 ```
 
-`DESK_BUDDY_MQTT_ADMIN_USER` and `DESK_BUDDY_MQTT_ADMIN_PASSWORD` authenticate to Mosquitto. `DESK_BUDDY_MQTT_COMMAND_TOPIC` is the ESP32 robot command topic.
+`DESK_BUDDY_MQTT_ADMIN_USER` and `DESK_BUDDY_MQTT_ADMIN_PASSWORD` authenticate to Mosquitto. `DESK_BUDDY_MQTT_ROBOT_TOPIC` is the common prefix from which the tool derives every robot channel.
 
 The helper wraps reusable functions such as `send_command()`, `check_calibration_values()`, `open_gripper()`, `calibrate_base_profile()`, `move_servo()`, `save_hover_point()`, `test_ik()`, `save_z_height_point()`, and `stencil_*()`.
 
@@ -277,10 +279,10 @@ python3 manually_calibrate_robot.py open-gripper
 
 | Problem | Check / action |
 | --- | --- |
-| No MQTT reply | Confirm ESP32 `ready`, topic `{mqtt_user}/test`, valid JSON, non-firmware sender, and matching `action_id` |
+| No MQTT reply | Confirm ESP32 `ready` on `{mqtt_user}/events`, command publication on `{mqtt_user}/commands`, valid JSON, non-firmware sender, and matching `action_id` |
 | Base profile fails | Check active-low true-north switch on GPIO14, AS5600 on GPIO1, free rotation, power, and neutral override near `90` |
 | Base angle fails | Re-run `base-profile`; stencil requires trusted absolute position |
 | IK/servo blocked | Check hover point order, perch safety side, and whether a collision pose was accidentally saved |
 | Stencil `START` fails | Confirm `base_rotation_ready`, `base_rotation_calibrated`, `base_rotation_profileCalibrated`, and `base_rotation_lastValid` |
 | Gripper never succeeds | Check active-low stop pins GPIO45/GPIO46 and peg contact with a stop switch |
-| Noisy messages | Ignore `count`, `heartbeat`, `debug`, and messages with a different `action_id` |
+| Noisy messages | Confirm each consumer uses the correct channel; on `events`, ignore `debug` and messages with a different `action_id` |

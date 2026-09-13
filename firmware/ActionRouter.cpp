@@ -69,9 +69,8 @@ namespace {
     return true;
   }
 
-  bool handlePhoto(const ActionRouter::Context& ctx, String&) {
-    ActionPhoto::run(ctx.message, -1);
-    return true;
+  bool handlePhoto(const ActionRouter::Context& ctx, String& detailsJson) {
+    return ActionPhoto::run(ctx.message, detailsJson, -1);
   }
 
   bool handleOtaUpdate(const ActionRouter::Context& ctx, String&) {
@@ -93,10 +92,10 @@ namespace {
     {"perch",             handlePerch,               ReplyStyle::CompletedNoPhrase, "",                   false, false},
     {"calibrate",         handleCalibrate,           ReplyStyle::HandlerOwned,      "",                   true,  false},
     {"calibrationvalues", handleCalibrationValues,   ReplyStyle::HandlerOwned,      "",                   false, true},
-    {"photo",             handlePhoto,               ReplyStyle::PhotoInProgress,   "",                   false, true},
-    {"detect_object",     handlePhoto,               ReplyStyle::PhotoInProgress,   "",                   false, true},
-    {"detect_color",      handlePhoto,               ReplyStyle::PhotoInProgress,   "",                   false, true},
-    {"calibrate_depth",   handlePhoto,               ReplyStyle::PhotoInProgress,   "",                   false, true},
+    {"photo",             handlePhoto,               ReplyStyle::PhotoTerminal,     "",                   false, true},
+    {"detect_object",     handlePhoto,               ReplyStyle::PhotoTerminal,     "",                   false, true},
+    {"detect_color",      handlePhoto,               ReplyStyle::PhotoTerminal,     "",                   false, true},
+    {"calibrate_depth",   handlePhoto,               ReplyStyle::PhotoTerminal,     "",                   false, true},
     {"ota_update",        handleOtaUpdate,           ReplyStyle::CompletedNamed,    "ota_update",         false, false},
   };
 

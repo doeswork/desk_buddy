@@ -20,21 +20,24 @@ The username also identifies the robot's topics:
 
 | Topic | Firmware behavior |
 | --- | --- |
-| `{mqtt_user}/test` | Subscribes for commands and publishes command responses, ready messages, photos, debug messages, and count messages |
-| `{mqtt_user}/HEARTBEAT` | Publishes heartbeat telemetry |
+| `{mqtt_user}/commands` | Subscribes for JSON commands only |
+| `{mqtt_user}/events` | Publishes ready, lifecycle, result, progress, and debug JSON |
+| `{mqtt_user}/photos` | Publishes binary-framed JPEG photos only |
+| `{mqtt_user}/vision` | Reserved for correlated Vision-service JSON results; firmware does not subscribe or publish |
+| `{mqtt_user}/heartbeat` | Publishes heartbeat telemetry |
 
 Important transport behavior:
 
-- Commands and responses share `{mqtt_user}/test`. Consumers must filter by `sender`, `action_id`, `status`, or message-specific fields.
-- MQTT uses TLS but the ESP32 currently calls `setInsecure()`, so it does not verify the broker certificate.
+- Topic direction is part of the contract. Firmware receives only `commands`, so its own events, photos, and third-party Vision results cannot enter the command dispatcher.
+- MQTT follows the saved TLS preference: local plaintext is supported; when TLS is enabled the ESP32 currently calls `setInsecure()` and does not verify the broker certificate.
 - PubSubClient uses QoS 0 and non-retained publishes. The subscription also uses QoS 0.
-- The ordinary MQTT buffer is `6144` bytes. Command dispatch uses a `512`-byte ArduinoJson document, so requests should remain compact.
+- The ordinary MQTT buffer is `6144` bytes. Vendored ArduinoJson 7.2.1 allocates documents dynamically; the legacy `DynamicJsonDocument(512)` argument is not a parsing limit. Studio preflights the encoded capture command against the real MQTT buffer, including topic/header overhead.
 - Action handlers are synchronous. A long servo, base calibration, stencil step, photo capture, or OTA operation blocks dispatch and may prevent MQTT maintenance until it returns.
-- The receive path uses a single-message slot: one incoming non-count payload wakes the listen loop and is dispatched immediately. The slot is cleared only when its message is copied for dispatch, so a follow-up command received by MQTT maintenance immediately after the previous terminal response is preserved. Send one stateful command at a time and wait for its exact matching terminal response.
+- The receive path uses a single-command slot: one incoming command wakes the listen loop and is dispatched immediately. The slot is cleared only when its message is copied for dispatch, so a follow-up command received by MQTT maintenance immediately after the previous terminal response is preserved. Send one stateful command at a time and wait for its exact matching terminal response.
 
 ## 2. Request Envelope
 
-Commands are JSON objects published to `{mqtt_user}/test`.
+Commands are JSON objects published to `{mqtt_user}/commands`.
 
 ```json
 {
@@ -49,19 +52,19 @@ Commands are JSON objects published to `{mqtt_user}/test`.
 | Field | Requirement | Behavior |
 | --- | --- | --- |
 | `action` | Required | Exact, case-sensitive action name dispatched by the firmware |
-| `action_id` | Strongly recommended | String or JSON integer used to correlate replies; other JSON types are not recognized as IDs |
-| `sender` | Recommended | Identifies the caller. Never use `firmware`; messages with `sender:"firmware"` are ignored when recognized |
+| `action_id` | Required | Nonempty string or JSON integer used to correlate replies; other JSON types are not recognized as IDs |
+| `sender` | Required | Nonempty caller identity. Never use `firmware`; messages with `sender:"firmware"` are ignored when recognized |
 | `phrase` | Optional | Scalar or array copied to the initial response and to response paths that preserve it |
 | `use_model` / `useModel` | Optional | Any JSON value copied as `use_model` to the initial response and photo metadata |
 | `workflow_id` | Optional JSON integer | Copied to responses generated during this dispatch |
 | `workflow_event_id` | Optional JSON integer | Copied only when `workflow_id` is a JSON integer |
 
-`action_id` is not universally required by the firmware, but omitting it makes correlation unreliable. A known action without an ID receives no initial `in_progress`; some handlers still publish a terminal message with `action_id:""`.
+Commands missing `sender` or `action_id` are rejected before dispatch and produce serial diagnostics only.
 
 ### Dispatch filtering and malformed requests
 
 - The callback tries to parse a `128`-byte JSON document. When parsing succeeds, `sender:"firmware"` is ignored. Other payloads are copied into the single receive slot and parsed again by the dispatcher.
-- Valid shared-topic JSON without `action`, invalid JSON, a request too large for the dispatch document, or an unknown/case-mismatched action produces serial diagnostics only.
+- JSON without `action`, invalid JSON, a request too large for the dispatch document, or an unknown/case-mismatched action produces serial diagnostics only.
 - Extra fields are generally ignored.
 
 ## 3. Response Lifecycle and Envelopes
@@ -113,7 +116,7 @@ Response nuances:
 
 - `phrase` is always copied to the initial `in_progress`. Final `baseRotate`, `servo`, `controlik`, and `stencilCalibrate` responses also preserve it. Gripper, perch, calibration-value, calibration-write, and OTA terminal paths do not consistently preserve it.
 - `use_model` is emitted in the initial `in_progress` and photo metadata, not ordinary terminal responses.
-- Workflow fields are injected into normal in-progress, completed/failed, detailed, and photo messages. They are not included in ready, heartbeat, count, or debug messages.
+- Workflow fields are injected into normal in-progress, completed/failed, detailed, and photo messages. They are not included in ready, heartbeat, or debug messages.
 - `type` is included initially for photo actions, an explicitly supplied calibration subtype, and `calibrationvalues`. It is omitted initially for the other actions.
 - A detailed-result serialization failure places the raw result string under the result key. A detailed publish failure attempts a smaller `failed` response when an action ID exists.
 - A logical operation can complete at the MQTT level while reporting a state that requires more work. In particular, a stencil grab miss returns `status:"completed"` with `phase:"needs_adjustment"`.
@@ -130,7 +133,7 @@ Response nuances:
 | `calibrate` | Calibration-specific `completed` or `failed` | saved calibration key or `base_rotation` |
 | `calibrationvalues` | `completed`, or `failed` if Preferences cannot open | `calibrationvalues` |
 | `stencilCalibrate` | `completed` or `failed` | `stencil_calibration` |
-| `photo` | Photo frame, then another `in_progress` with `log:"sent"` | binary photo frame |
+| `photo` | Photo frame, then `completed`; capture/publish errors return `failed` | binary photo frame |
 | `detect_object` | Same as `photo` | binary photo frame |
 | `detect_color` | Same as `photo` | binary photo frame |
 | `calibrate_depth` | Same as `photo` | binary photo frame |
@@ -480,12 +483,30 @@ The camera tries SVGA (`800x600`), VGA (`640x480`), then QVGA (`320x240`), with 
 ### Photo response sequence
 
 1. Normal `in_progress`, with `type` equal to the requested photo action.
-2. One binary-framed photo message on `{mqtt_user}/test`.
-3. Another `in_progress` with the same `type` and `log:"sent"`.
+2. One binary-framed photo message on `{mqtt_user}/photos` when capture succeeds.
+3. A terminal event on `{mqtt_user}/events`: `completed` only after the complete frame is written to the transport, otherwise `failed` with a structured `error` object when the connection remains usable. Written bytes are not a delivery acknowledgement. An incomplete stream closes the socket immediately, so its failure may be serial-only until the consumer times out.
 
-There is no firmware `completed` photo response. The second `in_progress` is emitted even if capture or publishing failed, so it is not proof that a valid JPEG arrived.
+Consumers should register callbacks and wait for successful subscription acknowledgements on `events` and `photos` before publishing the command, then correlate both channels by the mandatory request `action_id`.
+Vision services also observe correlated failed photo events so they can stop waiting immediately instead of emitting a later photo timeout.
 
 ### Binary framing
+
+The photo envelope is capped at 8 MiB. PubSubClient uses a patched 32-bit
+Remaining Length encoder; streamed payloads above 65,535 bytes no longer wrap.
+The ordinary MQTT buffer remains 6,144 bytes. Stream chunks are 4 KiB with a
+shared 2-second no-progress and 15-second total budget across header/prefix/JPEG/
+suffix. Plaintext stream writes bypass the core's internal blocking retry loop;
+TLS writes use the configured 2,000 ms socket timeout. Deadlines are checked
+between socket calls. MQTT keepalive remains 30 seconds and socket read timeout
+2 seconds. No other MQTT packets are emitted while a photo packet is open.
+
+A short header or failed payload closes the underlying transport without sending
+MQTT DISCONNECT. `endPublish()` is not a flush, acknowledgement, or abort API.
+Normal maintenance handles reconnection. Camera configuration is zero-initialized
+and the framebuffer is returned when the capture action exits on success or failure.
+Serial `[photo]` logs correlate capture/publication durations, bytes, internal heap,
+PSRAM, and stage with the action ID. Physical timing and recovery validation is
+tracked in `VISION_MQTT_FLOW.md` sections 12–13.
 
 The photo message is deliberately not valid JSON and is not base64 encoded. It is:
 
@@ -497,9 +518,13 @@ Metadata before `payload` can contain:
 
 | Field | Behavior |
 | --- | --- |
+| `schema:"desk_buddy.photo.v1"` | Photo protocol version |
 | `sender:"firmware"` | Constant |
 | `action_id` | Included when nonempty |
+| `type` | Requested camera action (`photo`, `detect_object`, `detect_color`, or `calibrate_depth`) |
 | `photo:"sending_photo"` | Constant marker |
+| `content_type:"image/jpeg"` | Binary payload media type |
+| `width`, `height`, `size` | Captured dimensions and JPEG byte count |
 | `requested_by` | Incoming sender when nonempty |
 | `phrase` | Copied when present |
 | `use_model` | Copied from either accepted spelling when present |
@@ -511,9 +536,9 @@ A decoder must locate the byte marker `,"payload":`, parse only the prefix as JS
 
 ### External reach-and-grab orchestration
 
-When the configured Vision server has automatic reach-and-grab enabled, a `detect_object` photo request can start a larger shared-topic workflow. The initiating client sends a nonempty scalar `phrase` and boolean `use_model`; it may also send `model_name`, `box_threshold`, `text_threshold`, `MagnetPosition`, and workflow IDs. Client senders must not impersonate `ai_server`, `visual_ai`, or `firmware`, and `use_model:"train"` is not supported.
+When the configured Vision server has automatic reach-and-grab enabled, a `detect_object` photo request can start a larger correlated workflow across the command, event, photo, and Vision topics. The initiating client sends a nonempty scalar `phrase` and boolean `use_model`; it may also send `model_name`, `box_threshold`, `text_threshold`, `MagnetPosition`, and workflow IDs. Client senders must not impersonate `ai_server`, `visual_ai`, or `firmware`, and `use_model:"train"` is not supported.
 
-After the ESP32 publishes the photo, the external Vision server may publish progress with the original action ID, generate sequential `baseRotate`, `controlik`, `gripper`, and `calibrationvalues` child commands using its own `rg-...` action IDs, and finally publish one terminal result:
+After the ESP32 publishes the photo, the external Vision server may publish progress with the original action ID, generate sequential `baseRotate`, `controlik`, `gripper`, and `calibrationvalues` child commands using its own `rg-...` action IDs, and finally publish one terminal result to `{mqtt_user}/vision`:
 
 ```json
 {
@@ -563,7 +588,7 @@ Failures return outer `status:"failed"` with `type:"ota_update"`; detailed failu
 
 ### 8.1 Ready
 
-Published once after each successful MQTT connection to `{mqtt_user}/test`:
+Published once after each successful MQTT connection to `{mqtt_user}/events`:
 
 | Field | Meaning |
 | --- | --- |
@@ -572,15 +597,16 @@ Published once after each successful MQTT connection to `{mqtt_user}/test`:
 | `firmware_version`, `compiled_firmware_version`, `running_version` | Version telemetry |
 | `desired_version`, `ota_state`, `ota_update_required`, `last_attempted_version` | OTA state |
 | `last_error`, `desired_url` | Included only when nonempty |
-| `ready_message_revision` | Currently `20` |
+| `ready_message_revision` | Currently `21` |
+| `mqtt_protocol` | `desk_buddy.mqtt.v2` for the split-topic contract |
 | `last_reset_reason` | ESP reset-reason text |
 | `boot_free_heap`, `boot_min_free_heap`, `current_free_heap` | Heap diagnostics |
 
-The ESP32 requests the status-topic subscription and sends an initial heartbeat before the ready message, so consumers must not assume ready is the first post-connect publish. PubSubClient's local `subscribe()` return and the broker SUBACK are not exposed in ready telemetry.
+The ESP32 requests the command-topic subscription and sends an initial heartbeat before the ready event, so consumers must not assume ready is the first post-connect publication. PubSubClient's local `subscribe()` return and the broker SUBACK are not exposed in ready telemetry.
 
 ### 8.2 Heartbeat
 
-Published to `{mqtt_user}/HEARTBEAT` while heartbeat is enabled, nominally every `4000 ms` while the listen loop is idle:
+Published to `{mqtt_user}/heartbeat` while heartbeat is enabled, nominally every `4000 ms` while the listen loop is idle:
 
 ```json
 {
@@ -600,17 +626,17 @@ Published to `{mqtt_user}/HEARTBEAT` while heartbeat is enabled, nominally every
 
 Timestamps are generated after `configTime(0,0,...)` and therefore use UTC-style system time, despite having no timezone suffix.
 
-The code can optionally publish three additional hover snapshots to the status topic when `Heartbeat::send(false)` is called. Normal MQTT paths call `send(true)`, so those snapshot messages are not normally emitted.
+The code can optionally publish three additional hover snapshots to the event topic when `Heartbeat::send(false)` is called. Normal MQTT paths call `send(true)`, so those snapshot messages are not normally emitted.
 
 ### 8.3 Debug
 
-Gripper and OTA code can publish to `{mqtt_user}/test`:
+Gripper and OTA code can publish to `{mqtt_user}/events`:
 
 ```json
 {"sender":"firmware","debug":"gripper","msg":"handleGrab: starting GRAB"}
 ```
 
-Debug messages have no `action_id`, status, phrase, or workflow context. They are diagnostic side traffic and must not be treated as command completion. The firmware sender marker ensures the ESP32 rejects its own debug echo before dispatch.
+Debug messages have no `action_id`, status, phrase, or workflow context. They are diagnostic side traffic and must not be treated as command completion.
 
 ## 9. Persistence and Runtime Defaults
 
@@ -637,18 +663,18 @@ Holding the BOOT button for three seconds performs a connection reset outside MQ
 
 | Situation | MQTT-observable result |
 | --- | --- |
-| Incoming `sender:"firmware"`, including large detail/photo payloads | Ignored before command allocation/dispatch |
-| Valid JSON without `action` | Ignored as shared-topic side traffic |
-| Command is too large for the `512`-byte dispatch document | Dispatcher JSON parse error; no MQTT response |
+| Incoming command with `sender:"firmware"` | Ignored before command allocation/dispatch |
+| Command JSON without `action` | Ignored |
+| Command exceeds the 6,144-byte MQTT receive buffer, cannot allocate JSON memory, or is malformed | May be discarded or produce serial parse diagnostics with no MQTT response; Studio rejects oversized encoded capture requests before publication |
 | Dispatcher cannot parse JSON | No response |
 | Missing or unknown/case-mismatched `action` | No response |
 | Known action with ID | Initial `in_progress`, then action-specific behavior |
-| Known action without ID | No initial response; handler-dependent empty-ID terminal traffic may occur |
+| Missing `sender` or `action_id` | Rejected before dispatch; no MQTT response |
 | Handler validation or motion failure | Usually `failed`; detailed base/stencil responses include nested `error` |
 | `calibrate` parse failure | Initial `in_progress` may already have published, then no terminal response |
 | Perch move blocked | Still reports `completed` |
 | Stencil grab misses | Reports `completed` with `phase:"needs_adjustment"` |
-| Photo WiFi/camera/capture/publish failure | No failed terminal response; controller still emits `in_progress` with `log:"sent"` |
+| Photo WiFi/camera/capture/publish failure | Correlated `failed` event with a structured `error` object; no photo is published when capture fails |
 | OTA fails | `failed`; reason primarily in debug and OTA telemetry |
 | OTA succeeds | Reboots, usually before terminal `completed` |
 | Detailed-result MQTT publish fails | Attempts a smaller fallback `failed` response |
@@ -660,6 +686,6 @@ When firmware MQTT behavior changes, audit at least these sources and update thi
 ```bash
 rg 'strcmp\(act|sendInProgress|sendCompleted|sendCompletedDetails' firmware
 rg 'controlType|calibration_type|command"\]|servoName|action_id.*live' firmware
-rg 'STATUS_TOPIC|HEARTBEAT_TOPIC|publishStatusPhoto|sendDebug' firmware
+rg 'COMMAND_TOPIC|EVENT_TOPIC|PHOTO_TOPIC|HEARTBEAT_TOPIC|publishPhoto|sendDebug' firmware
 rg 'Preferences|putFloat|putString|remove\(' firmware/Action*.cpp firmware/BuddyMQTT.cpp
 ```

@@ -1,4 +1,5 @@
 #include "BuddyMQTT.h"
+#include "MqttStream.h"
 #include "BuddyWifi.h"
 #include "ActionController.h"
 #include "ActionOTA.h"
@@ -14,6 +15,8 @@
 #include <LED.h>
 #include <ArduinoJson.h>
 #include <cstring>
+#include <lwip/sockets.h>
+#include <errno.h>
 
 namespace {
   // —— Default broker settings (TLS) - can be overridden via web config ————
@@ -35,8 +38,10 @@ namespace {
   String PASS;
   String CLIENT_ID;
   bool USE_TLS = true;
-  String STATUS_TOPIC;       // Built from USER/test
-  String HEARTBEAT_TOPIC;    // Built from USER/HEARTBEAT
+  String COMMAND_TOPIC;      // Built from USER/commands
+  String EVENT_TOPIC;        // Built from USER/events
+  String PHOTO_TOPIC;        // Built from USER/photos
+  String HEARTBEAT_TOPIC;    // Built from USER/heartbeat
 
 
   // Both transports exist; ensureInited() points PubSubClient at whichever
@@ -44,8 +49,29 @@ namespace {
   // broker fails the TCP handshake outright and reports rc=-2, which reads
   // as "broker unreachable" rather than "wrong transport" — so Studio's own
   // local broker, which has no certificates to offer, needs the plain one.
+  bool streamingPublication = false;
+  // NetworkClient::write retries internally, potentially blocking beyond our
+  // deadline. During plaintext streams, let MqttStream own partial-write retries.
+  class PlainMqttClient : public WiFiClient {
+   public:
+    using WiFiClient::write;
+    size_t write(const uint8_t* data, size_t length) override {
+      if (!streamingPublication) return WiFiClient::write(data, length);
+      const int socket = fd();
+      if (socket < 0) return 0;
+      const int sent = ::send(socket, data, length, MSG_DONTWAIT);
+      if (sent >= 0) return size_t(sent);
+      if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) stop();
+      return 0;
+    }
+  };
+  struct StreamMode {
+    StreamMode() { streamingPublication = true; }
+    ~StreamMode() { streamingPublication = false; }
+  };
+
   WiFiClientSecure tlsClient;     // TLS transport (cloud broker)
-  WiFiClient       plainClient;   // Plaintext transport (local broker)
+  PlainMqttClient  plainClient;   // Plaintext transport (local broker)
   PubSubClient     mqttClient(tlsClient);
 
   bool inited = false;
@@ -126,9 +152,11 @@ namespace {
       USE_TLS = true;
     }
 
-    // Build topics from username
-    STATUS_TOPIC = USER + "/test";
-    HEARTBEAT_TOPIC = USER + "/HEARTBEAT";
+    // Build directional topics from the robot's MQTT username.
+    COMMAND_TOPIC = USER + "/commands";
+    EVENT_TOPIC = USER + "/events";
+    PHOTO_TOPIC = USER + "/photos";
+    HEARTBEAT_TOPIC = USER + "/heartbeat";
 
     Serial.println("MQTT Settings:");
     Serial.println("  Server: " + SERVER);
@@ -136,7 +164,9 @@ namespace {
     Serial.println("  User: " + USER);
     Serial.println("  Client ID: " + CLIENT_ID);
     Serial.println("  TLS: " + String(USE_TLS ? "yes" : "no"));
-    Serial.println("  Status Topic: " + STATUS_TOPIC);
+    Serial.println("  Command Topic: " + COMMAND_TOPIC);
+    Serial.println("  Event Topic: " + EVENT_TOPIC);
+    Serial.println("  Photo Topic: " + PHOTO_TOPIC);
     Serial.println("  Heartbeat Topic: " + HEARTBEAT_TOPIC);
 
     if (USE_TLS) {
@@ -162,7 +192,7 @@ namespace {
     // Heartbeat hooks
     Heartbeat::setPublishCallback(publishInternal);
     Heartbeat::setHeartbeatTopic(HEARTBEAT_TOPIC.c_str());
-    Heartbeat::setStatusTopic(STATUS_TOPIC.c_str());
+    Heartbeat::setStatusTopic(EVENT_TOPIC.c_str());
     Heartbeat::setTimestampCallback(getTimestamp);
 
     inited = true;
@@ -218,7 +248,7 @@ void BuddyMQTT::maintain() {
       Serial.println("connected");
       // Never carry a command captured on a dead MQTT session into a new one.
       receivedMessage.clear();
-      mqttClient.subscribe(STATUS_TOPIC.c_str());
+      mqttClient.subscribe(COMMAND_TOPIC.c_str());
       Heartbeat::send(true);
     } else {
       const int state = mqttClient.state();
@@ -285,7 +315,8 @@ void BuddyMQTT::maintain() {
     doc["last_attempted_version"] = otaStatus.lastAttemptedVersion;
     if (otaStatus.lastError.length()) doc["last_error"] = otaStatus.lastError;
     if (otaStatus.desiredUrl.length()) doc["desired_url"] = otaStatus.desiredUrl;
-    doc["ready_message_revision"] = 20;
+    doc["ready_message_revision"] = 21;
+    doc["mqtt_protocol"] = "desk_buddy.mqtt.v2";
 
     // Reset diagnostics - helps track brownouts and crashes
     doc["last_reset_reason"] = lastResetReason;
@@ -296,7 +327,7 @@ void BuddyMQTT::maintain() {
     String readyPayload;
     serializeJson(doc, readyPayload);
 
-    if (publishInternal(STATUS_TOPIC.c_str(), readyPayload)) {
+    if (publishInternal(EVENT_TOPIC.c_str(), readyPayload)) {
       Serial.println("Published ready message → " + readyPayload);
       sentReadyMessage = true;
     }
@@ -361,7 +392,7 @@ void BuddyMQTT::sendInProgress(const String& actionId, const String& type, JsonV
   injectWorkflow(doc);
   String out;
   serializeJson(doc, out);
-  if (publishInternal(STATUS_TOPIC.c_str(), out)) {
+  if (publishInternal(EVENT_TOPIC.c_str(), out)) {
     Serial.print("Sent in_progress → ");
     Serial.println(out);
   } else {
@@ -380,7 +411,7 @@ void BuddyMQTT::sendCompleted(const String& actionId, const String& type, const 
   injectWorkflow(doc);
   String out;
   serializeJson(doc, out);
-  if (publishInternal(STATUS_TOPIC.c_str(), out)) {
+  if (publishInternal(EVENT_TOPIC.c_str(), out)) {
     Serial.print("Sent completed → ");
     Serial.println(out);
   } else {
@@ -409,7 +440,7 @@ void BuddyMQTT::sendCompletedDetails(const String& actionId, const char* key, co
 
   String out;
   serializeJson(doc, out);
-  if (publishInternal(STATUS_TOPIC.c_str(), out)) {
+  if (publishInternal(EVENT_TOPIC.c_str(), out)) {
     Serial.print("Sent completed with data → ");
     Serial.println(out);
   } else {
@@ -592,36 +623,13 @@ void BuddyMQTT::sendCalibrationValues(const String& actionId) {
   sendCompletedDetails(actionId, "calibrationvalues", jsonOut, "calibrationvalues");
 }
 
-// Write all bytes with small sub-chunks and retry if partial writes happen.
-// Returns true when exactly 'len' bytes have been pushed.
-bool writeAll(PubSubClient& client, const uint8_t* data, size_t len) {
-  const size_t SUB_CHUNK = 20224;          // conservative for WiFiClientSecure
-  const unsigned long PER_WRITE_TIMEOUT_MS = 2000;
-
-  size_t sent = 0;
-  while (sent < len) {
-    size_t toSend = len - sent;
-    if (toSend > SUB_CHUNK) toSend = SUB_CHUNK;
-
-    unsigned long start = millis();
-    size_t wrote = client.write(data + sent, toSend);
-
-    if (wrote == 0) {
-      // Give the stack a moment, then time out if it keeps failing
-      delay(5);
-      if (millis() - start > PER_WRITE_TIMEOUT_MS) {
-        return false;
-      }
-      continue; // retry this sub-chunk
-    }
-
-    sent += wrote;
-    // Yield so WiFi/TLS can progress
-    delay(1);
-  }
-  return true;
+// The transport itself bounds individual socket writes; this budget also
+// bounds retries and total time across all streamed segments.
+static bool writeAll(MqttStream& stream, const uint8_t* data, size_t length) {
+  return stream.write(mqttClient, data, length,
+                      []() { return uint32_t(millis()); },
+                      [](unsigned ms) { delay(ms); });
 }
-
 
 bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t length) {
   ensureInited();
@@ -633,15 +641,17 @@ bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t l
     Serial.println("publishBinary: MQTT not connected");
     return false;
   }
+  StreamMode mode;
+  MqttStream stream(millis());
   if (!mqttClient.beginPublish(topic.c_str(), length, false)) {
     Serial.println("publishBinary: beginPublish failed");
     return false;
   }
 
-  bool ok = writeAll(mqttClient, data, length);
+  bool ok = writeAll(stream, data, length);
   if (!ok) {
     Serial.println("publishBinary: writeAll failed");
-    mqttClient.endPublish(); // end regardless to flush/reset state
+    mqttClient.abortPublish();
     return false;
   }
 
@@ -650,67 +660,81 @@ bool BuddyMQTT::publishBinary(const String& topic, const uint8_t* data, size_t l
   return ok;
 }
 
-bool BuddyMQTT::publishStatusPhoto(const String& actionId, const String& requester, const uint8_t* data, size_t length, JsonVariantConst phrase, int useModel, const String& useModelJson) {
+bool BuddyMQTT::publishPhoto(const String& actionId, const String& type, const String& requester, const uint8_t* data, size_t length, uint16_t width, uint16_t height, JsonVariantConst phrase, int useModel, const String& useModelJson) {
   ensureInited();
   if (!data || length == 0) {
-    Serial.println("publishStatusPhoto: no data provided");
+    Serial.println("publishPhoto: no data provided");
     return false;
   }
   if (!mqttClient.connected()) {
-    Serial.println("publishStatusPhoto: MQTT not connected");
+    Serial.println("publishPhoto: MQTT not connected");
     return false;
   }
 
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<768> doc;
+  doc["schema"] = "desk_buddy.photo.v1";
   doc["sender"] = "firmware";
   if (actionId.length())   doc["action_id"]   = actionId;
+  if (type.length())       doc["type"]        = type;
   doc["photo"] = "sending_photo";
+  doc["content_type"] = "image/jpeg";
+  doc["width"] = width;
+  doc["height"] = height;
+  doc["size"] = length;
   if (requester.length())  doc["requested_by"] = requester;
   copyUseModel(useModelJson, useModel, doc);
   copyphrase(phrase, doc);
   injectWorkflow(doc);
 
+  if (doc.overflowed()) {
+    Serial.println("publishPhoto: metadata is too large");
+    return false;
+  }
+
   String prefix;
   serializeJson(doc, prefix);
   if (!prefix.length() || prefix[prefix.length() - 1] != '}') {
-    Serial.println("publishStatusPhoto: failed to build prefix");
+    Serial.println("publishPhoto: failed to build prefix");
     return false;
   }
   prefix.remove(prefix.length() - 1); // strip closing brace
   prefix += ",\"payload\":";          // now we'll stream raw JPEG, then close with '}'.
 
-  const char* topic  = STATUS_TOPIC.c_str();
+  const char* topic  = PHOTO_TOPIC.c_str();
   const char  suffix[] = "}";
 
   size_t totalLen = prefix.length() + length + (sizeof(suffix) - 1);
+  if (totalLen > 8UL * 1024 * 1024) return false;
+  StreamMode mode;
+  MqttStream stream(millis());
   if (!mqttClient.beginPublish(topic, totalLen, false)) {
-    Serial.println("publishStatusPhoto: beginPublish failed");
+    Serial.println("publishPhoto: beginPublish failed");
     return false;
   }
 
   // prefix
-  if (!writeAll(mqttClient, reinterpret_cast<const uint8_t*>(prefix.c_str()), prefix.length())) {
-    Serial.println("publishStatusPhoto: prefix writeAll failed");
-    mqttClient.endPublish();
+  if (!writeAll(stream, reinterpret_cast<const uint8_t*>(prefix.c_str()), prefix.length())) {
+    Serial.println("publishPhoto: prefix writeAll failed");
+    mqttClient.abortPublish();
     return false;
   }
 
   // binary JPEG
-  if (!writeAll(mqttClient, data, length)) {
-    Serial.println("publishStatusPhoto: binary writeAll failed");
-    mqttClient.endPublish();
+  if (!writeAll(stream, data, length)) {
+    Serial.println("publishPhoto: binary writeAll failed");
+    mqttClient.abortPublish();
     return false;
   }
 
   // suffix
-  if (!writeAll(mqttClient, reinterpret_cast<const uint8_t*>(suffix), sizeof(suffix) - 1)) {
-    Serial.println("publishStatusPhoto: suffix writeAll failed");
-    mqttClient.endPublish();
+  if (!writeAll(stream, reinterpret_cast<const uint8_t*>(suffix), sizeof(suffix) - 1)) {
+    Serial.println("publishPhoto: suffix writeAll failed");
+    mqttClient.abortPublish();
     return false;
   }
 
   bool ok = mqttClient.endPublish();
-  if (!ok) Serial.println("publishStatusPhoto: endPublish failed");
+  if (!ok) Serial.println("publishPhoto: endPublish failed");
   return ok;
 }
 
@@ -736,7 +760,7 @@ void BuddyMQTT::sendDebug(const String& component, const String& message) {
   String payload;
   serializeJson(doc, payload);
 
-  publishInternal(STATUS_TOPIC.c_str(), payload);
+  publishInternal(EVENT_TOPIC.c_str(), payload);
 }
 
 void BuddyMQTT::sendProgress(const String& actionId, const String& type, const String& detailsJson) {
@@ -755,7 +779,7 @@ void BuddyMQTT::sendProgress(const String& actionId, const String& type, const S
 
   String out;
   serializeJson(doc, out);
-  publishInternal(STATUS_TOPIC.c_str(), out);
+  publishInternal(EVENT_TOPIC.c_str(), out);
 
   // The caller is inside a multi-minute blocking action, so listen() is not
   // pumping the client. Service it here or the broker drops us mid-calibration.

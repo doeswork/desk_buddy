@@ -11,6 +11,7 @@ from .commands import (
     build_command,
     describe_ports,
     parse_usb_ports,
+    profile_provisioning_command,
     wifi_provisioning_command,
 )
 
@@ -75,6 +76,58 @@ def test_wifi_provisioning_validates_esp32_limits() -> None:
             raise AssertionError((ssid, password))
     assert wifi_provisioning_command("Open network", "")
     assert wifi_provisioning_command("Desk", "a" * 64)
+
+
+def test_profile_provisioning_contains_both_namespaces() -> None:
+    command = profile_provisioning_command(
+        wifi_ssid="Desk Lab",
+        wifi_password="secret123",
+        server="192.168.1.50",
+        port=1883,
+        user="robot-1",
+        password="mqtt-secret",
+        client_id="robot-1",
+        tls=False,
+    )
+    assert command.endswith(b"\n")
+    assert b'"desk_buddy_command":"set_profile"' in command
+    assert b'"wifi":{"ssid":"Desk Lab"' in command
+    assert b'"mqtt":{"server":"192.168.1.50"' in command
+
+
+def test_profile_provisioning_rejects_missing_fields_and_oversized_payload() -> None:
+    arguments = dict(
+        wifi_ssid="Desk",
+        wifi_password="secret123",
+        server="broker.example.com",
+        port=1883,
+        user="robot-1",
+        password="mqtt-secret",
+        client_id="robot-1",
+        tls=True,
+    )
+    for key, value in (("user", ""), ("password", ""), ("client_id", "")):
+        invalid = {**arguments, key: value}
+        try:
+            profile_provisioning_command(**invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(key)
+
+    try:
+        profile_provisioning_command(**{**arguments, "user": "studio"})
+    except ValueError as error:
+        assert "reserved" in str(error)
+    else:
+        raise AssertionError("Studio account was offered for a robot")
+
+    try:
+        profile_provisioning_command(**{**arguments, "server": "x" * 400})
+    except ValueError as error:
+        assert "too large" in str(error) or "at most 128 bytes" in str(error)
+    else:
+        raise AssertionError("oversized profile was accepted")
 
 
 if __name__ == "__main__":

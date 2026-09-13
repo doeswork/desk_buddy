@@ -7,5 +7,5 @@
 class ActionPhoto {
 public:
   static void initializeCamera();
-  static void run(const String &message, int useModel = -1);
+  static bool run(const String &message, String& errorDetails, int useModel = -1);
 };

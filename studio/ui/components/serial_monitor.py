@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QPalette, QPen, QTextCursor
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 from PySide6.QtWidgets import (
@@ -28,7 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from ...models.config.mqtt_users import STUDIO_NAME
-from ...services.firmware import mqtt_provisioning_command, wifi_provisioning_command
+from ...models.config.robot_profiles import RobotProfile
+from ...services.firmware import (
+    mqtt_provisioning_command,
+    profile_provisioning_command,
+    wifi_provisioning_command,
+)
 from ...services.network.broker import system as broker_system
 from ...services.network import (
     SYSTEM_PORT,
@@ -113,6 +118,12 @@ def password_eye(on_toggled) -> PasswordEyeButton:
 class SerialMonitor(QWidget):
     """Owns one serial connection and renders its expected errors locally."""
 
+    connection_opened = Signal(str)
+    connection_closed = Signal(str)  # manual, flash, or lost
+    empty_scan = Signal()
+    provisioning_response = Signal(object)
+    heartbeat_received = Signal(object)
+
     # How long without a SerialHeartbeat line before the board reads as gone
     # rather than merely quiet — a little over the firmware's own 2s
     # interval, so one skipped line from USB jitter does not flip the chip.
@@ -121,6 +132,7 @@ class SerialMonitor(QWidget):
     def __init__(self, *, broker_host: Callable[[], str] = lambda: "") -> None:
         super().__init__()
         self._broker_host = broker_host
+        self._port_reserved = False
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._incoming_lines = ""
         self.serial = QSerialPort(self)
@@ -278,6 +290,7 @@ class SerialMonitor(QWidget):
             self._append_line(
                 "No USB serial devices found. Connect the ESP32-S3-CAM and scan again."
             )
+            self.empty_scan.emit()
 
     def toggle_connection(self) -> None:
         if self.serial.isOpen():
@@ -286,6 +299,8 @@ class SerialMonitor(QWidget):
             self.connect()
 
     def connect(self) -> None:
+        if self._port_reserved or self.serial.isOpen():
+            return
         port = self.selected_port
         if not port:
             self._append_line("ERROR: Select a USB port before connecting.")
@@ -323,8 +338,10 @@ class SerialMonitor(QWidget):
         self.status.setText(f"Connected to {port} at {baud:,} baud")
         self._append_line(f"\nConnected to {port} at {baud:,} baud.")
         self._refresh_board_status()
+        self.connection_opened.emit(port)
 
     def disconnect(self, *, for_flash: bool = False) -> None:
+        self.connection_closed.emit("flash" if for_flash else "manual")
         if not self.serial.isOpen():
             return
         port = self.serial.portName()
@@ -340,6 +357,7 @@ class SerialMonitor(QWidget):
         self.disconnect(for_flash=True)
 
     def _set_connected(self, connected: bool) -> None:
+        self.connect_button.setEnabled(not self._port_reserved)
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self.port.setEnabled(not connected)
         self.baud.setEnabled(not connected)
@@ -349,6 +367,10 @@ class SerialMonitor(QWidget):
         self.send_button.setEnabled(connected)
         self.wifi_button.setEnabled(connected)
         self.mqtt_button.setEnabled(connected)
+
+    def set_port_reserved(self, reserved: bool) -> None:
+        self._port_reserved = reserved
+        self._set_connected(self.serial.isOpen())
 
     def _read(self) -> None:
         data = bytes(self.serial.readAll())
@@ -369,6 +391,7 @@ class SerialMonitor(QWidget):
                 self._last_heartbeat = response
                 self._last_heartbeat_at = time.monotonic()
                 self._refresh_board_status()
+                self.heartbeat_received.emit(response)
                 continue
 
             kind = response.get("serial_provisioning")
@@ -379,14 +402,18 @@ class SerialMonitor(QWidget):
             # meant the one class of error most likely to happen was the one
             # class Studio could not report. A robot that answered "Command
             # must be valid JSON" looked like a successful save.
-            if kind not in ("wifi", "mqtt", "error"):
+            if kind not in ("wifi", "mqtt", "profile", "error"):
                 continue
             if kind == "wifi":
                 label = "Wi-Fi"
             elif kind == "mqtt":
                 label = "MQTT settings"
+            elif kind == "profile":
+                label = "Connection profile"
             else:
                 label = "Provisioning"
+
+            self.provisioning_response.emit(response)
 
             if response.get("status") == "saved":
                 self.status.setText(f"{label} saved; robot restarting…")
@@ -439,6 +466,35 @@ class SerialMonitor(QWidget):
             return
         dialog = WifiDialog(self, on_save=self._send_wifi)
         dialog.exec()
+
+    def send_profile(self, profile: RobotProfile) -> str:
+        """Send the atomic profile command without asking a second question."""
+        if not self.serial.isOpen():
+            return "The serial monitor is not connected."
+        try:
+            command = profile_provisioning_command(
+                wifi_ssid=profile.wifi_ssid,
+                wifi_password=profile.wifi_password,
+                server=profile.broker_server,
+                port=profile.broker_port,
+                user=profile.mqtt_user,
+                password=profile.mqtt_password,
+                client_id=profile.client_id,
+                tls=profile.tls,
+            )
+        except ValueError as error:
+            return str(error)
+        error = self._write_all(command)
+        if error:
+            self._append_line(f"ERROR: Could not send connection profile: {error}")
+            self.status.setText("Profile setup failed")
+            return f"Could not send connection profile: {error}"
+        self.status.setText("Saving connection profile; waiting for robot…")
+        self._append_line(
+            f"Sent Wi-Fi and MQTT profile for “{profile.name}”. Passwords omitted. "
+            "Waiting for the robot to confirm."
+        )
+        return ""
 
     def _send_wifi(self, ssid: str, password: str) -> str | None:
         """Validate and send one Wi-Fi command.
@@ -601,6 +657,7 @@ class SerialMonitor(QWidget):
         if error in (QSerialPort.ResourceError, QSerialPort.DeviceNotFoundError):
             self.serial.close()
             self._set_connected(False)
+            self.connection_closed.emit("lost")
 
     def _append_text(self, text: str) -> None:
         if not text:

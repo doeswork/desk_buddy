@@ -116,6 +116,8 @@ def test_a_saved_command_is_reported() -> None:
 
 def test_heartbeats_are_not_mistaken_for_provisioning() -> None:
     view = monitor()
+    received = []
+    view.heartbeat_received.connect(received.append)
     feed(view, {
         "serial_heartbeat": True,
         "uptime_ms": 1234,
@@ -124,6 +126,7 @@ def test_heartbeats_are_not_mistaken_for_provisioning() -> None:
     })
     assert "failed" not in view.status.text()
     assert view._last_heartbeat is not None
+    assert received and received[-1]["uptime_ms"] == 1234
 
 
 def test_plain_firmware_output_is_ignored() -> None:

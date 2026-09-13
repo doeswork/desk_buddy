@@ -20,6 +20,7 @@ from .flow_layout import FlowBar, FlowLayout
 from .manual_control import ManualControl
 from .workspace_bar import WorkspaceBar
 from .preferences_dialog import PreferencesDialog
+from .robot_profile_dialog import RobotProfileDialog
 from .serial_monitor import SerialMonitor
 from .side_panel import SidePanel
 from .spacer import spacer
@@ -38,6 +39,7 @@ __all__ = [
     "ManualControl",
     "WorkspaceBar",
     "PreferencesDialog",
+    "RobotProfileDialog",
     "SerialMonitor",
     "Separator",
     "SidePanel",

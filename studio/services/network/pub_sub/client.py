@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import defaultdict
-from threading import Lock
+from threading import RLock
 from typing import Callable
 
 from ..broker.finder import studio_credentials, studio_endpoint
@@ -36,13 +36,19 @@ class MqttClient:
         self._client_id = f"desk-buddy-studio-commands-{uuid.uuid4().hex[:12]}"
         self._port = 0
         self._status = "Broker is not running"
-        self._lock = Lock()
+        self._lock = RLock()
+        self._connected = False
+        self._connection_revision = 0
+        self._acknowledged: set[str] = set()
+        self._subscription_mids: dict[int, str] = {}
+        self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._subscription_callbacks: list[Callable[[], None]] = []
         # topic filter -> callbacks registered on it. A plain list rather than
         # a set: callbacks are usually bound methods/closures, which are not
         # hashable in a way that would dedupe usefully anyway.
         self._subscribers: dict[str, list[Callback]] = defaultdict(list)
-        # Kept separate so a firmware JPEG can share a topic with ordinary
-        # JSON without changing what any existing subscriber receives.
+        # Kept separate because photo channels carry opaque binary frames while
+        # command/event/service channels carry JSON.
         self._raw_subscribers: dict[str, list[RawCallback]] = defaultdict(list)
         self._host = ""
         self._credentials = ("", "")
@@ -55,6 +61,56 @@ class MqttClient:
     @property
     def running(self) -> bool:
         return self._client is not None
+
+    @property
+    def connected(self) -> bool:
+        with self._lock:
+            return self._connected
+
+    def subscriptions_ready(self, topics) -> bool:
+        with self._lock:
+            return self._connected and set(topics) <= self._acknowledged
+
+    @property
+    def connection_revision(self) -> int:
+        with self._lock:
+            return self._connection_revision
+
+    def watch_connection(self, callback) -> Callable[[], None]:
+        return self._watch(self._connection_callbacks, callback)
+
+    def watch_subscriptions(self, callback) -> Callable[[], None]:
+        return self._watch(self._subscription_callbacks, callback)
+
+    def _watch(self, callbacks, callback):
+        with self._lock:
+            callbacks.append(callback)
+        def cancel():
+            with self._lock:
+                if callback in callbacks:
+                    callbacks.remove(callback)
+        return cancel
+
+    def _connection_changed(self, connected: bool) -> None:
+        with self._lock:
+            changed = connected != self._connected
+            self._connected = connected
+            if changed:
+                self._connection_revision += 1
+            self._acknowledged.clear()
+            self._subscription_mids.clear()
+            callbacks = tuple(self._connection_callbacks) if changed else ()
+        for callback in callbacks:
+            callback(connected)
+
+    def _subscribe_topic(self, topic: str) -> None:
+        # Caller holds the lock, including while the MID is registered. This
+        # prevents a fast network-thread SUBACK racing the registration.
+        if (self._connected and topic not in self._acknowledged
+                and topic not in self._subscription_mids.values()):
+            rc, mid = self._client.subscribe(topic, qos=1)
+            if rc == 0:
+                self._subscription_mids[mid] = topic
 
     def reconcile(self) -> None:
         """Start or stop the connection to match the broker Studio uses."""
@@ -98,6 +154,7 @@ class MqttClient:
             client.on_connect = self._on_connect
             client.on_disconnect = self._on_disconnect
             client.on_message = self._on_message
+            client.on_subscribe = self._on_subscribe
             client.reconnect_delay_set(min_delay=1, max_delay=10)
             client.connect_async(host, port, keepalive=30)
             self._client = client
@@ -116,6 +173,7 @@ class MqttClient:
         self._client = None
         self._port = 0
         self._host = ""
+        self._connection_changed(False)
         if client is not None:
             try:
                 client.disconnect()
@@ -148,6 +206,14 @@ class MqttClient:
         result = client.publish(topic, payload, qos=qos)
         return not bool(getattr(result, "rc", 0))
 
+    def publish_checked(self, topic: str, payload: dict, *, qos: int = 1) -> bool:
+        """Queue once on a live connection; success is not a delivery receipt."""
+        with self._lock:
+            if not self._connected or self._client is None:
+                return False
+            result = self._client.publish(topic, json.dumps(payload), qos=qos)
+            return not bool(getattr(result, "rc", 0))
+
     # ---- receiving -----------------------------------------------------------
     def subscribe(self, topic: str, callback: Callback) -> Callable[[], None]:
         """Call `callback(topic, payload)` for every JSON message on `topic`.
@@ -165,8 +231,7 @@ class MqttClient:
         """
         with self._lock:
             self._subscribers[topic].append(callback)
-            if self._client is not None:
-                self._client.subscribe(topic, qos=1)
+            self._subscribe_topic(topic)
 
         def unsubscribe() -> None:
             with self._lock:
@@ -181,6 +246,8 @@ class MqttClient:
                     and topic not in self._raw_subscribers
                 ):
                     self._client.unsubscribe(topic)
+                    self._acknowledged.discard(topic)
+                    self._subscription_mids = {mid: name for mid, name in self._subscription_mids.items() if name != topic}
 
         return unsubscribe
 
@@ -194,8 +261,7 @@ class MqttClient:
         """
         with self._lock:
             self._raw_subscribers[topic].append(callback)
-            if self._client is not None:
-                self._client.subscribe(topic, qos=1)
+            self._subscribe_topic(topic)
 
         def unsubscribe() -> None:
             with self._lock:
@@ -210,23 +276,49 @@ class MqttClient:
                     and topic not in self._raw_subscribers
                 ):
                     self._client.unsubscribe(topic)
+                    self._acknowledged.discard(topic)
+                    self._subscription_mids = {mid: name for mid, name in self._subscription_mids.items() if name != topic}
 
         return unsubscribe
 
     # ---- paho callbacks ------------------------------------------------------
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
+        if client is not self._client:
+            return
         if reason_code != 0:
             self._set_status(f"Connection refused: {reason_code}")
             return
+        self._connection_changed(True)
         with self._lock:
             topics = list(set(self._subscribers) | set(self._raw_subscribers))
-        for topic in topics:
-            client.subscribe(topic, qos=1)
+            for topic in topics:
+                self._subscribe_topic(topic)
         self._set_status(f"Connected on {self._host}:{self._port}")
+
+    def _on_subscribe(self, client, _userdata, mid, reason_codes, _properties) -> None:
+        if client is not self._client:
+            return
+        with self._lock:
+            topic = self._subscription_mids.pop(mid, None)
+            if topic is None:
+                return
+            accepted = bool(reason_codes) and all(
+                getattr(code, "value", code) < 128 for code in reason_codes
+            )
+            if accepted:
+                self._acknowledged.add(topic)
+            else:
+                self._status = f"Broker rejected subscription to {topic}"
+            callbacks = tuple(self._subscription_callbacks)
+        for callback in callbacks:
+            callback()
 
     def _on_disconnect(
         self, _client, _userdata, _flags, reason_code, _properties
     ) -> None:
+        if _client is not self._client:
+            return
+        self._connection_changed(False)
         if self._client is not None:
             self._set_status(f"Disconnected ({reason_code}); retrying…")
 
@@ -234,8 +326,12 @@ class MqttClient:
         raw = bytes(message.payload)
         with self._lock:
             raw_callbacks = list(self._raw_subscribers.get(message.topic, ()))
+            callbacks = list(self._subscribers.get(message.topic, ()))
         for callback in raw_callbacks:
             callback(message.topic, raw)
+
+        if not callbacks:
+            return
 
         try:
             payload = json.loads(raw)
@@ -244,8 +340,6 @@ class MqttClient:
         if not isinstance(payload, dict):
             return
 
-        with self._lock:
-            callbacks = list(self._subscribers.get(message.topic, ()))
         for callback in callbacks:
             callback(message.topic, payload)
 

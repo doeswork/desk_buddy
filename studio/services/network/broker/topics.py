@@ -19,27 +19,76 @@ class Topic:
     description: str
     publisher: str
     consumers: str
+    groups_title: str
     message_groups: tuple[tuple[str, tuple[str, ...]], ...]
 
 
-CALIBRATIONS = Topic(
-    name="calibrations",
-    title="Calibrations",
+COMMANDS = Topic(
+    name="{robot}/commands",
+    title="Robot commands",
     description=(
-        "Calibration commands and their results. Every message is sent by "
-        "Studio with sender: studio and a unique action_id so firmware and "
-        "Vision responses can be correlated."
+        "JSON requests sent to one robot. Every request carries a sender and "
+        "unique action_id; firmware is the only subscriber that executes them."
     ),
-    publisher="Studio (studio)",
-    consumers="Desk Buddy firmware and Vision services",
+    publisher="Studio and authorized controllers",
+    consumers="Desk Buddy firmware; Vision observes detect_object requests",
+    groups_title="Command actions",
     message_groups=(
-        ("Base + Perch", ("calibrate_base_rotation", "baseRotate", "perch", "calibrate")),
-        ("Inverse Kinematics", ("controlik", "calibrate")),
-        ("Visual", ("calibrate_depth",)),
-        ("Reach and Grab", ("detect_object",)),
-        ("Stencil", ("stencilCalibrate",)),
+        ("Motion", ("servo", "gripper", "baseRotate", "controlik", "perch")),
+        ("Calibration", (
+            "calibrate", "calibrate_base_rotation", "calibrationvalues",
+            "stencilCalibrate",
+        )),
+        ("Camera", ("photo", "detect_object", "detect_color", "calibrate_depth")),
+        ("Firmware", ("ota_update",)),
     ),
 )
 
+EVENTS = Topic(
+    name="{robot}/events",
+    title="Robot events",
+    description="JSON lifecycle and diagnostic output from firmware.",
+    publisher="Desk Buddy firmware",
+    consumers="Studio, Vision services, and authorized controllers",
+    groups_title="Event kinds",
+    message_groups=(("Lifecycle", (
+        "ready", "in_progress", "progress", "completed", "failed", "debug",
+    )),),
+)
 
-TOPICS = (CALIBRATIONS,)
+PHOTOS = Topic(
+    name="{robot}/photos",
+    title="Robot photos",
+    description=(
+        "Binary desk_buddy.photo.v1 frames containing metadata and one raw JPEG."
+    ),
+    publisher="Desk Buddy firmware",
+    consumers="Studio and Vision services",
+    groups_title="Capture types",
+    message_groups=(("Camera", (
+        "photo", "detect_object", "detect_color", "calibrate_depth",
+    )),),
+)
+
+VISION = Topic(
+    name="{robot}/vision",
+    title="Vision results",
+    description="Correlated JSON inference results; never consumed as firmware commands.",
+    publisher="Vision services",
+    consumers="Studio and authorized controllers",
+    groups_title="Result kinds",
+    message_groups=(("Detection", ("detect_object completed", "detect_object failed")),),
+)
+
+HEARTBEAT = Topic(
+    name="{robot}/heartbeat",
+    title="Robot heartbeat",
+    description="Periodic robot availability, firmware, heap, and joint telemetry.",
+    publisher="Desk Buddy firmware",
+    consumers="Studio and monitoring services",
+    groups_title="Telemetry",
+    message_groups=(("Robot state", ("firmware/OTA", "joint angles", "timestamp")),),
+)
+
+
+TOPICS = (COMMANDS, EVENTS, PHOTOS, VISION, HEARTBEAT)

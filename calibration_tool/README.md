@@ -40,5 +40,5 @@ managers that do not expose Tk's native maximize state.
 Reach-and-grab uses the configured client sender and rejects the reserved
 `ai_server`, `visual_ai`, and `firmware` sender names. Its timeout is deliberately
 non-retrying: if the terminal Visual AI result is lost, the robot may still have
-moved. Inspect the shared-topic activity log before manually starting another
+moved. Inspect the MQTT activity log before manually starting another
 request.

@@ -33,6 +33,184 @@ namespace {
     return true;
   }
 
+  bool requiredText(const char* value, size_t maximum) {
+    return value != nullptr && strlen(value) > 0 && strlen(value) <= maximum;
+  }
+
+  struct SavedText {
+    bool present = false;
+    String value;
+  };
+
+  SavedText savedText(Preferences& preferences, const char* key) {
+    SavedText saved;
+    saved.present = preferences.isKey(key);
+    saved.value = preferences.getString(key, "");
+    return saved;
+  }
+
+  void restoreText(Preferences& preferences, const char* key, const SavedText& saved) {
+    if (saved.present) {
+      preferences.putString(key, saved.value);
+    } else {
+      preferences.remove(key);
+    }
+  }
+
+  void restoreBool(Preferences& preferences, const char* key, bool present, bool value) {
+    if (present) {
+      preferences.putBool(key, value);
+    } else {
+      preferences.remove(key);
+    }
+  }
+
+  void restoreInt(Preferences& preferences, const char* key, bool present, int value) {
+    if (present) {
+      preferences.putInt(key, value);
+    } else {
+      preferences.remove(key);
+    }
+  }
+
+  void handleProfile(JsonVariantConst command) {
+    JsonObjectConst wifi = command["wifi"].as<JsonObjectConst>();
+    JsonObjectConst mqtt = command["mqtt"].as<JsonObjectConst>();
+    if (wifi.isNull() || mqtt.isNull()) {
+      reply("profile", "error", "wifi and mqtt objects are required");
+      return;
+    }
+
+    const char* ssidValue = wifi["ssid"] | "";
+    const char* wifiPasswordValue = wifi["password"] | "";
+    String ssid(ssidValue);
+    String wifiPassword(wifiPasswordValue);
+    if (ssid.length() == 0 || ssid.length() > 32) {
+      reply("profile", "error", "SSID must be 1-32 bytes");
+      return;
+    }
+    if (!validPassword(wifiPassword)) {
+      reply("profile", "error", "WiFi password must be empty, 8-63 characters, or a 64-digit hex PSK");
+      return;
+    }
+
+    const char* serverValue = mqtt["server"] | "";
+    const char* userValue = mqtt["user"] | "";
+    const char* passwordValue = mqtt["password"] | "";
+    const char* clientIdValue = mqtt["client_id"] | "";
+    long port = mqtt["port"] | 0;
+    if (!requiredText(serverValue, 128)) {
+      reply("profile", "error", "MQTT server must be 1-128 bytes");
+      return;
+    }
+    if (port < 1 || port > 65535) {
+      reply("profile", "error", "MQTT port must be between 1 and 65535");
+      return;
+    }
+    if (!requiredText(userValue, 64) || !requiredText(passwordValue, 128) ||
+        !requiredText(clientIdValue, 64)) {
+      reply("profile", "error", "MQTT user, password, and client_id are required");
+      return;
+    }
+    if (!mqtt["tls"].is<bool>()) {
+      reply("profile", "error", "MQTT tls must be true or false");
+      return;
+    }
+    const bool tls = mqtt["tls"].as<bool>();
+
+    // Snapshot both namespaces before changing either one. NVS namespaces
+    // are separate commits, so a failed second write must put the first one
+    // back exactly as it was. No credential is ever put in the response.
+    Preferences oldWifi;
+    Preferences oldMqtt;
+    if (!oldWifi.begin("wifi", false) || !oldMqtt.begin("mqtt", false)) {
+      oldWifi.end();
+      oldMqtt.end();
+      reply("profile", "error", "Could not open WiFi and MQTT preferences");
+      return;
+    }
+    const SavedText oldSsid = savedText(oldWifi, "ssid");
+    const SavedText oldWifiPassword = savedText(oldWifi, "password");
+    const SavedText oldServer = savedText(oldMqtt, "server");
+    const SavedText oldUser = savedText(oldMqtt, "user");
+    const SavedText oldMqttPassword = savedText(oldMqtt, "password");
+    const SavedText oldClientId = savedText(oldMqtt, "client_id");
+    const bool oldPortPresent = oldMqtt.isKey("port");
+    const int oldPort = oldMqtt.getInt("port", 0);
+    const bool oldTlsPresent = oldMqtt.isKey("tls");
+    const bool oldTls = oldMqtt.getBool("tls", false);
+    oldWifi.end();
+    oldMqtt.end();
+
+    Preferences wifiPreferences;
+    if (!wifiPreferences.begin("wifi", false)) {
+      reply("profile", "error", "Could not open WiFi preferences");
+      return;
+    }
+    wifiPreferences.putString("ssid", ssid);
+    wifiPreferences.putString("password", wifiPassword);
+    const bool wifiSaved = wifiPreferences.getString("ssid", "") == ssid &&
+                           wifiPreferences.getString("password", "") == wifiPassword;
+    wifiPreferences.end();
+    if (!wifiSaved) {
+      if (wifiPreferences.begin("wifi", false)) {
+        restoreText(wifiPreferences, "ssid", oldSsid);
+        restoreText(wifiPreferences, "password", oldWifiPassword);
+        wifiPreferences.end();
+      }
+      reply("profile", "error", "Could not save WiFi preferences");
+      return;
+    }
+
+    Preferences mqttPreferences;
+    if (!mqttPreferences.begin("mqtt", false)) {
+      if (wifiPreferences.begin("wifi", false)) {
+        restoreText(wifiPreferences, "ssid", oldSsid);
+        restoreText(wifiPreferences, "password", oldWifiPassword);
+        wifiPreferences.end();
+      }
+      reply("profile", "error", "Could not open MQTT preferences; WiFi was rolled back");
+      return;
+    }
+    mqttPreferences.putString("server", serverValue);
+    mqttPreferences.putInt("port", static_cast<int>(port));
+    mqttPreferences.putString("user", userValue);
+    mqttPreferences.putString("password", passwordValue);
+    mqttPreferences.putString("client_id", clientIdValue);
+    mqttPreferences.putBool("tls", tls);
+    const bool mqttSaved = mqttPreferences.getString("server", "") == serverValue &&
+                           mqttPreferences.getInt("port", 0) == port &&
+                           mqttPreferences.getString("user", "") == userValue &&
+                           mqttPreferences.getString("password", "") == passwordValue &&
+                           mqttPreferences.getString("client_id", "") == clientIdValue &&
+                           mqttPreferences.getBool("tls", !tls) == tls;
+    mqttPreferences.end();
+    if (!mqttSaved) {
+      if (wifiPreferences.begin("wifi", false)) {
+        restoreText(wifiPreferences, "ssid", oldSsid);
+        restoreText(wifiPreferences, "password", oldWifiPassword);
+        wifiPreferences.end();
+      }
+      if (mqttPreferences.begin("mqtt", false)) {
+        restoreText(mqttPreferences, "server", oldServer);
+        restoreInt(mqttPreferences, "port", oldPortPresent, oldPort);
+        restoreText(mqttPreferences, "user", oldUser);
+        restoreText(mqttPreferences, "password", oldMqttPassword);
+        restoreText(mqttPreferences, "client_id", oldClientId);
+        restoreBool(mqttPreferences, "tls", oldTlsPresent, oldTls);
+        mqttPreferences.end();
+      }
+      reply("profile", "error", "Could not save MQTT preferences; changes were rolled back");
+      return;
+    }
+
+    // One acknowledgement and one restart after both namespaces verify.
+    reply("profile", "saved", nullptr, serverValue, "server");
+    Serial.flush();
+    delay(350);
+    ESP.restart();
+  }
+
   void handleWifi(JsonVariantConst command) {
     const char* ssidValue = command["ssid"] | "";
     const char* passwordValue = command["password"] | "";
@@ -125,7 +303,9 @@ namespace {
   }
 
   void handle(const String& line) {
-    StaticJsonDocument<512> command;
+    // The wire protocol is capped at 512 bytes, but ArduinoJson needs room
+    // for the object tree in addition to the encoded input bytes.
+    StaticJsonDocument<768> command;
     DeserializationError parseError = deserializeJson(command, line);
     if (parseError) {
       reply("error", "error", "Command must be valid JSON");
@@ -137,6 +317,8 @@ namespace {
       handleWifi(command.as<JsonVariantConst>());
     } else if (strcmp(name, "set_mqtt") == 0) {
       handleMqtt(command.as<JsonVariantConst>());
+    } else if (strcmp(name, "set_profile") == 0) {
+      handleProfile(command.as<JsonVariantConst>());
     } else {
       reply("error", "error", "Unknown serial provisioning command");
     }

@@ -12,10 +12,13 @@ account, not already marked — is decided in `studio.models.config.robots`.
 
 from __future__ import annotations
 
+import uuid
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -28,9 +31,13 @@ from PySide6.QtWidgets import (
 )
 
 from ....services.network import studio_credentials
+from ....services.network import robot_endpoint
 from ....services.network.broker import system
+from ....models.config.mqtt_users import generate_password, users
+from ....models.config.robot_profiles import RobotProfile, profiles
 from ....models.config.robots import robots
 from ...components import Card, Column
+from ...components.robot_profile_dialog import RobotProfileDialog
 from ...pages.base import Page
 from ...theme.metrics import ROW_PADDING
 
@@ -72,7 +79,9 @@ class RobotsPage(Page):
             ))
 
         if entries:
-            sections.append(RobotTable(entries, on_remove=self.unmark))
+            sections.append(
+                RobotTable(entries, on_remove=self.unmark, on_edit=self.edit_profile)
+            )
 
         return Column(*sections)
 
@@ -109,6 +118,51 @@ class RobotsPage(Page):
         if problem:
             QMessageBox.warning(self.widget(), "Could not unmark robot", problem)
             return
+        self.rebuild()
+
+    def edit_profile(self, robot) -> None:
+        existing = profiles().by_user(robot.name)
+        host, port = robot_endpoint()
+        if not host:
+            host = self.workspace.broker_host() if self.workspace is not None else ""
+        if not port:
+            port = 1883
+        if existing is None:
+            account = next((item for item in system.accounts() if item.name == robot.name), None)
+            existing = RobotProfile(
+                profile_id=uuid.uuid4().hex,
+                name=robot.display_name,
+                broker_server=host,
+                broker_port=port,
+                mqtt_user=robot.name,
+                mqtt_password=getattr(account, "password", "") or generate_password(),
+                client_id=robot.name,
+                broker_kind="local",
+            )
+        dialog = RobotProfileDialog(
+            self.widget(),
+            profile=existing,
+            profiles=profiles().all(),
+            accounts=system.accounts(),
+            default_server=host,
+            default_port=port,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        profile = dialog.profile()
+        profiles().save(profile)
+        if profile.broker_kind == "local":
+            change = self.workspace.create_account(
+                profile.mqtt_user,
+                profile.mqtt_password,
+                f"{profile.mqtt_user}/#",
+            )
+            if not change.changed:
+                QMessageBox.warning(
+                    self.widget(), "Profile saved", change.problem or "The broker account could not be updated."
+                )
+            else:
+                users().record(profile.mqtt_user, profile.mqtt_password)
         self.rebuild()
 
 
@@ -153,12 +207,13 @@ class MarkForm(QWidget):
 class RobotTable(QTableWidget):
     """Every marked robot, and its account name."""
 
-    COLUMNS = ("Robot", "User", "")
+    COLUMNS = ("Robot", "User", "Connection profile", "")
     LABEL = 0
     ACCOUNT = 1
-    ACTIONS = 2
+    PROFILE = 2
+    ACTIONS = 3
 
-    def __init__(self, entries: list, *, on_remove) -> None:
+    def __init__(self, entries: list, *, on_remove, on_edit=None) -> None:
         super().__init__(len(entries), len(self.COLUMNS))
         self.setObjectName("AccountTable")
         self.setHorizontalHeaderLabels(self.COLUMNS)
@@ -172,15 +227,33 @@ class RobotTable(QTableWidget):
         for row, robot in enumerate(entries):
             self.setItem(row, self.LABEL, QTableWidgetItem(robot.display_name))
             self.setItem(row, self.ACCOUNT, QTableWidgetItem(robot.name))
-            self.setCellWidget(row, self.ACTIONS, self._unmark_button(robot.name, on_remove))
+            profile = profiles().by_user(robot.name)
+            summary = (
+                f"{profile.broker_server}:{profile.broker_port} · "
+                f"{profile.mqtt_user} · {'TLS' if profile.tls else 'plain'}"
+                if profile is not None else "Not configured"
+            )
+            profile_item = QTableWidgetItem(summary)
+            profile_item.setToolTip(
+                "Passwords are stored locally and remain masked."
+                if profile is not None else "Configure this robot before flashing."
+            )
+            self.setItem(row, self.PROFILE, profile_item)
+            actions = (
+                self._actions(robot, on_remove, on_edit)
+                if on_edit is not None
+                else self._unmark_button(robot.name, on_remove)
+            )
+            self.setCellWidget(row, self.ACTIONS, actions)
 
         header = self.horizontalHeader()
         header.setHighlightSections(False)
         header.setStretchLastSection(False)
         header.setSectionResizeMode(QHeaderView.Fixed)
-        header.setSectionResizeMode(self.ACCOUNT, QHeaderView.Stretch)
+        header.setSectionResizeMode(self.ACCOUNT, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self.PROFILE, QHeaderView.Stretch)
         self.setColumnWidth(self.LABEL, self._header_width("Robot") * 2)
-        self.setColumnWidth(self.ACTIONS, self._header_width("Unmark") + 2 * ROW_PADDING)
+        self.setColumnWidth(self.ACTIONS, self._header_width("Edit") + self._header_width("Unmark"))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
@@ -199,6 +272,25 @@ class RobotTable(QTableWidget):
         unmark.setCursor(Qt.PointingHandCursor)
         unmark.setToolTip(f"Stop treating {name} as a robot")
         unmark.mousePressEvent = lambda event: on_remove(name)
+        layout.addWidget(unmark)
+        return holder
+
+    @staticmethod
+    def _actions(robot, on_remove, on_edit) -> QWidget:
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(ROW_PADDING // 2, 0, ROW_PADDING, 0)
+        edit = QLabel("Edit")
+        edit.setObjectName("RowAction")
+        edit.setCursor(Qt.PointingHandCursor)
+        edit.setToolTip(f"Edit {robot.display_name}'s saved connection profile")
+        edit.mousePressEvent = lambda _event: on_edit(robot)
+        layout.addWidget(edit)
+        unmark = QLabel("Unmark")
+        unmark.setObjectName("RowActionBad")
+        unmark.setCursor(Qt.PointingHandCursor)
+        unmark.setToolTip(f"Stop treating {robot.name} as a robot")
+        unmark.mousePressEvent = lambda _event: on_remove(robot.name)
         layout.addWidget(unmark)
         return holder
 

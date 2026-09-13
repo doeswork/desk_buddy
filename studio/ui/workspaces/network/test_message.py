@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from ....services.network import studio_credentials
 from ....services.network.broker import system
 from ....services.network import PublishResult, publish_as
+from ....services.network.pub_sub.robot_topics import command_topic
 from ...components import Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -83,7 +84,7 @@ class TestMessagePage(Page):
         if not self._name or self._name not in [a.name for a in accounts]:
             self._name = accounts[0].name
         if not self._topic:
-            self._topic = f"{self._name}/test"
+            self._topic = command_topic(self._name)
 
         return Column(SendForm(
             [account.name for account in accounts],

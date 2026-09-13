@@ -24,6 +24,7 @@ from ..config.mqtt_topics import TOPIC_PATTERN, default_topics, validate_topic
 from ..config.mqtt_users import STUDIO_NAME, MqttUser, Users
 from ..config.prefrences import Preferences
 from ..config.robots import Robots
+from ..config.robot_profiles import RobotProfile, RobotProfiles
 from ..data.app_errors import AppErrors
 from ..data.database import Database, SCHEMA_VERSION
 from ..data.mqtt_messages import MqttMessages
@@ -342,6 +343,40 @@ def fresh_robots() -> tuple[Robots, Users, Path]:
     )
 
 
+def fresh_profiles() -> tuple[RobotProfiles, Path]:
+    directory = Path(tempfile.mkdtemp())
+    return RobotProfiles(Store("robot_profiles", directory=directory)), directory
+
+
+def test_robot_profiles_round_trip_and_ignore_corrupt_records() -> None:
+    store, directory = fresh_profiles()
+    profile = store.create(
+        "Desk Buddy",
+        wifi_ssid="home",
+        wifi_password="wifi-secret",
+        broker_server="192.168.1.50",
+        mqtt_user="robot-1",
+        mqtt_password="mqtt-secret",
+        client_id="robot-1",
+        tls=False,
+    )
+    assert profile.profile_id
+    assert store.find(profile.profile_id).mqtt_password == "mqtt-secret"
+    store._store.write([profile.to_json(), {"not": "a profile"}, {"name": "missing id"}])
+    reloaded = RobotProfiles(Store("robot_profiles", directory=directory))
+    assert [item.name for item in reloaded.all()] == ["Desk Buddy"]
+
+
+def test_robot_profiles_save_appends_and_preserves_result_fields() -> None:
+    store, _ = fresh_profiles()
+    profile = RobotProfile("one", "One", mqtt_user="robot-1")
+    store.save(profile)
+    updated = RobotProfile("one", "Renamed", mqtt_user="robot-1", last_result="Connected")
+    store.save(updated)
+    assert store.find("one").name == "Renamed"
+    assert store.find("one").last_result == "Connected"
+
+
 def test_a_robot_must_be_an_existing_non_studio_account() -> None:
     bots, users, _ = fresh_robots()
 
@@ -376,6 +411,15 @@ def test_a_robot_cannot_be_marked_twice() -> None:
 
     robot, problem = bots.add("black")
     assert robot is None and "already marked" in problem
+
+
+def test_a_heartbeat_can_register_or_rename_a_robot() -> None:
+    bots, users, _ = fresh_robots()
+    users.add("black")
+    robot, problem = bots.upsert("black", "Black Buddy")
+    assert robot is not None and not problem
+    robot, problem = bots.upsert("black", "Renamed Buddy")
+    assert robot is not None and robot.display_name == "Renamed Buddy" and not problem
 
 
 def test_unmarking_a_robot_leaves_its_account_alone() -> None:

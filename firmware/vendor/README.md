@@ -18,3 +18,12 @@ standalone license file, so the corresponding LGPL text is included as
 The Espressif ESP32 Arduino core is still installed and managed as a board
 platform; it is not copied here. Studio passes this directory to Arduino CLI
 with `--libraries`, giving these copies precedence over sketchbook libraries.
+
+## Local PubSubClient changes
+
+The 2.8 copy includes a 32-bit MQTT Remaining Length encoder for streamed JPEGs,
+preflight topic/buffer/protocol bounds, and `abortPublish()` to close an incomplete
+packet without sending MQTT DISCONNECT. Short streamed headers also abort the
+socket. `endPublish()` retains upstream behavior and is not a delivery receipt.
+Run `python3 firmware/tests/run_host_tests.py` before replacing or updating this
+copy; the tests compile this exact source, including payloads above 64 KiB.

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...storage.store import Store
-from .mqtt_users import STUDIO_NAME, users
+from .mqtt_users import STUDIO_NAME, Users, users
 
 
 @dataclass(frozen=True)
@@ -47,8 +47,19 @@ class Robot:
 class Robots:
     """Every robot Studio knows about, backed by one JSON file."""
 
-    def __init__(self, store: Store | None = None) -> None:
+    def __init__(self, store: Store | None = None, users_backend: Users | None = None) -> None:
         self._store = store if store is not None else Store("robots")
+        if users_backend is not None:
+            self._users = users_backend
+        else:
+            # Test and import callers can give Robots a throwaway Store. Use
+            # the matching account file beside it instead of the app-wide
+            # singleton; production's default Store still uses the singleton.
+            directory = getattr(self._store, "_directory", None)
+            self._users = (
+                Users(Store("mqtt_users", directory=directory))
+                if directory is not None else users()
+            )
 
     @property
     def path(self):
@@ -71,7 +82,7 @@ class Robots:
         """Mark an existing account as a robot. Returns (robot, "") or (None, why not)."""
         if name == STUDIO_NAME:
             return None, "Studio's own account is not a robot."
-        if users().find(name) is None:
+        if self._users.find(name) is None:
             return None, (
                 f"No account called {name!r}. Create it on Network → "
                 "Accounts first, then mark it as a robot here."
@@ -82,6 +93,20 @@ class Robots:
         robot = Robot(name=name, label=label.strip())
         self._save([*self.all(), robot])
         return robot, ""
+
+    def upsert(self, name: str, label: str = "") -> tuple[Robot | None, str]:
+        """Create a robot after its first heartbeat, or refresh its label."""
+        if name == STUDIO_NAME:
+            return None, "Studio's own account is not a robot."
+        if self._users.find(name) is None:
+            return None, f"No account called {name!r}."
+        existing = self.find(name)
+        updated = Robot(name=name, label=label.strip())
+        if existing is None:
+            self._save([*self.all(), updated])
+        else:
+            self._save([updated if robot.name == name else robot for robot in self.all()])
+        return updated, ""
 
     def remove(self, name: str) -> str:
         """Unmark a robot. Empty string on success, else why not.

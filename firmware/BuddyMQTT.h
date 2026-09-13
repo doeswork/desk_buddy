@@ -24,7 +24,16 @@ namespace BuddyMQTT {
   void sendCalibrationValues(const String& actionId);
 
   bool publishBinary(const String& topic, const uint8_t* data, size_t length);
-  bool publishStatusPhoto(const String& actionId, const String& requester, const uint8_t* data, size_t length, JsonVariantConst phrase = JsonVariantConst(), int useModel = -1, const String& useModelJson = String());
+  bool publishPhoto(const String& actionId,
+                    const String& type,
+                    const String& requester,
+                    const uint8_t* data,
+                    size_t length,
+                    uint16_t width,
+                    uint16_t height,
+                    JsonVariantConst phrase = JsonVariantConst(),
+                    int useModel = -1,
+                    const String& useModelJson = String());
 
   // Workflow context — set once per incoming action; automatically included
   // in every outgoing message while set.  Pass -1 to leave a field unset.

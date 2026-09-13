@@ -1252,7 +1252,11 @@ class CalibrationWizard(tk.Tk):
 
     def _update_derived_topics(self) -> None:
         config = self._config_from_form()
-        self.derived_topics.set(f"Command topic: {config.command_topic}    Heartbeat topic: {config.heartbeat_topic}")
+        self.derived_topics.set(
+            f"Commands: {config.command_topic}    Events: {config.event_topic}    "
+            f"Photos: {config.photo_topic}    Vision: {config.vision_topic}    "
+            f"Heartbeat: {config.heartbeat_topic}"
+        )
 
     def save_settings(self) -> None:
         config = self._config_from_form()

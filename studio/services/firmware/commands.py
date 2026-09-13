@@ -15,6 +15,7 @@ from pathlib import Path
 BOARD_NAME = "ESP32-S3-CAM (N16R8)"
 FQBN = "esp32:esp32:esp32s3"
 DEFAULT_UPLOAD_SPEED = "921600"
+SERIAL_COMMAND_MAX_BYTES = 512
 
 _FIXED_OPTIONS = {
     "USBMode": "hwcdc",
@@ -32,6 +33,16 @@ _FIXED_OPTIONS = {
 
 def wifi_provisioning_command(ssid: str, password: str) -> bytes:
     """Encode the firmware's newline-delimited USB provisioning command."""
+    _validate_wifi(ssid, password)
+    payload = {
+        "desk_buddy_command": "set_wifi",
+        "ssid": ssid,
+        "password": password,
+    }
+    return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+
+
+def _validate_wifi(ssid: str, password: str) -> None:
     ssid_bytes = ssid.encode("utf-8")
     password_bytes = password.encode("utf-8")
     if not 1 <= len(ssid_bytes) <= 32:
@@ -49,12 +60,68 @@ def wifi_provisioning_command(ssid: str, password: str) -> bytes:
             "Wi-Fi password must be empty for an open network, 8-63 characters, "
             "or a 64-digit hexadecimal key."
         )
+
+
+def profile_provisioning_command(
+    *,
+    wifi_ssid: str,
+    wifi_password: str,
+    server: str,
+    port: int,
+    user: str,
+    password: str,
+    client_id: str,
+    tls: bool,
+) -> bytes:
+    """Encode one atomic Wi-Fi + MQTT serial provisioning command.
+
+    The ESP32 restarts after each legacy provisioning command.  The combined
+    command lets Studio update both namespaces and restart exactly once.
+    """
+    _validate_wifi(wifi_ssid, wifi_password)
+    server = server.strip()
+    if not server:
+        raise ValueError("MQTT server is required.")
+    if len(server.encode("utf-8")) > 128:
+        raise ValueError("MQTT server must be at most 128 bytes.")
+    if not 1 <= int(port) <= 65535:
+        raise ValueError("MQTT port must be between 1 and 65535.")
+    user = user.strip()
+    client_id = client_id.strip()
+    if not user:
+        raise ValueError("MQTT username is required.")
+    if user.lower() == "studio":
+        raise ValueError("Studio's account is reserved for Studio and cannot provision a robot.")
+    if len(user.encode("utf-8")) > 64:
+        raise ValueError("MQTT username must be at most 64 bytes.")
+    if not password:
+        raise ValueError("MQTT password is required.")
+    if len(password.encode("utf-8")) > 128:
+        raise ValueError("MQTT password must be at most 128 bytes.")
+    if not client_id:
+        raise ValueError("MQTT client ID is required.")
+    if len(client_id.encode("utf-8")) > 64:
+        raise ValueError("MQTT client ID must be at most 64 bytes.")
+
     payload = {
-        "desk_buddy_command": "set_wifi",
-        "ssid": ssid,
-        "password": password,
+        "desk_buddy_command": "set_profile",
+        "wifi": {"ssid": wifi_ssid, "password": wifi_password},
+        "mqtt": {
+            "server": server,
+            "port": int(port),
+            "user": user,
+            "password": password,
+            "client_id": client_id,
+            "tls": bool(tls),
+        },
     }
-    return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    encoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    if len(encoded) > SERIAL_COMMAND_MAX_BYTES:
+        raise ValueError(
+            f"The connection profile is too large for the ESP32 serial protocol "
+            f"({len(encoded)} of {SERIAL_COMMAND_MAX_BYTES} bytes)."
+        )
+    return encoded
 
 
 def mqtt_provisioning_command(
