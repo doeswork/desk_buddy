@@ -271,6 +271,36 @@ QLabel#WorkflowFile {{
 }}
 QLabel#WorkflowMetaFact {{ color: {p.muted}; font-size: {px(11)}; }}
 QLabel#WorkflowMetaDot {{ color: {p.border}; font-size: {px(11)}; }}
+/* A page button that commits something — Capture This Pose writes a
+   calibration to the robot. Filled, but with the panel's own quiet fill
+   rather than the accent: the accent marks the single primary action on a
+   bar, and a page with six of these has no single primary. ToolbarAction is
+   what these used to borrow, and it is transparent by design — right in a
+   dense toolbar strip, wrong for a button sitting alone under a form, where
+   it read as decoration rather than the write it performs. */
+QPushButton#SecondaryAction {{
+    background: {p.muted_bg};
+    color: {p.text};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    padding: {TIGHT_V} {px(13)};
+    font-weight: 600;
+}}
+QPushButton#SecondaryAction:hover:!disabled {{
+    background: {p.panel};
+    border-color: {p.accent};
+    color: {p.accent};
+}}
+QPushButton#SecondaryAction:pressed {{
+    background: {p.accent};
+    border-color: {p.accent};
+    color: {p.on_accent};
+}}
+QPushButton#SecondaryAction:disabled {{
+    background: transparent;
+    border-style: dashed;
+    color: {p.muted};
+}}
 /* The title is a menu now, but it is still the page's heading: it keeps
    QLabel#Title's size and weight and paints nothing of its own, so what
    marks it clickable is the arrow beside it and the hover, not a box drawn

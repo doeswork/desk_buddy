@@ -280,17 +280,100 @@ def tip_of(pose) -> tuple[float, float]:
     import math
 
     from .arm_pose import (
-        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView,
+        BASE_RADIUS, FOREARM, GRIPPER, SHOULDER_HEIGHT, UPPER_ARM, ArmPoseView,
     )
 
+    # The arm hangs off the shoulder pivot, not the top of the turntable:
+    # the post between them is part of the machine, and starting the maths
+    # at the wrong one of the two puts every tip an inch out.
     upper = math.radians(pose.elbow)
     x = math.sin(upper) * UPPER_ARM
-    z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
+    z = SHOULDER_HEIGHT + math.cos(upper) * UPPER_ARM
     fore = upper + math.radians(180 - pose.wrist)
     x += math.sin(fore) * (FOREARM + GRIPPER)
     z += math.cos(fore) * (FOREARM + GRIPPER)
     per_mm = ArmPoseView._mm_to_units()
-    return x / per_mm, z / per_mm
+    # Reach is quoted from the turntable's edge, not its centre — zero reach
+    # is the gripper parked beside the base, not buried in the middle of it.
+    return (x - BASE_RADIUS) / per_mm, z / per_mm
+
+
+def test_the_drawing_has_the_real_robots_proportions() -> None:
+    """Measured off the machine, not invented to look plausible.
+
+    The drawing was a stick figure of some other robot: a forearm shorter
+    than its upper arm and no base at all, on a machine whose forearm is
+    half again as long and which stands on a wide turntable. Anyone matching
+    a pose against it was matching the wrong shape.
+    """
+    from .arm_pose import (
+        BASE_HEIGHT, HAND, SHOULDER_HEIGHT, UNITS_PER_INCH, UPPER_ARM,
+    )
+
+    inches = lambda units: units / UNITS_PER_INCH  # noqa: E731
+    assert inches(BASE_HEIGHT) == 1.5, "the turntable is 1.5 in tall"
+    assert inches(SHOULDER_HEIGHT) == 2.5, "the elbow pivot is 2.5 in up"
+    assert inches(UPPER_ARM) == 3.5, "elbow pivot to wrist pivot"
+    assert inches(HAND) == 4.5, "wrist pivot to fingertips"
+    # The one that was backwards, and the reason the silhouette read wrong.
+    assert HAND > UPPER_ARM
+
+
+def test_a_millimetre_is_a_millimetre() -> None:
+    """The old drawing needed a fitted fudge factor here because its
+    proportions were invented — the arm could only touch the 120 mm mark by
+    stretching dead straight, so the scale was bent until that looked
+    right. Real lengths make the conversion the real one."""
+    from .arm_pose import UNITS_PER_INCH, ArmPoseView
+
+    assert ArmPoseView._mm_to_units() == UNITS_PER_INCH / 25.4
+
+
+def test_the_arm_reaches_well_past_the_last_calibration_mark() -> None:
+    """120 mm is a landmark inside the workspace, not the edge of it.
+
+    Worth pinning: if the segment lengths are ever "tidied", a drawing whose
+    max reach falls near 120 mm is one where every far pose is stretched
+    straight, which is exactly the wrong shape the old geometry produced.
+    """
+    import math
+
+    from .arm_pose import HAND, SHOULDER_HEIGHT, UPPER_ARM, ArmPoseView
+
+    radius = UPPER_ARM + HAND
+    reach = math.sqrt(radius ** 2 - SHOULDER_HEIGHT ** 2)
+    millimetres = reach / ArmPoseView._mm_to_units()
+    assert 170 < millimetres < 210, millimetres
+
+
+def test_zero_reach_parks_the_gripper_beside_the_base_not_inside_it() -> None:
+    """Distances are measured from the turntable's edge.
+
+    Drawn from the centre instead, the Min pose put the gripper in the
+    middle of the base — through the machine it is standing on — which is
+    not a pose anyone can copy. On the real arm, folded all the way in means
+    the gripper resting just off the base's right side.
+    """
+    from .arm_pose import BASE_RADIUS, POSES, ArmPoseView
+
+    reach, height = tip_of(POSES["hover_over_min"])
+    assert abs(reach) < 6, f"zero reach should be the base edge: {reach:.1f}"
+    assert abs(height) < 6, height
+
+    # Which is a real distance out from the centre, not zero.
+    from_centre = reach + BASE_RADIUS / ArmPoseView._mm_to_units()
+    assert from_centre > 35, from_centre
+
+
+def test_the_reach_marks_start_at_the_base_edge_too() -> None:
+    """The ruler and the arm have to agree: a 0 mark drawn at the centre
+    while the arm measures from the rim is a drawing that lies by exactly
+    one base radius at every point on it."""
+    from .arm_pose import BASE_RADIUS, POSES, ArmPoseView
+
+    view = ArmPoseView(POSES["hover_over_min"])
+    assert view._mark(0) == BASE_RADIUS
+    assert view._mark(120) == BASE_RADIUS + 120 * ArmPoseView._mm_to_units()
 
 
 def test_every_pose_lands_on_its_own_reach_and_height() -> None:
@@ -315,13 +398,13 @@ def test_no_pose_draws_the_arm_through_the_table() -> None:
     import math
 
     from .arm_pose import (
-        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView, POSES,
+        FOREARM, GRIPPER, SHOULDER_HEIGHT, UPPER_ARM, ArmPoseView, POSES,
     )
 
     per_mm = ArmPoseView._mm_to_units()
     for name, pose in POSES.items():
         upper = math.radians(pose.elbow)
-        elbow_z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
+        elbow_z = SHOULDER_HEIGHT + math.cos(upper) * UPPER_ARM
         fore = upper + math.radians(180 - pose.wrist)
         wrist_z = elbow_z + math.cos(fore) * FOREARM
         tip_z = wrist_z + math.cos(fore) * GRIPPER
@@ -352,6 +435,8 @@ def test_capture_records_the_arms_angles_not_the_sliders() -> None:
     built on — sending the slider value back would record the request and
     call it an observation.
     """
+    from .ik import TWIST_ANGLE
+
     view, sent = ik_page()
     view._handle_reply({"__heartbeat__": {
         "ELBOW_ANGLE": 162, "WRIST_ANGLE": 88, "TWIST_ANGLE": 3,
@@ -365,8 +450,48 @@ def test_capture_records_the_arms_angles_not_the_sliders() -> None:
     assert payload["calibration_type"] == "hover_over_max"
     assert payload["ELBOW"] == 162, payload
     assert payload["WRIST"] == 88
-    assert payload["TWIST"] == 3
     assert payload["distance"] == 120.0
+    # Twist is the exception: it is reported fixed, never observed. See below.
+    assert payload["TWIST"] == TWIST_ANGLE
+
+
+def test_twist_is_not_a_slider_on_this_page() -> None:
+    """It turns the gripper without moving it, so it cannot change the reach
+    or the height these six points measure. A control that cannot affect the
+    measurement can only be set wrong."""
+    view, _sent = ik_page()
+    for point in view._points:
+        assert "twist" not in point._sliders, point.calibration_type
+        assert "twist" not in point._readouts, point.calibration_type
+        assert set(point._sliders) == {"elbow", "wrist"}
+
+
+def test_every_hover_point_reports_the_same_fixed_twist() -> None:
+    """Fixed rather than observed, so six snapshots cannot disagree about it
+    — a pose taken with the gripper accidentally rotated would otherwise
+    bake that rotation into the calibration."""
+    from .ik import TWIST_ANGLE
+
+    view, sent = ik_page()
+    view._handle_reply({"__heartbeat__": {
+        "ELBOW_ANGLE": 100, "WRIST_ANGLE": 40, "TWIST_ANGLE": 17,
+    }})
+
+    for calibration_type in ("hover_over_min", "hover_mid_120"):
+        view._capture(calibration_type, 60.0)
+        _topic, payload = sent[-1]
+        assert payload["TWIST"] == TWIST_ANGLE == 90, payload
+        # And the arm's own twist reading is ignored rather than passed on.
+        assert payload["TWIST"] != 17
+
+
+def test_capture_is_a_filled_button_not_a_toolbar_action() -> None:
+    """It writes a calibration to the robot. ToolbarAction is transparent by
+    design — right in a dense bar, wrong for the one button under a form,
+    where it read as decoration rather than the write it performs."""
+    view, _sent = ik_page()
+    for point in view._points:
+        assert point.capture.objectName() == "SecondaryAction"
 
 
 def test_nothing_is_captured_before_the_arm_reports_in() -> None:

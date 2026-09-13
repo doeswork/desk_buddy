@@ -8,10 +8,16 @@ for non-zero-height reach.
 
 The page is built around what this calibration actually is: not six numbers
 to type, but six *shapes* to put the arm into. So each point shows the shape
-it wants, gives the sliders to get there — which drive the real servos — and
-records the angles the arm ended up at rather than the ones that were asked
-for. Those differ, and the difference is the whole measurement: a servo told
-165 may sit at 162, and 162 is the truth IK has to be built on.
+it wants, gives the elbow and wrist sliders to get there — which drive the
+real servos — and records the angles the arm ended up at rather than the ones
+that were asked for. Those differ, and the difference is the whole
+measurement: a servo told 165 may sit at 162, and 162 is the truth IK has to
+be built on.
+
+Twist is not part of that: it turns the gripper without moving it, so it
+cannot change the reach and height these points measure. It is posed once in
+Base + Perch, and every hover snapshot here reports the same fixed
+TWIST_ANGLE.
 """
 
 from __future__ import annotations
@@ -47,7 +53,20 @@ GROUPS = (
     )),
 )
 
-JOINTS = (("elbow", "ELBOW"), ("wrist", "WRIST"), ("twist", "TWIST"))
+# The joints this page lets you drive. Twist is not one of them: it rotates
+# the gripper about its own axis, which changes how the hand is oriented but
+# not how far out or how high up it is — and reach and height are the whole
+# of what these six points measure. A slider that cannot move the thing
+# being measured is a slider that can only be set wrong, so the arm is posed
+# on two axes here and twist is calibrated once, in the Base + Perch step.
+JOINTS = (("elbow", "ELBOW"), ("wrist", "WRIST"))
+
+# What every hover snapshot reports for TWIST. Fixed rather than read from
+# the arm so the six points cannot disagree about it: a snapshot taken with
+# the gripper accidentally rotated would otherwise bake that rotation into
+# the calibration. 90° is the neutral, square-on wrist the poses are drawn
+# in and the value the walkthrough's worked example uses.
+TWIST_ANGLE = 90
 
 
 class IKPage(StepPage):
@@ -109,13 +128,16 @@ class IKPage(StepPage):
             self._waiting.setVisible(False)
 
     def live_angles(self) -> dict:
-        """The arm's current angles, or {} before the first heartbeat."""
+        """The arm's current angles, or {} before the first heartbeat.
+
+        Elbow and wrist only. Twist is not read back because it is not sent
+        back — see TWIST_ANGLE.
+        """
         if not self._live:
             return {}
         return {
             "elbow": self._live.get("ELBOW_ANGLE"),
             "wrist": self._live.get("WRIST_ANGLE"),
-            "twist": self._live.get("TWIST_ANGLE"),
         }
 
     # ---- body ------------------------------------------------------------
@@ -180,7 +202,7 @@ class IKPage(StepPage):
         action_id = send_hover_point(
             self.workspace.client(), self.workspace.robot,
             calibration_type, distance,
-            elbow=angles["elbow"], wrist=angles["wrist"], twist=angles["twist"],
+            elbow=angles["elbow"], wrist=angles["wrist"], twist=TWIST_ANGLE,
         )
         self.send(action_id, waiting_text=f"Saving {calibration_type}…")
 
@@ -240,7 +262,7 @@ class HoverPoint(QWidget):
         bottom.addWidget(self.distance)
 
         self.capture = QPushButton("Capture This Pose")
-        self.capture.setObjectName("ToolbarAction")
+        self.capture.setObjectName("SecondaryAction")
         self.capture.setCursor(Qt.PointingHandCursor)
         self.capture.setEnabled(False)
         self.capture.setToolTip(
@@ -300,12 +322,14 @@ class HoverPoint(QWidget):
         angles = {
             "elbow": heartbeat.get("ELBOW_ANGLE"),
             "wrist": heartbeat.get("WRIST_ANGLE"),
-            "twist": heartbeat.get("TWIST_ANGLE"),
         }
         if any(value is None for value in angles.values()):
             return
 
-        self.view.set_live(angles["elbow"], angles["wrist"], angles["twist"])
+        # The drawing is a side-on view, so it still needs a twist to render
+        # — it gets the fixed one this page reports, which is also the one
+        # the poses were drawn in.
+        self.view.set_live(angles["elbow"], angles["wrist"], TWIST_ANGLE)
         for key, value in angles.items():
             self._readouts[key].setText(f"{value:g}°")
             if adopt:
