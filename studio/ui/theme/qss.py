@@ -253,8 +253,11 @@ QProgressBar#VisionProgress {{
 QProgressBar#VisionProgress::chunk {{ background: {p.accent}; }}
 
 /* ---- Workflow Studio ---- */
+/* The search field is the first thing in the panel now that the heading
+   above it is gone, so its top margin matches its sides rather than the
+   4px that only had to clear a caption. */
 QLineEdit#WorkflowSearch {{
-    margin: {px(4)} {px(8)} {px(7)} {px(8)};
+    margin: {px(8)} {px(8)} {px(7)} {px(8)};
     padding: {TIGHT_V} {px(7)};
     background: {p.background};
     border: {HAIRLINE} solid {p.border};
@@ -268,22 +271,93 @@ QLabel#WorkflowFile {{
 }}
 QLabel#WorkflowMetaFact {{ color: {p.muted}; font-size: {px(11)}; }}
 QLabel#WorkflowMetaDot {{ color: {p.border}; font-size: {px(11)}; }}
-QPushButton#WorkflowStepChip {{
-    background: {p.background};
+/* A page button that commits something — Capture This Pose writes a
+   calibration to the robot. Filled, but with the panel's own quiet fill
+   rather than the accent: the accent marks the single primary action on a
+   bar, and a page with six of these has no single primary. ToolbarAction is
+   what these used to borrow, and it is transparent by design — right in a
+   dense toolbar strip, wrong for a button sitting alone under a form, where
+   it read as decoration rather than the write it performs. */
+QPushButton#SecondaryAction {{
+    background: {p.muted_bg};
     color: {p.text};
     border: {HAIRLINE} solid {p.border};
     border-radius: {RADIUS};
-    padding: {TIGHT_V} {px(9)};
+    padding: {TIGHT_V} {px(13)};
+    font-weight: 600;
+}}
+QPushButton#SecondaryAction:hover:!disabled {{
+    background: {p.panel};
+    border-color: {p.accent};
+    color: {p.accent};
+}}
+QPushButton#SecondaryAction:pressed {{
+    background: {p.accent};
+    border-color: {p.accent};
+    color: {p.on_accent};
+}}
+QPushButton#SecondaryAction:disabled {{
+    background: transparent;
+    border-style: dashed;
+    color: {p.muted};
+}}
+/* The title is a menu now, but it is still the page's heading: it keeps
+   QLabel#Title's size and weight and paints nothing of its own, so what
+   marks it clickable is the arrow beside it and the hover, not a box drawn
+   around the workflow's name. */
+QToolButton#WorkflowTitle {{
+    background: transparent;
+    color: {p.text};
+    border: none;
+    border-radius: {RADIUS};
+    padding: 0 {px(14)} 0 0;   /* room on the right for the arrow */
+    font-size: {px(18)};
+    font-weight: 600;
+    text-align: left;
+}}
+QToolButton#WorkflowTitle:hover {{ color: {p.accent}; }}
+QToolButton#WorkflowTitle:pressed, QToolButton#WorkflowTitle:open {{
+    color: {p.accent_dark};
+}}
+QToolButton#WorkflowTitle::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: {px(10)};
+}}
+/* The step palette sits on the header line, so its buttons are chrome beside
+   a title rather than controls in a form: outlined, small, and joined into
+   one strip by a shared border, the way the toolbar's buttons are one strip.
+   Named QToolButton because each opens a menu of the group's steps. */
+QToolButton#PaletteGroup {{
+    background: {p.panel};
+    color: {p.text};
+    border: {HAIRLINE} solid {p.border};
+    border-radius: 0;
+    margin-left: -{HAIRLINE};   /* neighbours share one border, not two */
+    padding: {TIGHT_V} {px(8)};
+    padding-right: {px(4)};     /* the arrow supplies the rest */
     font-size: {px(11)};
 }}
-QPushButton#WorkflowStepChip:hover {{
+QToolButton#PaletteGroup:hover:!disabled {{
+    background: {p.muted_bg};
+    border-color: {p.accent};
+}}
+QToolButton#PaletteGroup:pressed, QToolButton#PaletteGroup:open {{
     background: {p.accent};
     color: {p.on_accent};
     border-color: {p.accent};
 }}
-QPushButton#WorkflowStepChip:pressed {{
-    background: {p.accent_dark};
-    border-color: {p.accent_dark};
+QToolButton#PaletteGroup:disabled {{
+    background: transparent;
+    color: {p.muted};
+    border-style: dashed;
+}}
+/* Qt reserves a fixed slot for the indicator and draws the arrow in it; left
+   alone it is wide enough to double the button. */
+QToolButton#PaletteGroup::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: {px(9)};
 }}
 QPlainTextEdit#WorkflowJson {{
     background: {p.background};
@@ -330,12 +404,112 @@ QSlider[manualControl="true"]::handle:horizontal:disabled {{
     background: {p.muted_bg};
     border-color: {p.muted};
 }}
+/* ---- The IK page's pinned sliders ----
+   Same instrument as the manual sliders, with one addition: a pin drawn on
+   the groove at the arm's real angle. The handle is a request, the pin is
+   the measurement, so they must never be the same colour — the accent fill
+   already means "where this has been asked to go", and the pin is painted
+   in `warn` by PinnedSlider, which is the one palette colour that carries
+   no other meaning on this page.
+
+   The pin needs room above and below the groove, so this groove is thinner
+   than the manual one and the handle is squarer: a round handle wide enough
+   to cover the pin would hide the thing the pin exists to show. */
+/* The edit toggle on each IK card's title. Checked means this pose is the
+   one that can move the arm, so it takes the accent outright rather than
+   the quiet secondary treatment — which card is live is the single most
+   important thing to be able to see at a glance on this page. */
+QPushButton#SecondaryAction:checked {{
+    background: {p.accent};
+    border-color: {p.accent};
+    color: {p.on_accent};
+}}
+/* ---- One IK hover point ----
+   Six poses stacked down a page ran together as one wall of sliders, so
+   each is boxed. The border is the same fact as the toggle and the greyed
+   sliders, said a third way: quiet while the pose is locked, accented on
+   the one pose that can move the arm. Bounding the card is also what makes
+   "this row belongs to that drawing" legible at a glance. */
+QWidget#HoverPoint {{
+    border: {HAIRLINE} solid {p.border};
+    border-radius: {RADIUS};
+    background: {p.panel};
+}}
+QWidget#HoverPoint[editing="true"] {{
+    border-color: {p.accent};
+}}
+QSlider[calibrationPin="true"] {{
+    /* Read back by PinnedSlider.paintEvent to colour the pin. `color` is
+       not otherwise used on a slider, so it carries the one value QSS can
+       hand to a custom painter without a second theming channel. */
+    color: {p.warn};
+}}
+QSlider[calibrationPin="true"]::groove:horizontal {{
+    height: {px(4)};
+    background: {p.border};
+    border-radius: {px(2)};
+}}
+QSlider[calibrationPin="true"]::sub-page:horizontal {{
+    background: {p.accent};
+    border-radius: {px(2)};
+}}
+QSlider[calibrationPin="true"]::handle:horizontal {{
+    width: {px(10)};
+    margin: -{px(6)} 0;
+    background: {p.panel};
+    border: {px(2)} solid {p.accent};
+    border-radius: {px(2)};
+}}
+QSlider[calibrationPin="true"]::handle:horizontal:hover {{
+    background: {p.accent};
+}}
+/* Locked: the whole instrument goes grey, the filled groove included. With
+   only the handle muted the accent bar still read as a live control on a
+   card that cannot be touched — five of those on screen at once is what
+   made the page look editable everywhere. */
+QSlider[calibrationPin="true"]:disabled {{
+    color: {p.muted};
+}}
+QSlider[calibrationPin="true"]::groove:horizontal:disabled {{
+    background: {p.muted_bg};
+}}
+QSlider[calibrationPin="true"]::sub-page:horizontal:disabled {{
+    background: {p.muted};
+}}
+QSlider[calibrationPin="true"]::handle:horizontal:disabled {{
+    background: {p.muted_bg};
+    border-color: {p.muted};
+}}
 /* ---- Status chips on the workspace bar ----
    The two always-true facts, quiet until they matter. */
 QLabel#StatusChip {{
     color: {p.muted};
     font-size: {px(11)};
     padding: 0 {px(9)};
+}}
+/* Which robot everything is talking to, chosen on the workspace bar. Quiet
+   like the chips beside it until you reach for it — it is a control, but the
+   bar is chrome, and a loud dropdown up here would compete with the
+   workspace tabs for the eye. */
+QComboBox#RobotPicker {{
+    color: {p.text};
+    background: transparent;
+    border: {HAIRLINE} solid transparent;
+    border-radius: {RADIUS};
+    font-size: {px(11)};
+    padding: {px(2)} {px(7)};
+    margin-right: {px(6)};
+}}
+QComboBox#RobotPicker:hover {{
+    border-color: {p.border};
+    background: {p.panel};
+}}
+QComboBox#RobotPicker:disabled {{
+    color: {p.muted};
+}}
+QComboBox#RobotPicker::drop-down {{
+    border: none;
+    width: {px(14)};
 }}
 
 /* ---- Command text ----

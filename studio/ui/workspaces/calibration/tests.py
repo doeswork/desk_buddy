@@ -4,7 +4,11 @@ Every payload here was captured from a real ESP32 over MQTT, not invented —
 the shapes the firmware actually sends are the whole point of these tests,
 and a guessed one would pass while the robot kept disagreeing.
 
+`StepPage` only: what one step does with a reply, and which thread it does it
+on. The IK step's own behaviour lives beside it, in `ik/tests.py`.
+
     QT_QPA_PLATFORM=offscreen python -m studio.ui.workspaces.calibration.tests
+    QT_QPA_PLATFORM=offscreen python -m studio.ui.workspaces.calibration.ik.tests
 """
 
 from __future__ import annotations
@@ -150,7 +154,7 @@ def test_commands_go_out_as_studio_not_as_the_robot() -> None:
     calibration_messages.send_perch_value(FakeClient(), "black", "wrist", 91)
 
     # The command is addressed to the robot's topic...
-    assert sent["topic"] == "black/test"
+    assert sent["topic"] == "black/commands"
     # ...but nothing in it claims to *be* the robot: MqttClient.publish fills
     # in the sender, and the connection itself authenticates as studio.
     assert sent["payload"]["sender"] != "black"
@@ -185,7 +189,7 @@ def test_a_reply_is_handled_on_the_gui_thread() -> None:
 
     def worker() -> None:
         # Exactly how paho calls a subscriber.
-        view._on_reply("black/test", {"action_id": "abc", "status": "progress"})
+        view._on_reply("black/events", {"action_id": "abc", "status": "progress"})
 
     threading.Thread(target=worker, name="paho-network", daemon=True).start()
     QTimer.singleShot(3000, _app.quit)
@@ -207,7 +211,7 @@ def test_the_network_callback_only_hands_over() -> None:
     view._bridge.arrived.connect(emitted.append)
 
     view._pending = "something-else"
-    view._on_reply("black/test", {"action_id": "abc", "status": "progress"})
+    view._on_reply("black/events", {"action_id": "abc", "status": "progress"})
 
     # Handed over regardless of whether it matches — filtering is the GUI
     # thread's job, in _handle_reply.
@@ -230,14 +234,82 @@ def test_a_reply_for_a_replaced_command_is_ignored() -> None:
     assert calibrations.find("black", "base_perch") is None
 
 
-# ---- The IK page: shapes, jogging, and capture ---------------------------
 
 
-def ik_page():
-    """An IK page with a robot selected and a stub client."""
-    from .ik import IKPage
+# ---- the shared controls -------------------------------------------------
+def _wheel():
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
 
-    sent: list = []
+    return QWheelEvent(
+        QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, 120),
+        Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False,
+    )
+
+
+def test_no_calibration_spin_box_answers_the_wheel() -> None:
+    """Every page in this workspace writes to a physical arm.
+
+    Qt sends the wheel to whatever is under the pointer, so a plain
+    QDoubleSpinBox on a tall form changes its value — and drives the
+    hardware — while the user is only scrolling past it. The shared control
+    is what stops that, so every page has to actually use it.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path.name in ("controls.py", "tests.py"):
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Name) and node.id in (
+                "QDoubleSpinBox", "QSpinBox", "QSlider",
+            ):
+                offenders.append(f"{path.relative_to(root)}:{node.lineno} {node.id}")
+
+    assert not offenders, (
+        "use calibration.controls instead of a raw Qt input: " + ", ".join(offenders)
+    )
+
+
+def test_a_scroll_safe_spin_box_keeps_its_value() -> None:
+    from .controls import ScrollSafeSpinBox
+
+    spin = ScrollSafeSpinBox()
+    spin.setRange(0, 180)
+    spin.setValue(90)
+
+    event = _wheel()
+    spin.wheelEvent(event)
+
+    assert spin.value() == 90
+    assert not event.isAccepted(), "the page could not scroll"
+
+
+def test_widest_sizes_a_control_to_its_longest_label() -> None:
+    """The replacement for setFixedWidth. Asked of the widget, so the
+    stylesheet's own padding is counted rather than guessed at."""
+    from PySide6.QtWidgets import QPushButton
+
+    from .controls import widest
+
+    button = QPushButton("Edit")
+    needed = widest(button, "Edit", "Done", "Something much longer")
+
+    button.setText("Something much longer")
+    assert needed >= button.sizeHint().width()
+    # The caller's text survives being measured.
+    button.setText("Edit")
+    assert widest(button, "Done") and button.text() == "Edit"
+
+
+def _visual_page():
+    """A Visual page with a robot selected and a stub client."""
+    from .visual import VisualPage
+
+    sent = []
 
     class FakeClient:
         def publish(self, topic, payload, **_kwargs):
@@ -247,202 +319,304 @@ def ik_page():
         def subscribe(self, _topic, _callback):
             return lambda: None
 
+        def subscribe_raw(self, _topic, _callback):
+            return lambda: None
+
     workspace = type("Workspace", (), {
         "robot": "black",
         "client": lambda self=None: FakeClient(),
         "robots": lambda self=None: [],
     })()
-    view = IKPage(workspace)
+    view = VisualPage(workspace)
     view.widget()
     return view, sent
 
 
-def test_every_hover_point_has_a_shape_to_aim_at() -> None:
-    """The calibration asks for a pose, so every point must describe one —
-    a missing entry would render a blank drawing beside a live arm."""
-    from .arm_pose import POSES
-    from .ik import GROUPS
+def test_the_perch_is_posed_with_sliders_and_measured_with_numbers() -> None:
+    """A camera pose is found by moving the arm and watching the frame, so
+    the angles are sliders. A mark on the table is measured with a ruler and
+    typed, so the reaches are not."""
+    from .controls import PinnedSlider, ScrollSafeSpinBox
+    from .visual import ANGLES, REACHES
 
-    for _label, points in GROUPS:
-        for calibration_type, _name in points:
-            pose = POSES[calibration_type]
-            assert pose.summary and pose.hint, calibration_type
+    view, _sent = _visual_page()
+    form = view._form
+
+    for key, _joint, label in ANGLES:
+        assert isinstance(form._sliders[key], PinnedSlider), label
+    for key, label, _default in REACHES:
+        assert isinstance(form._reaches[key], ScrollSafeSpinBox), label
 
 
-def tip_of(pose) -> tuple[float, float]:
-    """Where a pose puts the gripper, in millimetres: (reach, height).
+def test_the_perch_moved_off_the_base_page() -> None:
+    """A perch is a camera pose, not a property of the turntable. Setting it
+    on a page with no picture on it was guesswork."""
+    from .base_perch import FIELDS
 
-    Mirrors `_draw_arm` exactly, including the screen convention — cos adds
-    height rather than subtracting it. Getting that backwards is what drew
-    the z=0 row above the table and the z=50 row below it, so the test does
-    the arithmetic the same way the paint code does or it proves nothing.
+    assert FIELDS == (), "the base page still owns perch fields"
+
+
+def test_aiming_a_joint_drives_the_real_servo() -> None:
+    """The camera rides on the arm, so pointing it means moving it — and
+    that has to happen while the user drags, not only on save."""
+    view, sent = _visual_page()
+    view._form._sliders["elbow"].committed.emit(45)
+
+    _topic, body = sent[-1]
+    assert body["action"] == "servo"
+    assert body["servoName"] == "ELBOW"
+    assert body["position"] == 45
+
+
+def test_saving_the_perch_sends_all_three_angles() -> None:
+    """The firmware stores three, even though only two are aimed.
+
+    Twist has no slider — it cannot move the camera — but leaving it unsent
+    would keep whatever an earlier calibration wrote, so the saved perch
+    would not be the pose on screen.
     """
-    import math
+    from .visual import ANGLES, TWIST_NEUTRAL
 
-    from .arm_pose import (
-        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView,
+    view, sent = _visual_page()
+    form = view._form
+    for key, _joint, _label in ANGLES:
+        form._sliders[key].setValue(100)
+
+    form.save_perch.click()
+
+    written = {
+        body.get("calibration_type"): body.get("value")
+        for _topic, body in sent
+    }
+    assert written == {
+        "perch_elbow_angle": 100.0,
+        "perch_wrist_angle": 100.0,
+        "perch_twist_angle": float(TWIST_NEUTRAL),
+    }, written
+
+
+def test_twist_is_not_a_slider_on_this_page() -> None:
+    """It turns the gripper about its own axis, which cannot change where
+    the camera points. A control that cannot move what is being set can only
+    be set wrong — the same reason it is absent from the IK page."""
+    view, _sent = _visual_page()
+    assert set(view._form._sliders) == {"elbow", "wrist"}
+
+
+def test_the_base_can_be_sent_to_true_north() -> None:
+    """A perch is only meaningful from a known heading: the same arm pose
+    facing two ways sees two different tables."""
+    view, sent = _visual_page()
+    view._form.home.click()
+
+    _topic, body = sent[-1]
+    assert body["action"] == "baseRotate"
+    assert body["controlType"] == "HOME"
+    assert body["direction"] in ("LEFT", "RIGHT")
+
+
+def test_the_handles_follow_the_arm_until_they_are_touched() -> None:
+    """This page is for finding a pose, so a handle nobody has moved starts
+    where the arm already is. `drifted` cannot decide that — an untouched
+    slider sits at its default and is already drifted from the real angle."""
+    view, _sent = _visual_page()
+    form = view._form
+
+    form.set_live({"ELBOW_ANGLE": 137, "WRIST_ANGLE": 59, "TWIST_ANGLE": 90})
+    assert form._sliders["elbow"].value() == 137
+    assert form._sliders["elbow"].pin == 137
+
+    # Once driven by hand, the handle is the user's. A real drag moves the
+    # handle and then commits on release; both together are what a touch is.
+    form._sliders["elbow"].setValue(45)
+    form._sliders["elbow"].committed.emit(45)
+    form.set_live({"ELBOW_ANGLE": 137, "WRIST_ANGLE": 59, "TWIST_ANGLE": 90})
+    assert form._sliders["elbow"].value() == 45, "the arm took the handle back"
+    assert form._sliders["elbow"].pin == 137
+
+
+# ---- a step's form outlives its replies ----------------------------------
+# Three pages hit this in turn: IK's captures, IK's per-point state, and
+# Base + Perch's sliders. Each was patched where it showed up, which left the
+# next page with stateful controls to discover it again. The guarantee belongs
+# to StepPage, so these test it there.
+
+
+class _FormPage(StepPage):
+    """A step whose form holds something the user typed."""
+
+    step_key = "base_perch"
+
+    def __init__(self, workspace=None) -> None:
+        super().__init__(workspace)
+        self.builds = 0
+        self.refreshes = 0
+
+    def build_form(self):
+        from PySide6.QtWidgets import QLineEdit
+
+        self.builds += 1
+        field = QLineEdit()
+        field.setObjectName("KeptField")
+        return field
+
+    def form_refreshed(self, form) -> None:
+        self.refreshes += 1
+        super().form_refreshed(form)
+
+
+def _form_page(robot: str = "black") -> _FormPage:
+    class FakeClient:
+        def publish(self, _topic, _payload, **_kwargs):
+            return "action-id"
+
+        def subscribe(self, _topic, _callback):
+            return lambda: None
+
+    workspace = type("Workspace", (), {
+        "robot": robot,
+        "client": lambda self=None: FakeClient(),
+        "robots": lambda self=None: [],
+    })()
+    view = _FormPage(workspace)
+    view.widget()
+    return view
+
+
+def test_a_form_survives_the_reply_to_its_own_command() -> None:
+    """The trap, stated once: a step that sends and then rebuilds must not
+    destroy the controls the user was working in."""
+    view = _form_page()
+    field = view._form
+    field.setText("half typed")
+
+    view.send("action-id", waiting_text="Setting…")
+    assert view._form is field, "the form was rebuilt while waiting"
+    assert view._form.text() == "half typed"
+
+    view._handle_reply({
+        "sender": "firmware", "action_id": "action-id", "status": "completed",
+    })
+    assert view._form is field, "the form was rebuilt on the reply"
+    assert view._form.text() == "half typed"
+    assert view.builds == 1, f"built {view.builds} times"
+
+
+def _waiting_shown(view) -> bool:
+    from PySide6.QtWidgets import QLabel
+
+    return any(
+        "Waiting for the robot" in label.text()
+        for label in view.built().widget().findChildren(QLabel)
     )
 
-    upper = math.radians(pose.elbow)
-    x = math.sin(upper) * UPPER_ARM
-    z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
-    fore = upper + math.radians(180 - pose.wrist)
-    x += math.sin(fore) * (FOREARM + GRIPPER)
-    z += math.cos(fore) * (FOREARM + GRIPPER)
-    per_mm = ArmPoseView._mm_to_units()
-    return x / per_mm, z / per_mm
+
+def _pump(milliseconds: int) -> None:
+    """Let Qt's timers run for a moment, without blocking the event loop."""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    QTimer.singleShot(milliseconds, loop.quit)
+    loop.exec()
 
 
-def test_every_pose_lands_on_its_own_reach_and_height() -> None:
-    """The drawing has to agree with the numbers beside it.
+def test_a_quick_reply_never_shows_a_waiting_card() -> None:
+    """A robot on the LAN answers a servo command in milliseconds, so the
+    card appeared and vanished between two frames — flashing under the hand
+    of anyone dragging a slider that sends on release."""
+    view = _form_page()
+    view.send("action-id", waiting_text="Setting elbow…")
+    assert not _waiting_shown(view), "card shown before the grace period"
 
-    y is reach out from the base, z is height off the table — so the three
-    table-level points sit *on* the line at 0, 60 and 120 mm, and the raised
-    three sit on the 50 mm plane at 30, 75 and 120 mm. They were drawn
-    swapped once: the z=0 row floating and the z=50 row sunk below the
-    table, which made the two groups indistinguishable.
-    """
-    from .arm_pose import POSES
-
-    for name, pose in POSES.items():
-        reach, height = tip_of(pose)
-        assert abs(reach - pose.distance) < 6, f"{name}: reach {reach:.1f}"
-        assert abs(height - pose.height) < 6, f"{name}: height {height:.1f}"
+    view._handle_reply({
+        "sender": "firmware", "action_id": "action-id", "status": "completed",
+    })
+    _pump(view.WAITING_GRACE_MS + 200)
+    assert not _waiting_shown(view), "card appeared after the reply landed"
 
 
-def test_no_pose_draws_the_arm_through_the_table() -> None:
-    """A drawing of the arm buried in the desk is not an instruction."""
-    import math
+def test_a_robot_that_does_not_answer_is_reported() -> None:
+    """The card still exists — silence has to be visible, or the page just
+    looks broken."""
+    view = _form_page()
+    view.send("action-id", waiting_text="Setting elbow…")
 
-    from .arm_pose import (
-        BASE_HEIGHT, FOREARM, GRIPPER, UPPER_ARM, ArmPoseView, POSES,
-    )
-
-    per_mm = ArmPoseView._mm_to_units()
-    for name, pose in POSES.items():
-        upper = math.radians(pose.elbow)
-        elbow_z = BASE_HEIGHT + math.cos(upper) * UPPER_ARM
-        fore = upper + math.radians(180 - pose.wrist)
-        wrist_z = elbow_z + math.cos(fore) * FOREARM
-        tip_z = wrist_z + math.cos(fore) * GRIPPER
-        assert min(elbow_z, wrist_z, tip_z) / per_mm > -2, name
+    _pump(view.WAITING_GRACE_MS + 200)
+    assert _waiting_shown(view), "a stalled command said nothing"
 
 
-def test_the_shapes_are_ordered_and_distinct() -> None:
-    """Min, mid and max must actually differ, and in the right direction:
-    a drawing that showed the same shape three times would be worse than
-    none, because it would look authoritative."""
-    from .arm_pose import POSES
+def test_progress_shows_the_wait_at_once() -> None:
+    """A robot reporting progress is saying this will take a while — the
+    base rotation profile runs for minutes. No grace period for that."""
+    view = _form_page()
+    view.send("action-id", waiting_text="Measuring…")
+    view._handle_reply({
+        "sender": "firmware", "action_id": "action-id",
+        "status": "progress", "progress": "pass 1 of 2",
+    })
 
-    for suffix in ("over_min", "over_mid", "over_max"):
-        assert f"hover_{suffix}" in POSES
-
-    reach = [POSES[f"hover_over_{n}"].distance for n in ("min", "mid", "max")]
-    assert reach == sorted(reach) and len(set(reach)) == 3, reach
-
-    # The z=50 group is the same reach, lifted.
-    for name in ("min_120", "mid_120", "max_120"):
-        assert POSES[f"hover_{name}"].height == 50
+    assert _waiting_shown(view)
+    assert view._waiting_text == "pass 1 of 2"
 
 
-def test_capture_records_the_arms_angles_not_the_sliders() -> None:
-    """The measurement is where the arm *is*.
+def test_waiting_is_shown_beside_the_form_not_instead_of_it() -> None:
+    """The form used to be swapped out for the waiting card, which is what
+    made every reply destructive. Both are on screen now."""
+    view = _form_page()
+    view.send("action-id", waiting_text="Setting elbow…")
+    _pump(view.WAITING_GRACE_MS + 200)
 
-    A servo told 165 may sit at 162, and 162 is the number IK has to be
-    built on — sending the slider value back would record the request and
-    call it an observation.
-    """
-    view, sent = ik_page()
-    view._handle_reply({"__heartbeat__": {
-        "ELBOW_ANGLE": 162, "WRIST_ANGLE": 88, "TWIST_ANGLE": 3,
-    }})
+    from PySide6.QtWidgets import QLabel, QLineEdit
 
-    # Move a slider somewhere else entirely; it must not be what is saved.
-    view._points[0]._sliders["elbow"].setValue(10)
-    view._capture("hover_over_max", 120.0)
-
-    _topic, payload = sent[-1]
-    assert payload["calibration_type"] == "hover_over_max"
-    assert payload["ELBOW"] == 162, payload
-    assert payload["WRIST"] == 88
-    assert payload["TWIST"] == 3
-    assert payload["distance"] == 120.0
+    body = view.built().widget()
+    assert body.findChild(QLineEdit, "KeptField") is not None, "form vanished"
+    assert any(
+        "Setting elbow…" in label.text() for label in body.findChildren(QLabel)
+    ), "no waiting card"
 
 
-def test_nothing_is_captured_before_the_arm_reports_in() -> None:
-    """With no heartbeat there is no pose to record, so Capture must not
-    invent one from the sliders."""
-    view, sent = ik_page()
-    view._capture("hover_over_mid", 60.0)
-    assert not sent
+def test_a_kept_form_is_refreshed_on_every_rebuild() -> None:
+    """Kept is not stale: the page gets a hook to bring it up to date."""
+    view = _form_page()
+    before = view.refreshes
+
+    view.rebuild()
+    view.rebuild()
+
+    assert view.refreshes == before + 2
+    assert view.builds == 1
 
 
-def test_jogging_drives_the_real_servo() -> None:
-    """The sliders are a remote control, not a form: this is the half that
-    gets the arm into the shape in the first place."""
-    view, sent = ik_page()
-    view._jog("ELBOW", 120)
+def test_switching_robots_discards_the_form() -> None:
+    """A form is built from one robot's saved values, so keeping it across a
+    switch would leave another machine's numbers on screen."""
+    view = _form_page()
+    view._form.setText("black's value")
 
-    _topic, payload = sent[-1]
-    assert payload["action"] == "servo"
-    assert payload["servoName"] == "ELBOW"
-    assert payload["position"] == 120
+    view.workspace.robot = "white"
+    view.rebuild()
 
-
-def test_heartbeats_cross_to_the_gui_thread_like_replies_do() -> None:
-    """The heartbeat feeds the same widgets a command reply does, so it
-    takes the same bridge — updating them from the network thread is what
-    segfaulted a calibration run."""
-    import threading
-
-    from PySide6.QtCore import QTimer
-
-    view, _sent = ik_page()
-    handled: dict = {}
-    original = view._handle_reply
-
-    def spy(payload):
-        handled["thread"] = threading.current_thread().name
-        original(payload)
-        _app.quit()
-
-    view._bridge.arrived.disconnect()
-    view._bridge.arrived.connect(spy)
-
-    threading.Thread(
-        target=lambda: view._on_heartbeat("black/HEARTBEAT", {
-            "ELBOW_ANGLE": 55, "WRIST_ANGLE": 90, "TWIST_ANGLE": 0,
-        }),
-        name="paho-network", daemon=True,
-    ).start()
-    QTimer.singleShot(3000, _app.quit)
-    _app.exec()
-
-    assert handled.get("thread") == threading.main_thread().name, handled
+    assert view.builds == 2, "the form was kept across a robot change"
+    assert view._form.text() == ""
 
 
-def test_sliders_adopt_the_arm_once_then_stop_following() -> None:
-    """Matching the arm on arrival is helpful; doing it forever would snap
-    the handle out from under a dragging hand."""
-    view, _sent = ik_page()
-    elbow = view._points[0]._sliders["elbow"]
+def test_a_page_may_opt_out_of_keeping_its_form() -> None:
+    """Escape hatch for a form rebuilt wholly from the reply, with nothing
+    of the user's in it."""
+    view = _form_page()
+    view.form_is_disposable = True
 
-    view._handle_reply({"__heartbeat__": {
-        "ELBOW_ANGLE": 55, "WRIST_ANGLE": 90, "TWIST_ANGLE": 0,
-    }})
-    assert elbow.value() == 55
+    view.rebuild()
+    view.rebuild()
 
-    view._handle_reply({"__heartbeat__": {
-        "ELBOW_ANGLE": 120, "WRIST_ANGLE": 90, "TWIST_ANGLE": 0,
-    }})
-    assert elbow.value() == 55, "later heartbeats must not move the slider"
+    assert view.builds == 3, "disposable forms should be rebuilt each time"
 
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
         test()
-    print(f"OK: {len(tests)} calibration tests")
+    print(f"OK: {len(tests)} step tests")
     return 0
 
 

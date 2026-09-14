@@ -4,18 +4,27 @@ The first of the app's three bars, under the menu bar and above the toolbar.
 One button per workspace, exclusive, always visible. Never changes. Switching
 between the pages *inside* a workspace is the side panel's job.
 
-Its right-hand end carries the two facts that are true no matter where you
-are: is the broker up, and is the robot there. They live here rather than in
-the Network workspace because they stay relevant while you are somewhere else
-— a robot that drops offline matters most when you are driving it from Manual.
+Its right-hand end carries the two things that are true no matter where you
+are: whether the broker is up, and which robot you are driving. They live here
+rather than in the Network workspace because they stay relevant while you are
+somewhere else — the robot a workflow is about to run on matters most on the
+Workflows page, which has no picker of its own.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QStyle, QToolBar
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QLabel,
+    QMainWindow,
+    QStyle,
+    QToolBar,
+)
 
+from ...models.config.current_robot import current_robot
 from .spacer import spacer
 
 
@@ -56,10 +65,57 @@ class WorkspaceBar(QToolBar):
         self.addWidget(self.broker_label)
         self.set_broker("○ no broker")
 
-        self.connection_label = QLabel()
-        self.connection_label.setObjectName("StatusChip")
-        self.addWidget(self.connection_label)
-        self.set_robot("○ no robot")
+        # Which robot every workspace is talking to, chosen here.
+        #
+        # It was a status chip that said "no robot" and never said anything
+        # else — nothing ever called its setter. Worse, the one real control
+        # was a picker buried on the Calibration steps, so a workflow could
+        # be run with no way to see which machine it was addressed to.
+        #
+        # The selection is app-wide, so the place to make it is the bar that
+        # is on screen in every workspace.
+        self.robot_picker = QComboBox()
+        self.robot_picker.setObjectName("RobotPicker")
+        self.robot_picker.setCursor(Qt.PointingHandCursor)
+        self.robot_picker.setToolTip(
+            "The robot every workspace sends commands to."
+        )
+        self.robot_picker.currentIndexChanged.connect(self._robot_chosen)
+        self.addWidget(self.robot_picker)
+        self.refresh_robots()
+        # Kept current when something else changes the selection — the
+        # Calibration picker, or a robot marked on Network → Robots.
+        self._unwatch = current_robot().watch(lambda _name: self.refresh_robots())
+
+    # ---- the robot picker -------------------------------------------------
+    def refresh_robots(self) -> None:
+        """Rebuild the list, keeping it on whatever is selected now."""
+        selection = current_robot()
+        available = selection.available()
+        current = selection.name
+
+        # Signals off: repopulating moves the index, and reacting to that
+        # would write the list's own first entry back as the user's choice.
+        self.robot_picker.blockSignals(True)
+        self.robot_picker.clear()
+        if not available:
+            self.robot_picker.addItem("no robot", "")
+            self.robot_picker.setEnabled(False)
+        else:
+            for robot in available:
+                self.robot_picker.addItem(robot.display_name, robot.name)
+            self.robot_picker.setEnabled(True)
+            index = self.robot_picker.findData(current)
+            if index >= 0:
+                self.robot_picker.setCurrentIndex(index)
+        self.robot_picker.blockSignals(False)
+
+    def _robot_chosen(self, index: int) -> None:
+        if index < 0:
+            return
+        name = str(self.robot_picker.itemData(index) or "")
+        if name:
+            current_robot().select(name)
 
     def check(self, index: int) -> None:
         self.actions_by_index[index].setChecked(True)
@@ -69,9 +125,6 @@ class WorkspaceBar(QToolBar):
     # belongs to the service that knows — not to the bar that shows it.
     def set_broker(self, text: str) -> None:
         self.broker_label.setText(text)
-
-    def set_robot(self, text: str) -> None:
-        self.connection_label.setText(text)
 
     def set_issue(self, workspace_key: str, issue: bool, detail: str = "") -> None:
         """Put a theme-aware warning icon on one workspace tab."""

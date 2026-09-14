@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
 
 from ....models.config.calibrations import Calibration, calibrations
@@ -57,6 +57,25 @@ class StepPage(Page):
         self._waiting_text = ""
         self._error = ""
         self._unsubscribe = None
+        # The form, kept across rebuilds so the values in it survive a reply.
+        self._form: QWidget | None = None
+        # Whether the waiting card has earned its place on screen. A robot on
+        # the LAN answers a servo command in milliseconds, so showing it the
+        # instant a command goes out made it appear and vanish between two
+        # frames — on a slider that sends on every release, that is a card
+        # flashing under the user's hand. It waits for the robot to actually
+        # be slow before saying so.
+        self._waiting_visible = False
+        # Parented to the bridge: a Page is a plain object, not a QObject, so
+        # it cannot own a timer. The bridge is the page's QObject and lives
+        # exactly as long as it does.
+        self._waiting_timer = QTimer(self._bridge)
+        self._waiting_timer.setSingleShot(True)
+        self._waiting_timer.timeout.connect(self._waiting_overdue)
+        # Which robot the kept form was built for. A form is built from one
+        # robot's saved values, so switching robots has to discard it rather
+        # than leave another machine's numbers on screen.
+        self._form_robot = ""
 
     @property
     def status(self) -> str:
@@ -70,6 +89,20 @@ class StepPage(Page):
 
     # ---- body ------------------------------------------------------------
     def build_page(self) -> QWidget:
+        """The step, with its form kept alive across rebuilds.
+
+        The form is built once and reused. It used to be swapped out for a
+        "Waiting…" card whenever a command was in flight, which meant every
+        reply destroyed and rebuilt the controls — and any value the user had
+        dialled into them went with it. On a page whose inputs are sliders
+        that send on release, that fired on every drag: the handle vanished
+        mid-gesture and the other fields reset around it.
+
+        So waiting is a banner above the form now, not a replacement for it.
+        Pages that genuinely want a fresh form each time can say so with
+        `form_is_disposable`; the default is to keep it, because a control
+        holding something the user typed or dragged is the common case.
+        """
         sections = [self.build_robot_picker()]
 
         robot = self.workspace.robot
@@ -80,17 +113,67 @@ class StepPage(Page):
                 "the form below.",
             ))
 
-        if self._pending:
+        if self._pending and self._waiting_visible:
             sections.append(Card("Waiting for the robot…", self._waiting_text))
-        else:
-            if self._error:
-                sections.append(Card("The robot reported a problem", self._error))
-            # Shown either way, so a step's fields are always visible to read
-            # and fill in — only sending is gated on a robot being selected.
-            sections.append(self.build_form())
+        elif self._error:
+            sections.append(Card("The robot reported a problem", self._error))
+
+        # Shown either way, so a step's fields are always visible to read and
+        # fill in — only sending is gated on a robot being selected.
+        sections.append(self.form())
 
         sections.append(self.build_saved_values())
         return Column(*sections)
+
+    # A page whose form carries no user state — one rebuilt wholly from the
+    # reply, with nothing typed or dragged to lose — may set this True and
+    # get the old behaviour back.
+    form_is_disposable = False
+
+    def form(self) -> QWidget:
+        """This step's form, built once unless the page opts out.
+
+        Reparenting is what makes reuse safe: `Page.rebuild()` deletes the
+        widgets it took out of the layout, so the kept form is pulled clear
+        first and handed to the new column, rather than being deleted as a
+        child of the old one.
+        """
+        if self.form_is_disposable:
+            return self.build_form()
+
+        if self._form is not None and self._form_robot != self.workspace.robot:
+            self.discard_form()
+
+        if self._form is None:
+            self._form = self.build_form()
+            self._form_robot = self.workspace.robot
+        else:
+            self._form.setParent(None)
+        self.form_refreshed(self._form)
+        return self._form
+
+    def form_refreshed(self, form: QWidget) -> None:
+        """Bring a kept form up to date with the page's state.
+
+        Called on every rebuild, with the same widget as last time. The
+        default handles the one thing every step shares — whether its
+        controls may act right now — by asking the form, if it can say.
+        Override for anything else a page needs to refresh in place.
+        """
+        setter = getattr(form, "set_enabled", None)
+        if callable(setter):
+            setter(self.can_send)
+
+    def discard_form(self) -> None:
+        """Drop the kept form so the next rebuild constructs a fresh one.
+
+        For the state changes a form cannot absorb — a different robot
+        selected, whose saved values the form is built from.
+        """
+        if self._form is not None:
+            self._form.setParent(None)
+            self._form.deleteLater()
+            self._form = None
 
     @property
     def can_send(self) -> bool:
@@ -98,8 +181,16 @@ class StepPage(Page):
         return bool(self.workspace.robot) and not self._pending
 
     def build_robot_picker(self) -> QWidget:
+        """Which robot this step calibrates — always shown, even for one.
+
+        Hiding the picker below two robots meant the only way to see what
+        Studio was aimed at was to read the topic in the MQTT log. A robot
+        reflashed under a new account name is a *different* robot to the
+        registry, so "you only have one" is exactly when being pointed at the
+        wrong one is hardest to notice.
+        """
         available = self.workspace.robots()
-        if len(available) < 2:
+        if not available:
             return QWidget()
 
         holder = QWidget()
@@ -138,6 +229,12 @@ class StepPage(Page):
         return Card(f"Saved values — {saved.saved_at}", lines or "Nothing stored.")
 
     # ---- sending a command and waiting for its reply ----------------------
+    # How long the robot may take before the page says it is waiting. Short
+    # enough that a real stall is reported promptly, long enough that an
+    # ordinary servo command — answered in milliseconds — never shows a card
+    # at all.
+    WAITING_GRACE_MS = 600
+
     def send(self, action_id: str, *, waiting_text: str = "Sending…") -> None:
         """Start waiting on one action_id. The workspace's client delivers the
         matching reply to `_on_reply` on the robot's own reply topic."""
@@ -145,10 +242,18 @@ class StepPage(Page):
         self._pending = action_id
         self._waiting_text = waiting_text
         self._error = ""
+        self._waiting_timer.start(self.WAITING_GRACE_MS)
 
         robot = self.workspace.robot
         topic = event_topic(robot)
         self._unsubscribe = self.workspace.client().subscribe(topic, self._on_reply)
+        self.rebuild()
+
+    def _waiting_overdue(self) -> None:
+        """The robot has taken long enough that the wait is worth showing."""
+        if not self._pending:
+            return
+        self._waiting_visible = True
         self.rebuild()
 
     def _on_reply(self, _topic: str, payload: dict) -> None:
@@ -165,7 +270,12 @@ class StepPage(Page):
             return
         status = payload.get("status")
         if status == "progress":
+            # A robot that reports progress is telling you this will take a
+            # while — the base rotation profile runs for minutes. No grace
+            # period for that: show it now and keep showing it.
             self._waiting_text = str(payload.get("progress", payload))
+            self._waiting_timer.stop()
+            self._waiting_visible = True
             self.rebuild()
             return
         if status == "failed":
@@ -242,3 +352,8 @@ class StepPage(Page):
             self._unsubscribe()
             self._unsubscribe = None
         self._pending = ""
+        # Stop the grace timer and hide the card together: a reply that beat
+        # the timer must not let it fire afterwards, and one that did not
+        # must take the card back down.
+        self._waiting_timer.stop()
+        self._waiting_visible = False

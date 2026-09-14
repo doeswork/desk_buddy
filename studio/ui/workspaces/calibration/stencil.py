@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -31,6 +30,7 @@ from ....models.config.calibrations import Calibration, calibrations
 from ....services.network.pub_sub.calibration_messages import send_stencil_command
 from ...components import Card
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
+from .controls import ScrollSafeSpinBox
 from .step import StepPage
 
 # Reached when the firmware's session has produced the final stencil result —
@@ -50,6 +50,12 @@ class StencilPage(StepPage):
     def __init__(self, workspace=None) -> None:
         super().__init__(workspace)
         self._session: dict = {}
+
+    # The form is drawn from the firmware's own session — phase and point
+    # index change with every reply, and the two nudge boxes are read on the
+    # spot rather than held. Nothing of the user's lives here between
+    # replies, so this is the one step that genuinely wants a fresh form.
+    form_is_disposable = True
 
     def build_form(self) -> QWidget:
         return StencilForm(
@@ -167,12 +173,13 @@ class StencilForm(QWidget):
         label.setObjectName("CardBody")
         layout.addWidget(label)
 
-        rotation = QDoubleSpinBox()
+        # Scroll-safe: these nudge a stencil the arm is already tracing.
+        rotation = ScrollSafeSpinBox()
         rotation.setRange(-45, 45)
         rotation.setPrefix("Rotation °: ")
         layout.addWidget(rotation)
 
-        distance = QDoubleSpinBox()
+        distance = ScrollSafeSpinBox()
         distance.setRange(-50, 50)
         distance.setPrefix("Distance mm: ")
         layout.addWidget(distance)

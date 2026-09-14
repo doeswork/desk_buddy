@@ -390,6 +390,69 @@ class CoordinatorTests(unittest.TestCase):
         self.assertTrue(result.connected)
         self.assertTrue(result.network_ready)
 
+    def test_a_verify_only_recheck_never_asks_for_a_password(self):
+        """A passive revisit reports an unmet precondition; it does not prompt.
+
+        Without this, any precondition that keeps reading as unmet turns
+        every visit to the Network tab into another authorization dialog,
+        because the check runs again on each visit and escalates each time.
+        """
+        def verify(host, number, user, secret):
+            return "" if secret == "existing-password" else "Credentials refused"
+        with (
+            mock.patch.object(setup, "detect", return_value=LINUX),
+            mock.patch.object(setup, "verify_connection", side_effect=verify),
+            mock.patch.object(setup, "local_network", return_value=("192.168.1.2", "192.168.1.0/24")),
+            mock.patch.object(setup, "firewall_ready", return_value=False),
+            mock.patch.object(helper, "FRAGMENT", Path("/nonexistent/desk-buddy.conf")),
+            mock.patch.object(setup, "authorize") as authorize,
+        ):
+            result = setup.perform(
+                dict(host="", user="studio", password="existing-password",
+                     port=1883, verify_only=True),
+                lambda *a, **kw: None,
+            )
+        authorize.assert_not_called()
+        self.assertTrue(result.connected)
+        self.assertEqual(result.state, "failed")
+
+    def test_verify_only_still_reports_a_healthy_broker_as_ready(self):
+        """The common case: nothing to do, so the revisit is silent."""
+        def verify(host, number, user, secret):
+            return "" if secret == "existing-password" else "Credentials refused"
+        with (
+            mock.patch.object(setup, "detect", return_value=LINUX),
+            mock.patch.object(setup, "verify_connection", side_effect=verify),
+            mock.patch.object(setup, "local_network", return_value=("192.168.1.2", "192.168.1.0/24")),
+            mock.patch.object(setup, "firewall_ready", return_value=True),
+            mock.patch.object(helper, "FRAGMENT", Path("/nonexistent/desk-buddy.conf")),
+            mock.patch.object(setup, "authorize") as authorize,
+        ):
+            result = setup.perform(
+                dict(host="", user="studio", password="existing-password",
+                     port=1883, verify_only=True),
+                lambda *a, **kw: None,
+            )
+        authorize.assert_not_called()
+        self.assertEqual(result.state, "ready")
+        self.assertTrue(result.connected)
+
+    def test_an_explicit_retry_may_still_authorize(self):
+        """verify_only is the passive path only. Retry is the user's own
+        gesture, and it must still be able to finish setup."""
+        with (
+            mock.patch.object(setup, "detect", return_value=LINUX),
+            mock.patch.object(setup, "verify_connection", side_effect=["Not answering", ""]),
+            mock.patch.object(setup, "local_network", return_value=("192.168.1.2", "192.168.1.0/24")),
+            mock.patch.object(setup, "authorize", return_value={"user": "studio-2"}) as authorize,
+        ):
+            result = setup.perform(
+                dict(host="", user="studio", password="secret", port=1883),
+                lambda *a, **kw: None,
+            )
+        authorize.assert_called_once()
+        self.assertEqual(result.state, "ready")
+
     def test_stock_anonymous_broker_creates_a_real_account(self):
         with mock.patch.object(setup, "detect", return_value=LINUX), mock.patch.object(setup, "verify_connection", return_value=""), mock.patch.object(setup, "local_network", return_value=("192.168.1.2", "192.168.1.0/24")), mock.patch.object(setup, "firewall_ready", return_value=True), mock.patch.object(setup, "authorize", return_value={"user": "studio-2"}) as authorize:
             result = setup.perform(dict(host="", user="studio", password="secret", port=1883), lambda *a, **kw: None)

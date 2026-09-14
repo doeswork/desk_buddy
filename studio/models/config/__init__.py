@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .calibrations import Calibration, Calibrations, calibrations
+from .current_robot import CurrentRobot, current_robot
 from .mqtt_topics import TOPIC_RULE, default_topics, validate_topic
 from .mqtt_users import MqttUser, Users, users
 from .prefrences import Preferences, preferences
@@ -13,6 +14,7 @@ from .workflows import Workflow, Workflows, workflows
 __all__ = [
     "Calibration",
     "Calibrations",
+    "CurrentRobot",
     "MqttUser",
     "Preferences",
     "Robot",
@@ -24,6 +26,7 @@ __all__ = [
     "Workflow",
     "Workflows",
     "calibrations",
+    "current_robot",
     "default_topics",
     "preferences",
     "robots",

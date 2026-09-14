@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ....models.config.robots import robots
+from ....models.config.current_robot import current_robot
 from ...components import Card, Column
 from ...pages.base import Page
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
@@ -34,7 +34,6 @@ class DetectionsPage(Page):
         super().__init__(workspace)
         self._source = "robot"
         self._prompt = ""
-        self._robot = ""
         self._local_jpeg = b""
         self._local_name = ""
         self._image = b""
@@ -62,10 +61,7 @@ class DetectionsPage(Page):
 
     @property
     def selected_robot(self) -> str:
-        if self._robot and robots().find(self._robot):
-            return self._robot
-        available = robots().all()
-        return available[0].name if available else ""
+        return current_robot().name
 
     def build_page(self) -> QWidget:
         sections: list[QWidget] = [DetectionForm(self)]
@@ -136,7 +132,7 @@ class DetectionsPage(Page):
         self._prompt = prompt
 
     def robot_changed(self, robot: str) -> None:
-        self._robot = robot
+        current_robot().select(robot)
 
     def _on_photo(self, jpeg: bytes) -> None:
         self._image = bytes(jpeg)
@@ -180,7 +176,7 @@ class DetectionForm(QFrame):
             row.addWidget(label)
             picker = QComboBox()
             picker.setObjectName("VisionRobotPicker")
-            available = robots().all()
+            available = current_robot().available()
             for robot in available:
                 picker.addItem(robot.display_name, robot.name)
             if page.selected_robot:

@@ -17,6 +17,7 @@ from .column import Column
 from .toolbar import Toolbar, ToolbarButton
 from .debug_tray import DebugTray
 from .flow_layout import FlowBar, FlowLayout
+from .manual_control import ManualControl
 from .workspace_bar import WorkspaceBar
 from .preferences_dialog import PreferencesDialog
 from .robot_profile_dialog import RobotProfileDialog
@@ -35,6 +36,7 @@ __all__ = [
     "DebugTray",
     "FlowBar",
     "FlowLayout",
+    "ManualControl",
     "WorkspaceBar",
     "PreferencesDialog",
     "RobotProfileDialog",

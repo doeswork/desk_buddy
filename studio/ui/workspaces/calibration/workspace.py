@@ -12,7 +12,7 @@ is what lets a reply on one topic reach exactly the step waiting on it.
 
 from __future__ import annotations
 
-from ....models.config.robots import robots
+from ....models.config.current_robot import current_robot
 from ....services.network import mqtt_client
 from ..base import Workspace
 from .base_perch import BasePerchPage
@@ -34,30 +34,19 @@ class CalibrationWorkspace(Workspace):
         StencilPage,
     ]
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._robot = ""
-
     # ---- robot selection ---------------------------------------------------
+    # Calibration does not own the selection: it is the same robot Manual
+    # Control and Vision are pointed at, so all three read it from one place.
     def robots(self) -> list:
-        return robots().all()
+        return current_robot().available()
 
     @property
     def robot(self) -> str:
-        """The account name of the robot being calibrated, or "" for none.
-
-        Falls back to the first marked robot so a fresh session has something
-        selected rather than an empty picker every step has to special-case.
-        """
-        if self._robot and robots().find(self._robot) is not None:
-            return self._robot
-        available = self.robots()
-        return available[0].name if available else ""
+        """The account name of the robot being calibrated, or "" for none."""
+        return current_robot().name
 
     def select_robot(self, name: str) -> None:
-        if name == self._robot:
-            return
-        self._robot = name
+        current_robot().select(name)
         self.refresh()
 
     # ---- the shared connection ---------------------------------------------
