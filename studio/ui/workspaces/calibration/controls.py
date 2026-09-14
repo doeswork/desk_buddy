@@ -1,21 +1,32 @@
-"""A slider that remembers the value it saved.
+"""Input controls for the Calibration workspace.
 
-The IK page drives real servos. Dragging a handle moves metal, so a slider
-nudged by accident is not a value that can be undone by looking at it — the
-arm has already gone there, and the number it was at is gone from the screen
-with nothing left to say what it used to be.
+Everything on these pages moves a physical arm. That one fact is what makes
+the stock Qt widgets wrong here, and it is the same fact in two places:
 
-So the saved value is drawn on the groove as a pin, and kept as a number the
-caller can put back. Two different things are shown at once:
+`ScrollSafeSpinBox` and `PinnedSlider` both refuse the scroll wheel. Qt sends
+the wheel to whatever sits under the pointer, so scrolling down a tall
+calibration form drove every servo it passed on the way — silently, on values
+the user was not looking at. A control that moves metal must not be reachable
+by an input aimed somewhere else.
+
+`PinnedSlider` also keeps the saved value visible. A slider nudged by accident
+cannot be undone by looking at it: the arm has already gone there, and the
+number it was at is gone from the screen. So the saved value is drawn on the
+groove as a pin and kept as a number the caller can put back — two things at
+once:
 
     the handle   where this joint has been *asked* to go
-    the pin      the angle this pose captured
+    the pin      the value that was saved
 
-The pin belongs to whichever control owns it and to nothing else: on the IK
+The pin belongs to whichever control owns it and to nothing else. On the IK
 page each of the six hover points pins its own captured angle, so the marks
-differ from row to row. Pinning something shared — the live arm, say — makes
+differ from row to row; pinning something shared — the live arm, say — makes
 every row show the same mark and capturing one point look like it moved them
 all. `snap_back()` returns the handle to the pin, which is the accident's undo.
+
+These live here rather than in `ui/components/` because the reasoning is local
+to calibration: a spin box in a settings dialog has every right to answer the
+wheel, and `ui/components/manual_control.py` deliberately commits on it.
 """
 
 from __future__ import annotations
@@ -28,6 +39,30 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionSlider,
 )
+
+
+def widest(widget, *texts: str) -> int:
+    """How wide `widget` must be to show the longest of `texts` in full.
+
+    Asked of the widget rather than measured from its font, so whatever the
+    stylesheet adds around the text — padding, a border — is counted by the
+    thing that applies it.
+
+    Use this instead of `setFixedWidth`. Every hardcoded width on these pages
+    was a guess at this number: correct at the zoom it was eyeballed on, and
+    clipping above it. A button sized 60px for "Edit" rendered as "di" at the
+    zoom the user actually ran, and a readout fixed at 72px showed "now 18"
+    where the arm was at 180°.
+    """
+    remember = widget.text()
+    try:
+        needed = 0
+        for text in texts:
+            widget.setText(text)
+            needed = max(needed, widget.sizeHint().width())
+        return needed
+    finally:
+        widget.setText(remember)
 
 
 class ScrollSafeSpinBox(QDoubleSpinBox):

@@ -22,29 +22,10 @@ from PySide6.QtWidgets import (
 )
 
 from ....theme.metrics import CARD_SPACING
+from ..controls import PinnedSlider, ScrollSafeSpinBox, widest
 from .arm_pose import POSES, ArmPoseView
 from .points import JOINTS, TWIST_ANGLE
 from .servo_frame import Frame
-from .slider import PinnedSlider, ScrollSafeSpinBox
-
-
-def _widest(widget, *texts: str) -> int:
-    """How wide `widget` must be to show the longest of `texts` in full.
-
-    Asked of the widget rather than measured from its font, so whatever the
-    stylesheet adds around the text — padding, a border — is counted by the
-    thing that applies it. Every hardcoded width on this page was a guess at
-    that number, correct at one zoom level and clipping above it.
-    """
-    remember = widget.text()
-    try:
-        widest = 0
-        for text in texts:
-            widget.setText(text)
-            widest = max(widest, widget.sizeHint().width())
-        return widest
-    finally:
-        widget.setText(remember)
 
 
 class HoverPoint(QWidget):
@@ -102,7 +83,7 @@ class HoverPoint(QWidget):
         # can show, so the stylesheet's padding and border are counted by the
         # thing that applies them rather than guessed at here. Reserving the
         # longest also keeps the title row still when the label swaps.
-        self.edit_toggle.setMinimumWidth(_widest(self.edit_toggle, "Edit", "Done"))
+        self.edit_toggle.setMinimumWidth(widest(self.edit_toggle, "Edit", "Done"))
         self.edit_toggle.setToolTip(
             "Edit this pose. Unlocking it locks whichever pose was being "
             "edited — the sliders drive one real arm, so only one is live "
@@ -207,7 +188,7 @@ class HoverPoint(QWidget):
         label = QLabel(joint.title())
         label.setObjectName("CardBody")
         label.setMinimumWidth(
-            _widest(label, *(name.title() for _key, name in JOINTS))
+            widest(label, *(name.title() for _key, name in JOINTS))
         )
         row.addWidget(label)
 
@@ -265,7 +246,7 @@ class HoverPoint(QWidget):
         # Wide enough for the longest reading this can ever show, measured
         # rather than guessed — "now 180°" at a large zoom was clipping to
         # "now 18" and quietly misreporting the arm.
-        readout.setMinimumWidth(_widest(readout, "now 180°"))
+        readout.setMinimumWidth(widest(readout, "now 180°"))
         readout.setToolTip(
             "Where this joint is right now, from the heartbeat. The arm is "
             "one arm, so every point shows the same live angle; the slider "

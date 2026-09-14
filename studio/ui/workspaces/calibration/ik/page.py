@@ -69,7 +69,6 @@ class IKPage(StepPage):
         # Which hover point is mid-capture, so the reply can be filed under
         # it. None whenever nothing is in flight.
         self._capturing: tuple[str, dict, float] | None = None
-        self._in_capture = False
         # Which hover point is unlocked for editing, or "" for none. One at
         # a time: the six points drive one arm, so six live forms are six
         # ways to move it without meaning to.
@@ -268,10 +267,6 @@ class IKPage(StepPage):
         # from: the firmware's reply says what was written, not which of the
         # six shapes the user was matching when they pressed the button.
         self._capturing = (calibration_type, angles, distance)
-        # Held across the whole exchange, including the rebuild that follows
-        # the terminal reply — `_capturing` is cleared while saving, which is
-        # before that last rebuild runs.
-        self._in_capture = True
         action_id = send_hover_point(
             self.workspace.client(), self.workspace.robot,
             calibration_type, distance,
@@ -279,32 +274,18 @@ class IKPage(StepPage):
         )
         self.send(action_id, waiting_text=f"Saving {calibration_type}…")
 
-    def rebuild(self) -> None:
-        """Refresh in place while a capture is in flight.
+    def form_refreshed(self, form: QWidget) -> None:
+        """Bring the six kept hover points up to date.
 
-        The inherited rebuild deletes and reconstructs all six hover points
-        to swap in a "Waiting…" card. On this page that is destructive: each
-        point carries slider positions the user posed by hand, and rebuilding
-        drops them — the arm is left where it is while the controls that were
-        driving it are replaced underneath. Capturing one point would also
-        visibly reload the other five, which is what made a single capture
-        look like it had changed every pose.
-
-        Only the capture buttons and the captured labels actually change, so
-        during a capture they are updated where they stand.
+        StepPage keeps the form across rebuilds; what changes here is what
+        each point has captured and whether it may act. The sliders the user
+        posed by hand are exactly what must not be rebuilt — see the base
+        class for why the form is kept rather than replaced.
         """
-        if not self._in_capture or not self._points:
-            super().rebuild()
-            return
-
         captured = self._captured_points()
         for point in self._points:
             point.set_captured(captured.get(point.calibration_type))
             point.set_enabled(self.can_send)
-        # The exchange is over once nothing is pending; the next rebuild is
-        # an ordinary one and may replace the form.
-        if not self._pending:
-            self._in_capture = False
 
     def on_completed(self, payload: dict) -> None:
         """Record this capture against the one hover point it came from.

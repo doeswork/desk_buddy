@@ -194,18 +194,19 @@ def test_creating_a_workflow_immediately_creates_its_file() -> None:
 
 
 def test_the_toolbar_holds_the_documents_verbs_and_nothing_else() -> None:
-    """The bar makes, saves and deletes workflows. That is all it does.
+    """The bar makes, saves, runs and deletes workflows. That is all it does.
 
     The step vocabulary used to live here too — thirty buttons of permanent
     workspace chrome to edit the one document below them. It moved to the
     page header, so the bar is short enough to read again.
+
+    Run is a verb of the whole document, which is why it belongs here and
+    why there is still no per-step run control.
     """
     space, _store = populated()
     labels = [action.label for action in space.build_actions()
               if hasattr(action, "label")]
-    assert labels == ["New", "Save JSON", "Delete Workflow"]
-    # Still no per-step run/edit controls; steps are read-only for now.
-    assert "Run" not in labels
+    assert labels == ["New", "Save JSON", "Run", "Delete Workflow"]
 
 
 def test_no_step_template_is_a_toolbar_button() -> None:
@@ -543,6 +544,281 @@ def test_enumerated_fields_use_values_the_firmware_accepts() -> None:
             assert step["direction"] in DIRECTIONS, template.key
         if isinstance(step.get("speed"), str):
             assert step["speed"] in SPEEDS, template.key
+
+
+# ---- running a workflow --------------------------------------------------
+class RunningRobot:
+    """A robot that answers every command, on the topic a real one uses."""
+
+    def __init__(self, fail_on: str = "") -> None:
+        self.published: list[tuple[str, dict]] = []
+        self._callbacks: dict[str, list] = {}
+        self._fail_on = fail_on
+
+    def reconcile(self) -> None:
+        pass
+
+    def subscribe(self, topic, callback):
+        self._callbacks.setdefault(topic, []).append(callback)
+        return lambda: None
+
+    def subscribe_raw(self, topic, callback):
+        """Photos are binary, so the live view takes them undecoded."""
+        self._callbacks.setdefault(topic, []).append(callback)
+        return lambda: None
+
+    def publish(self, topic, payload, **_kwargs):
+        self.published.append((topic, dict(payload)))
+        action_id = payload.get("action_id")
+        action = payload.get("action")
+        if action == self._fail_on:
+            reply = {"sender": "firmware", "action_id": action_id,
+                     "status": "failed", "error": "gripper jammed"}
+        elif action in ("photo", "detect_object", "detect_color", "calibrate_depth"):
+            # Photo actions never publish `completed` (MQTT_SPEC §6).
+            reply = {"sender": "firmware", "action_id": action_id,
+                     "status": "in_progress", "log": "sent"}
+        else:
+            reply = {"sender": "firmware", "action_id": action_id, "status": "completed"}
+
+        events = topic.replace("/commands", "/events")
+        for callback in list(self._callbacks.get(events, ())):
+            callback(events, reply)
+        return action_id
+
+    @property
+    def actions(self) -> list:
+        return [body["action"] for _topic, body in self.published]
+
+
+def _pump(milliseconds: int = 300) -> None:
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    QTimer.singleShot(milliseconds, loop.quit)
+    loop.exec()
+
+
+def _runnable(steps: list, robot: str = "robot-1", fail_on: str = ""):
+    """A workspace with one saved workflow and a fake robot behind it."""
+    from unittest import mock
+
+    from . import running as running_module
+
+    repository = Workflows(Path(tempfile.mkdtemp()))
+    repository.save_text("walk", json.dumps({
+        "workflow": {"name": "walk", "validation": True},
+        "steps": steps,
+    }))
+    client = RunningRobot(fail_on=fail_on)
+    patches = (
+        mock.patch.object(running_module, "mqtt_client", lambda: client),
+        mock.patch.object(
+            running_module, "current_robot",
+            lambda: type("Selection", (), {"name": robot})(),
+        ),
+    )
+    for patch in patches:
+        patch.start()
+    workspace = WorkflowsWorkspace(repository)
+    workspace.select_workflow("walk")
+    return workspace, client, patches
+
+
+def _done(patches) -> None:
+    for patch in patches:
+        patch.stop()
+
+
+def test_running_a_workflow_sends_every_step_in_order() -> None:
+    """The chain: each step goes out only once the one before it replied."""
+    workspace, client, patches = _runnable([
+        {"subject": "perch"},
+        {"subject": "detect_object", "phrase": "pink eraser"},
+    ])
+    try:
+        assert workspace.runner.start(workspace.selected) == ""
+        _pump()
+
+        status = workspace.runner.status
+        assert status.state == "complete", status.message
+        assert [event.status for event in status.events] == ["complete", "complete"]
+        assert client.actions == ["perch", "detect_object"]
+        # Commands go to the robot's command topic, and the step's own
+        # parameters travel with them.
+        topics = {topic for topic, _body in client.published}
+        assert topics == {"robot-1/commands"}
+        assert client.published[1][1]["phrase"] == "pink eraser"
+    finally:
+        _done(patches)
+
+
+def test_a_failed_step_stops_the_run() -> None:
+    """The steps after a missed grab operate on a world that is not where
+    they think it is, so the run stops rather than carrying on."""
+    workspace, client, patches = _runnable(
+        [{"subject": "perch"}, {"subject": "gripper", "command": "GRAB"},
+         {"subject": "photo"}],
+        fail_on="gripper",
+    )
+    try:
+        workspace.runner.start(workspace.selected)
+        _pump()
+
+        status = workspace.runner.status
+        assert status.state == "failed"
+        assert status.events[1].problem == "gripper jammed"
+        assert status.events[2].status == "waiting", "a later step still ran"
+        assert client.actions == ["perch", "gripper"]
+    finally:
+        _done(patches)
+
+
+def test_running_needs_a_robot() -> None:
+    workspace, _client, patches = _runnable([{"subject": "perch"}], robot="")
+    try:
+        problem = workspace.runner.start(workspace.selected)
+        assert "No robot selected" in problem
+        assert not workspace.runner.running
+    finally:
+        _done(patches)
+
+
+def test_unsaved_edits_are_not_what_runs() -> None:
+    """The runner is handed the stored steps, so a draft on screen would run
+    the last save while showing something else."""
+    workspace, client, patches = _runnable([{"subject": "perch"}])
+    try:
+        workspace._drafts["walk"] = "{ edited, not saved }"
+        workspace.run_workflow()
+
+        assert workspace.problem == "Save the workflow before running it."
+        assert client.published == []
+    finally:
+        _done(patches)
+
+
+def test_the_toolbar_offers_run_then_stop() -> None:
+    """One slot, not two: only one of them can ever do anything."""
+    workspace, _client, patches = _runnable([{"subject": "perch"}])
+    try:
+        labels = [getattr(a, "label", "") for a in workspace.build_actions()]
+        assert "Run" in labels and "Stop" not in labels
+    finally:
+        _done(patches)
+
+
+def test_a_finished_run_is_reported_step_by_step() -> None:
+    workspace, _client, patches = _runnable([
+        {"subject": "perch"}, {"subject": "photo"},
+    ])
+    try:
+        workspace.runner.start(workspace.selected)
+        _pump()
+
+        from .running import run_card
+
+        card = run_card(workspace.runner)
+        assert card is not None
+        text = " ".join(label.text() for label in card.findChildren(QLabel))
+        assert "walk" in text
+        assert "1. perch" in text and "2. photo" in text
+    finally:
+        _done(patches)
+
+
+# ---- the live view -------------------------------------------------------
+def test_the_live_view_is_hidden_until_the_first_run() -> None:
+    """Nothing to show before the robot has done anything."""
+    workspace, _client, patches = _runnable([{"subject": "perch"}])
+    try:
+        assert workspace.live_view() is None
+        workspace.runner.start(workspace.selected)
+        _pump()
+        assert workspace.live_view() is not None
+    finally:
+        _done(patches)
+
+
+def test_the_view_exists_before_the_first_photo_arrives() -> None:
+    """The regression this cost an afternoon to find.
+
+    The robot does not wait for a repaint: the first photo of a run is
+    published once, before any rebuild has happened. A view created lazily on
+    that rebuild misses it, and the frame never comes again.
+    """
+    workspace, _client, patches = _runnable([{"subject": "photo"}])
+    try:
+        # Before any run, and before any page rebuild.
+        assert workspace._live is not None
+    finally:
+        _done(patches)
+
+
+def test_a_detection_is_drawn_over_the_frame_it_judged() -> None:
+    from .live_view import LiveView
+
+    view = LiveView()
+    view.set_vision({
+        "status": "completed",
+        "detection_batch": {
+            "prompt": "pink eraser",
+            "detections": [{
+                "label": "pink eraser", "score": 0.33,
+                "box_normalized": [0.54, 0.68, 0.69, 0.86],
+            }],
+        },
+    })
+    assert len(view.photo._detections) == 1
+    assert "pink eraser" in view.caption.text()
+
+
+def test_a_failed_detection_says_why_on_the_frame() -> None:
+    """The whole point of showing the photo: a run that found nothing is
+    readable rather than guessed at."""
+    from .live_view import LiveView
+
+    view = LiveView()
+    view.set_vision({
+        "status": "failed",
+        "error": {"code": "no_detection",
+                  "message": "No 'banana' detection met the confidence threshold."},
+        "detection_batch": {"prompt": "banana", "detections": []},
+    })
+    assert "No 'banana' detection" in view.caption.text()
+    assert view.photo._detections == []
+
+
+def test_a_new_photo_drops_the_previous_boxes() -> None:
+    """Boxes belong to the frame they were drawn for; keeping them would
+    paint the last detection over this one."""
+    from .live_view import LiveView
+
+    view = LiveView()
+    view.set_vision({
+        "status": "completed",
+        "detection_batch": {"prompt": "eraser", "detections": [
+            {"label": "eraser", "score": 0.4, "box_normalized": [0.1, 0.1, 0.2, 0.2]},
+        ]},
+    })
+    assert len(view.photo._detections) == 1
+
+    view.photo.set_photo(b"not a jpeg")
+    assert view.photo._detections == []
+
+
+def test_the_watchers_outlive_the_run() -> None:
+    """The detector answers after the firmware does — a second later in a
+    captured run — so the verdict for the last step arrives once the run is
+    already over."""
+    workspace, _client, patches = _runnable([{"subject": "photo"}])
+    try:
+        workspace.runner.start(workspace.selected)
+        _pump()
+        assert not workspace.runner.running
+        assert workspace.runner._watching, "stopped listening too early"
+    finally:
+        _done(patches)
 
 
 def main() -> int:

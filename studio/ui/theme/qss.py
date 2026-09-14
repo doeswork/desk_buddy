@@ -487,6 +487,30 @@ QLabel#StatusChip {{
     font-size: {px(11)};
     padding: 0 {px(9)};
 }}
+/* Which robot everything is talking to, chosen on the workspace bar. Quiet
+   like the chips beside it until you reach for it — it is a control, but the
+   bar is chrome, and a loud dropdown up here would compete with the
+   workspace tabs for the eye. */
+QComboBox#RobotPicker {{
+    color: {p.text};
+    background: transparent;
+    border: {HAIRLINE} solid transparent;
+    border-radius: {RADIUS};
+    font-size: {px(11)};
+    padding: {px(2)} {px(7)};
+    margin-right: {px(6)};
+}}
+QComboBox#RobotPicker:hover {{
+    border-color: {p.border};
+    background: {p.panel};
+}}
+QComboBox#RobotPicker:disabled {{
+    color: {p.muted};
+}}
+QComboBox#RobotPicker::drop-down {{
+    border: none;
+    width: {px(14)};
+}}
 
 /* ---- Command text ----
    A command the user is meant to copy and run. Monospace so it is obviously

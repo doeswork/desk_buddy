@@ -46,7 +46,10 @@ class FakeClient:
         if self.autoreply is not None:
             reply = self.autoreply(dict(payload))
             if reply is not None:
-                self.deliver(topic, reply)
+                # A robot answers on its events topic, never on the commands
+                # topic it was addressed on — delivering the reply back to
+                # `topic` would be a robot talking to itself.
+                self.deliver(topic.replace("/commands", "/events"), reply)
         return payload.get("action_id", "")
 
     def deliver(self, topic, payload):
@@ -121,12 +124,22 @@ def test_ordinary_actions_end_on_completed_or_failed() -> None:
     assert not succeeded("servo", {"status": "failed"})
 
 
-def test_a_photo_ends_on_its_second_in_progress() -> None:
-    """§6: there is no `completed` photo response. Waiting for one would hang
-    the run until the timeout on every photo step."""
+def test_a_photo_ends_on_either_terminal_shape() -> None:
+    """Two firmwares, two endings, and the runner takes whichever comes.
+
+    §6 describes builds that send no `completed` at all and end on a second
+    `in_progress` carrying log:"sent". The firmware in this repo *does* send
+    `completed` — ReplyStyle::PhotoTerminal — and waiting only for the §6
+    shape hung every photo step until it timed out.
+    """
     assert not is_terminal("photo", {"status": "in_progress"})
     assert is_terminal("photo", {"status": "in_progress", "log": "sent"})
-    assert not is_terminal("photo", {"status": "completed"})
+    assert is_terminal("photo", {"status": "completed"})
+    assert is_terminal("photo", {"status": "failed"})
+
+    # The bare in_progress carries no verdict, so it can only mean "finished".
+    assert succeeded("photo", {"status": "in_progress", "log": "sent"})
+    assert not succeeded("photo", {"status": "failed"})
 
 
 def test_a_nested_error_is_found() -> None:
@@ -149,14 +162,14 @@ def test_steps_run_one_at_a_time_in_order() -> None:
     run = Run(client, "buddy", WALK)
     run.start()
 
-    assert client.subscriptions == ["buddy/test"]
+    assert client.subscriptions == ["buddy/events", "buddy/vision"]
     assert client.actions == ["servo"], "the second step must not be sent yet"
     assert run.status.state == "running"
 
-    client.deliver("buddy/test", completed(client.published[0][1]))
+    client.deliver("buddy/events", completed(client.published[0][1]))
     assert client.actions == ["servo", "gripper"]
 
-    client.deliver("buddy/test", completed(client.published[1][1]))
+    client.deliver("buddy/events", completed(client.published[1][1]))
     status = run.status
     assert status.state == "complete"
     assert [event.status for event in status.events] == ["complete", "complete"]
@@ -169,7 +182,7 @@ def test_a_failed_step_stops_the_run() -> None:
     client = FakeClient()
     run = Run(client, "buddy", WALK)
     run.start()
-    client.deliver("buddy/test", {
+    client.deliver("buddy/events", {
         "sender": "firmware", "action_id": client.last_id(),
         "status": "failed", "error": "servo stalled",
     })
@@ -190,13 +203,13 @@ def test_other_traffic_on_the_shared_topic_is_ignored() -> None:
     run.start()
     ours = client.last_id()
 
-    client.deliver("buddy/test", {"sender": "firmware", "status": "ready"})
-    client.deliver("buddy/test", {"sender": "firmware", "status": "completed",
+    client.deliver("buddy/events", {"sender": "firmware", "status": "ready"})
+    client.deliver("buddy/events", {"sender": "firmware", "status": "completed",
                                   "action_id": "someone-elses"})
-    client.deliver("buddy/test", {"sender": "other", "action_id": ours})
+    client.deliver("buddy/events", {"sender": "other", "action_id": ours})
     assert client.actions == ["servo"], "none of that was our reply"
 
-    client.deliver("buddy/test", completed({"action_id": ours}))
+    client.deliver("buddy/events", completed({"action_id": ours}))
     assert client.actions == ["servo", "gripper"]
 
 
@@ -208,7 +221,7 @@ def test_an_integer_action_id_still_correlates() -> None:
     run = Run(client, "buddy", [{"subject": "servo"}])
     run.start()
     reply_id = client.last_id()
-    client.deliver("buddy/test", {"sender": "firmware", "status": "completed",
+    client.deliver("buddy/events", {"sender": "firmware", "status": "completed",
                                   "action_id": reply_id})
     assert run.status.state == "complete"
 
@@ -217,7 +230,7 @@ def test_in_progress_is_not_completion() -> None:
     client = FakeClient()
     run = Run(client, "buddy", WALK)
     run.start()
-    client.deliver("buddy/test", {"sender": "firmware", "status": "in_progress",
+    client.deliver("buddy/events", {"sender": "firmware", "status": "in_progress",
                                   "action_id": client.last_id()})
     assert client.actions == ["servo"]
     assert run.status.state == "running"
@@ -229,11 +242,11 @@ def test_a_photo_step_advances_on_log_sent() -> None:
     run.start()
     action_id = client.last_id()
 
-    client.deliver("buddy/test", {"sender": "firmware", "action_id": action_id,
+    client.deliver("buddy/events", {"sender": "firmware", "action_id": action_id,
                                   "status": "in_progress", "type": "photo"})
     assert client.actions == ["photo"], "the first in_progress is not terminal"
 
-    client.deliver("buddy/test", {"sender": "firmware", "action_id": action_id,
+    client.deliver("buddy/events", {"sender": "firmware", "action_id": action_id,
                                   "status": "in_progress", "type": "photo",
                                   "log": "sent"})
     assert client.actions == ["photo", "gripper"]
@@ -303,7 +316,7 @@ def test_in_progress_stops_the_retries_but_not_the_timeout() -> None:
     client = FakeClient()
     run = Run(client, "buddy", WALK, timeout=60.0, retry_delays=(1.0, 5.0), now=clock)
     run.start()
-    client.deliver("buddy/test", {"sender": "firmware", "status": "in_progress",
+    client.deliver("buddy/events", {"sender": "firmware", "status": "in_progress",
                                   "action_id": client.last_id()})
 
     clock.value = 5.0
@@ -324,7 +337,7 @@ def test_a_completed_run_ignores_later_ticks_and_replies() -> None:
     assert run.status.state == "complete"
 
     run.tick()
-    client.deliver("buddy/test", completed({"action_id": client.last_id()}))
+    client.deliver("buddy/events", completed({"action_id": client.last_id()}))
     assert client.actions == ["servo", "gripper"]
     assert run.status.state == "complete"
 
@@ -343,7 +356,7 @@ def test_stopping_ends_the_run_without_claiming_to_stop_the_arm() -> None:
     assert client.actions == ["servo"]
 
     # A late reply to the stopped step must not restart the chain.
-    client.deliver("buddy/test", completed(client.published[0][1]))
+    client.deliver("buddy/events", completed(client.published[0][1]))
     assert client.actions == ["servo"]
 
 
@@ -354,7 +367,7 @@ def test_a_run_unsubscribes_when_it_finishes() -> None:
     run = Run(client, "buddy", WALK)
     run.start()
     assert run.status.state == "complete"
-    assert client._callbacks["buddy/test"] == []
+    assert client._callbacks["buddy/events"] == []
 
 
 def test_a_run_with_no_robot_or_no_steps_says_so() -> None:
@@ -431,7 +444,7 @@ def test_a_step_event_reports_what_came_back() -> None:
     client = FakeClient()
     run = Run(client, "buddy", [{"subject": "baseRotate", "controlType": "status"}])
     run.start()
-    client.deliver("buddy/test", completed(
+    client.deliver("buddy/events", completed(
         client.published[0][1], base_rotation={"position": 12},
     ))
     event = run.status.events[0]
@@ -439,6 +452,204 @@ def test_a_step_event_reports_what_came_back() -> None:
     assert event.status == "complete"
     assert event.reply["base_rotation"] == {"position": 12}
     assert event.finished
+
+
+def test_a_photo_step_ends_on_the_completed_this_firmware_sends() -> None:
+    """Captured from a live robot, not invented.
+
+    `ActionRouter` routes all four photo actions through
+    `ReplyStyle::PhotoTerminal`, and `ActionController` answers that with a
+    real `completed`. The runner waited only for the `in_progress` + log:"sent"
+    shape from MQTT_SPEC §6, so a workflow with a detect_object step hung
+    until it timed out while the robot had already finished and replied.
+    """
+    client = FakeClient()
+    steps = [{"subject": "detect_object", "phrase": "pink eraser"}]
+    run = Run(client, "buddy", steps)
+    run.start()
+
+    action_id = client.last_id()
+    # The exact sequence the robot published, in order.
+    client.deliver("buddy/events", {
+        "sender": "firmware", "action_id": action_id, "status": "in_progress",
+        "type": "detect_object", "phrase": "pink eraser",
+    })
+    assert run.status.state == "running", "in_progress ended the step"
+
+    client.deliver("buddy/events", {
+        "sender": "firmware", "action_id": action_id, "status": "completed",
+        "type": "detect_object", "phrase": "pink eraser",
+    })
+    assert run.status.state == "complete", run.status.message
+    assert run.status.events[0].status == "complete"
+
+
+def test_a_photo_step_still_ends_on_the_legacy_sent_marker() -> None:
+    """Builds described by §6 send no `completed` at all. Both shapes work,
+    so one runner drives either firmware."""
+    client = FakeClient()
+    run = Run(client, "buddy", [{"subject": "photo"}])
+    run.start()
+
+    client.deliver("buddy/events", {
+        "sender": "firmware", "action_id": client.last_id(),
+        "status": "in_progress", "log": "sent",
+    })
+    assert run.status.state == "complete"
+
+
+def test_a_failed_photo_is_a_failure_not_a_finish() -> None:
+    """A photo that could not be captured answers `failed` with a structured
+    error. Reading that as success would march the workflow past a step that
+    produced no picture."""
+    client = FakeClient()
+    run = Run(client, "buddy", [{"subject": "photo"}, {"subject": "perch"}])
+    run.start()
+
+    client.deliver("buddy/events", {
+        "sender": "firmware", "action_id": client.last_id(), "status": "failed",
+        "error": {"code": "photo_publish_failed", "message": "No frame."},
+    })
+
+    assert run.status.state == "failed"
+    assert run.status.events[0].status == "failed"
+    assert run.status.events[1].status == "waiting", "a later step still ran"
+    assert client.actions == ["photo"]
+
+
+# ---- the detector's verdict ----------------------------------------------
+# Captured from a live run: the firmware's `completed` for a detect_object
+# only says it took a picture. Whether anything was *in* it comes from the
+# Vision service, on a different topic, and in that run it arrived a second
+# before the firmware spoke.
+
+DETECT = {"subject": "detect_object", "phrase": "pink eraser"}
+
+
+def vision_failed(action_id: str) -> dict:
+    return {
+        "sender": "visual_ai", "action_id": action_id, "status": "failed",
+        "type": "detect_object", "stage": "detection_only",
+        "error": {
+            "code": "no_detection",
+            "message": "No 'pink eraser' detection met the confidence threshold.",
+        },
+        "selected_detection": None, "robot": "buddy",
+    }
+
+
+def photo_completed(action_id: str) -> dict:
+    return {"sender": "firmware", "action_id": action_id,
+            "status": "completed", "type": "detect_object"}
+
+
+def test_a_detection_that_found_nothing_stops_the_run() -> None:
+    """The gap this closes: the robot took a picture, so the firmware says
+    `completed`, and the workflow sailed on to grab an object that was never
+    there."""
+    client = FakeClient()
+    run = Run(client, "buddy", [DETECT, {"subject": "gripper", "command": "GRAB"}])
+    run.start()
+    action_id = client.last_id()
+
+    # The order the real run produced: detector first, firmware second.
+    client.deliver("buddy/vision", vision_failed(action_id))
+    client.deliver("buddy/events", photo_completed(action_id))
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert "No 'pink eraser' detection" in status.events[0].problem
+    assert status.events[1].status == "waiting", "the run carried on"
+    assert client.actions == ["detect_object"]
+
+
+def test_a_late_verdict_still_stops_the_run() -> None:
+    """The detector can also speak after the firmware. The step is already
+    marked complete by then, and the steps after it are already acting on a
+    world that does not contain what was looked for — so it still stops."""
+    client = FakeClient()
+    run = Run(client, "buddy", [DETECT, {"subject": "gripper", "command": "GRAB"}])
+    run.start()
+    action_id = client.last_id()
+
+    client.deliver("buddy/events", photo_completed(action_id))
+    client.deliver("buddy/vision", vision_failed(action_id))
+
+    status = run.status
+    assert status.state == "failed"
+    assert status.events[0].status == "failed"
+    assert "No 'pink eraser' detection" in status.events[0].problem
+
+
+def test_a_detection_that_found_something_carries_on() -> None:
+    """A verdict is only ever a reason to stop. Success is left for the
+    firmware's own terminal reply, so the step ends where every step ends."""
+    client = FakeClient()
+    run = Run(client, "buddy", [DETECT, {"subject": "gripper", "command": "GRAB"}])
+    run.start()
+    action_id = client.last_id()
+
+    client.deliver("buddy/vision", {
+        "sender": "visual_ai", "action_id": action_id, "status": "completed",
+        "type": "detect_object",
+        "selected_detection": {"label": "pink eraser", "score": 0.41},
+    })
+    client.deliver("buddy/events", photo_completed(action_id))
+    client.deliver("buddy/events", completed({"action_id": client.last_id()}))
+
+    assert run.status.state == "complete", run.status.message
+    assert client.actions == ["detect_object", "gripper"]
+
+
+def test_only_the_detector_may_fail_a_step_from_the_vision_topic() -> None:
+    """Anything else publishing there is not the Vision service, and a step
+    must not be failed by whatever else is on the broker."""
+    client = FakeClient()
+    run = Run(client, "buddy", [DETECT])
+    run.start()
+    action_id = client.last_id()
+
+    impostor = dict(vision_failed(action_id), sender="someone_else")
+    client.deliver("buddy/vision", impostor)
+    assert run.status.state == "running"
+
+    client.deliver("buddy/events", photo_completed(action_id))
+    assert run.status.state == "complete"
+
+
+def test_a_plain_photo_needs_no_verdict() -> None:
+    """Nothing comments on a `photo` step, so waiting for one would hang it."""
+    client = FakeClient()
+    run = Run(client, "buddy", [{"subject": "photo"}])
+    run.start()
+
+    client.deliver("buddy/events", {
+        "sender": "firmware", "action_id": client.last_id(),
+        "status": "completed", "type": "photo",
+    })
+    assert run.status.state == "complete"
+
+
+def test_commands_and_replies_use_the_two_real_topics() -> None:
+    """Commands and replies are two topics, not one.
+
+    This runner still said `{robot}/test` — a topic from before the firmware
+    split them — so it published where nothing subscribes and listened where
+    nothing publishes. A run would have hung on its first step forever.
+    """
+    from ..runner.run import reply_topic_for, topic_for
+
+    assert topic_for("buddy") == "buddy/commands"
+    assert reply_topic_for("buddy") == "buddy/events"
+
+    client = FakeClient()
+    run = Run(client, "buddy", WALK)
+    run.start()
+
+    # Events for the firmware's own replies, vision for the detector's
+    # verdict on a photo — two sources, two topics.
+    assert client.subscriptions == ["buddy/events", "buddy/vision"]
+    assert [topic for topic, _body in client.published] == ["buddy/commands"]
 
 
 def main() -> int:

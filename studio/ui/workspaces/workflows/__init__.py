@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from .palette import StepPalette
 from .steps import find as find_template
+from ....models.config.calibrations import calibrations
 from ....models.config.workflows import (
     NAME_RULE,
     Workflow,
@@ -53,6 +54,10 @@ from ...components import ActionSpec, Card, Column, Separator, spacer
 from ...pages.base import Page
 from ...theme.metrics import CARD_GAP, ROW_PADDING
 from ..base import Workspace
+from ..calibration.ik.points import CAPTURED_POINTS
+from ..calibration.ik.servo_frame import frame_from_captures
+from .live_view import LiveView
+from .running import WorkflowRunner, run_card
 
 
 def _button(
@@ -484,7 +489,28 @@ class EditorPage(Page):
         # The step palette is on the header line, not a card here: a
         # palette below the document is one the user scrolls past to reach
         # the thing it edits.
-        return JsonDocument(self.workspace, workflow)
+        document = JsonDocument(self.workspace, workflow)
+
+        # A run belongs above the document rather than below it: what the
+        # robot is doing right now outranks the text you are editing, and a
+        # card under a document that fills the height is one nobody sees.
+        card = run_card(self.workspace.runner)
+        left: QWidget = document if card is None else Column(card, document)
+
+        # The robot goes down the right-hand side, beside the workflow that
+        # is driving it. A list of finished step names cannot say why a
+        # detection found nothing; the frame it judged can.
+        live = self.workspace.live_view()
+        if live is None:
+            return left
+
+        split = QWidget()
+        row = QHBoxLayout(split)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(CARD_GAP)
+        row.addWidget(left, 3)
+        row.addWidget(live, 2)
+        return split
 
 
 class WorkflowsWorkspace(Workspace):
@@ -500,7 +526,69 @@ class WorkflowsWorkspace(Workspace):
         self.problem = ""
         self.editor: QPlainTextEdit | None = None
         self._drafts: dict[str, str] = {}
+        # One runner for the workspace, not one per page: a run outlives the
+        # rebuild that follows every status change, and two would race for
+        # the same robot.
+        self.runner = WorkflowRunner()
+        self.runner.changed.connect(self.refresh)
+        # Built once, up front, and kept.
+        #
+        # Up front because the robot does not wait for a repaint: the first
+        # photo of a run arrives before any rebuild has happened, and a view
+        # created lazily on that rebuild would miss it entirely — the frame
+        # is published once and never again.
+        #
+        # Kept because every status change rebuilds the page, and a view
+        # rebuilt with it would drop the photo it is showing exactly when the
+        # user is looking at it. Same reasoning as the calibration forms.
+        self._live = LiveView()
+        self.runner.heartbeat.connect(self._on_heartbeat)
+        self.runner.photo.connect(self._live.set_photo)
+        self.runner.vision.connect(self._live.set_vision)
         super().__init__()
+
+    def live_view(self) -> "LiveView | None":
+        """The robot's own panel, or None while there is nothing to show.
+
+        Hidden until the first run, then kept: the last frame of a finished
+        run is the thing worth reading once it has finished.
+        """
+        if self.runner.status.state == "idle":
+            return None
+        # Reparented rather than rebuilt — `Page.rebuild()` deletes what it
+        # takes out of the layout.
+        self._live.setParent(None)
+        return self._live
+
+    def _on_heartbeat(self, body: dict) -> None:
+        """Move the drawn arm, using this robot's own servo mapping."""
+        if self._live is None:
+            return
+        robot = self.runner.robot
+        saved = calibrations().find(robot, "ik") if robot else None
+        points = (saved.values.get(CAPTURED_POINTS) or {}) if saved else {}
+        self._live.set_heartbeat(body, frame_from_captures(points))
+
+    # ---- running -----------------------------------------------------------
+    def run_workflow(self) -> None:
+        """Run the open workflow, or say why it cannot run."""
+        workflow = self.selected
+        if workflow is None:
+            return
+        # Unsaved edits are not what runs. The runner is handed the stored
+        # steps, so an unsaved draft would run the last save while the screen
+        # showed something else — worth refusing rather than explaining after.
+        draft = self._drafts.get(workflow.name)
+        if draft is not None and draft != workflow.to_text():
+            self.problem = "Save the workflow before running it."
+            self.refresh()
+            return
+
+        self.problem = self.runner.start(workflow)
+        self.refresh()
+
+    def stop_workflow(self) -> None:
+        self.runner.stop()
 
     @property
     def selected(self) -> Workflow | None:
@@ -755,17 +843,32 @@ class WorkflowsWorkspace(Workspace):
         nothing for them to act on.
         """
         workflow = self.selected
+        running = self.runner.running
         return [
             ActionSpec("New", on_click=self.open_new),
             ActionSpec(
                 "Save JSON",
                 primary=True,
-                on_click=self.save if workflow is not None else None,
+                on_click=self.save if workflow is not None and not running else None,
+            ),
+            Separator(),
+            # Run and Stop are one slot, not two: only one of them can ever
+            # do anything, and a permanently dead Stop beside a live Run is a
+            # button that teaches the user to ignore the bar.
+            ActionSpec("Stop", on_click=self.stop_workflow)
+            if running
+            else ActionSpec(
+                "Run",
+                on_click=self.run_workflow if workflow is not None else None,
             ),
             Separator(),
             ActionSpec(
                 "Delete Workflow",
-                on_click=self.confirm_delete if workflow is not None else None,
+                on_click=(
+                    self.confirm_delete
+                    if workflow is not None and not running
+                    else None
+                ),
             ),
         ]
 

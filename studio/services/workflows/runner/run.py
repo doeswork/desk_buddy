@@ -50,6 +50,8 @@ import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
+from ...network.pub_sub.robot_topics import command_topic, event_topic, vision_topic
+
 # Studio identifies itself as the sender on every command it publishes.
 # Never "firmware" -- §2 says the firmware ignores messages claiming that.
 SENDER = "studio"
@@ -66,11 +68,24 @@ RESERVED = ("sender", "action_id", "action", "status")
 # all rather than an error worth reading.
 SUBJECT_ALIASES = {"rotate": "baseRotate"}
 
-# Photo actions never publish `completed` (§6). Their sequence is
-# in_progress -> binary frame -> in_progress with log:"sent", and that second
-# in_progress is the only terminal signal there is. It is emitted even when
-# the capture failed, so it means "the robot is done with this step", not
-# "a valid JPEG arrived" -- which is the honest thing for a runner to wait on.
+# Photo actions: photo, detect_object, detect_color, calibrate_depth.
+#
+# These end in one of two shapes depending on the firmware build, and the
+# runner accepts both.
+#
+# This firmware publishes a real `completed` -- ActionRouter routes all four
+# through `ReplyStyle::PhotoTerminal`, and ActionController answers it with
+# `sendCompleted(actionId, actionType, "completed", phrase)`. Captured from a
+# live robot:
+#
+#     {"status":"in_progress","type":"detect_object","phrase":"pink eraser"}
+#     <binary frame on {robot}/photos>
+#     {"status":"completed","type":"detect_object","phrase":"pink eraser"}
+#
+# Older builds (and MQTT_SPEC §6) describe no `completed` at all, ending
+# instead on a second `in_progress` carrying `log:"sent"`. Waiting only for
+# that shape is what made a workflow containing a photo step hang until it
+# timed out against the firmware in this repo.
 PHOTO_ACTIONS = ("photo", "detect_object", "detect_color", "calibrate_depth")
 
 # How long to wait for a terminal reply before giving up on a step.
@@ -90,8 +105,36 @@ def action_for(subject: str) -> str:
 
 
 def topic_for(robot: str) -> str:
-    """Commands and replies share one topic, per §1."""
-    return f"{robot}/test"
+    """Where a step's command is published.
+
+    Commands and replies are two topics, not one. An earlier revision of the
+    firmware shared `{robot}/test` for both, and this runner still said so —
+    publishing where nothing subscribes and listening where nothing
+    publishes, so a run would have hung on its first step forever.
+    """
+    return command_topic(robot)
+
+
+def reply_topic_for(robot: str) -> str:
+    """Where the firmware's replies to those commands arrive (§1)."""
+    return event_topic(robot)
+
+
+def vision_topic_for(robot: str) -> str:
+    """Where the Vision service publishes its verdict on a photo (§1).
+
+    A separate topic and a separate service. The firmware's `completed` for a
+    `detect_object` means it took a picture and published it — it cannot mean
+    anything was found, because the robot never looks. The detector does, and
+    says so here.
+    """
+    return vision_topic(robot)
+
+
+# Who the Vision service signs its results as. Only its verdicts count: the
+# firmware's own replies arrive on a different topic, and anything else
+# publishing here is not the detector.
+VISION_SENDER = "visual_ai"
 
 
 def message_for(step: dict[str, Any], action_id: str) -> dict[str, Any]:
@@ -116,27 +159,39 @@ def message_for(step: dict[str, Any], action_id: str) -> dict[str, Any]:
 def is_terminal(action: str, payload: dict[str, Any]) -> bool:
     """Whether `payload` ends the step -- successfully or not.
 
-    Two shapes, because the firmware has two. Ordinary actions finish on
-    `completed`/`failed`. Photo actions have no `completed` at all and finish
-    on their second `in_progress`, the one carrying `log:"sent"` (§6).
+    Every action finishes on `completed`/`failed`. Photo actions may *also*
+    finish on a second `in_progress` carrying `log:"sent"`, which is the only
+    terminal signal the builds described by §6 ever send. Accepting both is
+    what lets one runner drive either firmware: whichever arrives first ends
+    the step, and the other is ignored as a reply to a step already finished.
     """
     status = payload.get("status")
+    if status in ("completed", "failed"):
+        return True
     if action in PHOTO_ACTIONS:
         return status == "in_progress" and payload.get("log") == "sent"
-    return status in ("completed", "failed")
+    return False
 
 
 def succeeded(action: str, payload: dict[str, Any]) -> bool:
     """Whether a terminal reply reports success.
 
-    A photo's terminal `in_progress` is published even when the capture or
-    the publish failed, so it can only be read as "the robot finished", never
-    as proof of a picture. Treating it as success is the accurate reading of
-    what the firmware actually tells us.
+    A `failed` is a failure whatever the action: this firmware answers a
+    photo that could not be captured or published with `status:"failed"` and
+    a structured error, and reading that as success would march the workflow
+    on past a step that produced no picture.
+
+    A photo's terminal `in_progress` is the other case. It is published even
+    when the capture failed, so it can only be read as "the robot finished",
+    never as proof of a picture -- which is the honest reading of a signal
+    that carries no verdict.
     """
+    status = payload.get("status")
+    if status == "failed":
+        return False
     if action in PHOTO_ACTIONS:
         return True
-    return payload.get("status") == "completed"
+    return status == "completed"
 
 
 def problem_from(payload: dict[str, Any]) -> str:
@@ -248,6 +303,14 @@ class Run:
         self._pending = ""
         self._retries = 0
         self._unsubscribe = None
+        self._unsubscribe_vision = None
+        # Detection verdicts, by action_id. Kept rather than acted on the
+        # instant they arrive, because the detector usually beats the robot:
+        # in a captured run the verdict landed a full second before the
+        # firmware's own `completed` for the same step. A verdict that
+        # arrived first is read when the step finishes; one that arrives
+        # after is applied to the step it names.
+        self._verdicts: dict[str, dict[str, Any]] = {}
         self._listeners: list[Callable[[RunStatus], None]] = []
         # A robot on loopback can reply from inside publish(), so _send ->
         # _publish -> _on_reply -> _advance -> _send is a real cycle rather
@@ -318,7 +381,12 @@ class Run:
         # Subscribed before the first publish: a fast robot can reply before
         # a subscription taken afterwards would exist, and that reply is the
         # one that advances the run.
-        self._unsubscribe = self._client.subscribe(topic_for(self._robot), self._on_reply)
+        self._unsubscribe = self._client.subscribe(
+            reply_topic_for(self._robot), self._on_reply
+        )
+        self._unsubscribe_vision = self._client.subscribe(
+            vision_topic_for(self._robot), self._on_vision
+        )
         self._send(0)
         return True
 
@@ -490,7 +558,14 @@ class Run:
                 self._retries = len(self._retry_delays)
                 return
 
-            if succeeded(event.action, payload):
+            # A detection that already failed outranks the firmware's word.
+            # The robot is reporting that it took a photo, which it did; the
+            # detector is reporting what was in it, which is what the next
+            # step depends on.
+            verdict = self._verdicts.get(self._pending)
+            if verdict is not None and verdict.get("status") == "failed":
+                status = self._fail_step(event, verdict)
+            elif succeeded(event.action, payload):
                 self._events[event.position] = replace(
                     event, status="complete", reply=dict(payload)
                 )
@@ -512,6 +587,85 @@ class Run:
             self._notify(status)
             return
         self._advance(advance)
+
+    def _on_vision(self, _topic: str, payload: dict[str, Any]) -> None:
+        """The detector's verdict on a photo. Also paho's network thread.
+
+        The firmware cannot report this: its `completed` for a detect_object
+        says it took a picture, not that anything was in it. Without this a
+        workflow sails past a detection that found nothing, and every step
+        after it is reaching for an object that was never there.
+
+        Arrives either side of the firmware's reply, so both orders work:
+        the verdict is recorded, and whichever of the two lands second is the
+        one that ends the step.
+        """
+        if not isinstance(payload, dict):
+            return
+        if payload.get("sender") != VISION_SENDER:
+            return
+        reply_id = payload.get("action_id")
+        if reply_id is None:
+            return
+        reply_id = str(reply_id)
+
+        status = None
+        with self._lock:
+            if self._state != "running":
+                return
+            self._verdicts[reply_id] = dict(payload)
+            # Only a failure ends a step early. A successful detection is
+            # left for the firmware's own terminal reply to complete, so the
+            # step still ends where every other step ends.
+            if payload.get("status") != "failed":
+                return
+            if reply_id != self._pending:
+                # The step already finished — on the firmware's `completed`,
+                # before the detector spoke. Its own reply was honest about
+                # what it knew, so failing it here is not a contradiction.
+                status = self._fail_finished_step(reply_id, payload)
+            else:
+                event = self._current_event()
+                if event is None:
+                    return
+                status = self._fail_step(event, payload)
+
+        if status is not None:
+            self._release()
+            self._notify(status)
+
+    def _fail_step(self, event: StepEvent, payload: dict[str, Any]) -> RunStatus:
+        """Mark the in-flight step failed and stop the run. Holds the lock."""
+        problem = problem_from(payload)
+        self._events[event.position] = replace(
+            event, status="failed", reply=dict(payload), problem=problem
+        )
+        # A verdict can land after the next step has already gone out, when
+        # the firmware answered before the detector did. That step is not
+        # pending any more — nothing will advance it — so it is marked
+        # stopped rather than left looking live forever.
+        for other in self._events:
+            if other.position > event.position and other.status == "pending":
+                self._events[other.position] = replace(other, status="stopped")
+        self._pending = ""
+        self._state = "failed"
+        self._message = f"Step {event.position + 1} failed: {problem}"
+        return self._snapshot()
+
+    def _fail_finished_step(
+        self, action_id: str, payload: dict[str, Any]
+    ) -> RunStatus | None:
+        """Fail a step that already completed, when the verdict came late.
+
+        Only the step that action_id names, and only while the run is still
+        going: a verdict for a step three back is history by the time it
+        arrives, but the steps after it are already acting on a world that
+        does not contain what was looked for.
+        """
+        for event in self._events:
+            if event.action_id == action_id and event.status == "complete":
+                return self._fail_step(event, payload)
+        return None
 
     def _advance(self, position: int) -> None:
         """Move to step `position`, or finish the run.
@@ -541,6 +695,9 @@ class Run:
     def _release(self) -> None:
         """Stop listening. Safe to call more than once."""
         unsubscribe, self._unsubscribe = self._unsubscribe, None
+        if unsubscribe is not None:
+            unsubscribe()
+        unsubscribe, self._unsubscribe_vision = self._unsubscribe_vision, None
         if unsubscribe is not None:
             unsubscribe()
 

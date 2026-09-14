@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models.data import app_errors, mqtt_messages
+from ..models.config.current_robot import current_robot
 from ..models.config.prefrences import preferences
 from ..services import ErrorReporter
 from ..services.network import TrafficRecorder, chip_text
@@ -83,6 +84,11 @@ class MainWindow(QMainWindow):
     def _build_toolbars(self) -> None:
         self.workspace_bar = WorkspaceBar(self, self.workspaces, self.select_workspace)
         self.addToolBar(Qt.TopToolBarArea, self.workspace_bar)
+        # Picking a robot on the bar changes what every workspace is talking
+        # to, so the one on screen is rebuilt against the new selection —
+        # its saved values, its captured poses, its heartbeat all belong to
+        # the robot that was chosen, not the one before it.
+        self._unwatch_robot = current_robot().watch(self._robot_changed)
 
         self.toolbar = Toolbar(self)
         self.addToolBarBreak(Qt.TopToolBarArea)
@@ -494,6 +500,10 @@ class MainWindow(QMainWindow):
     def workspace(self):
         """The workspace showing right now."""
         return self.workspaces[self.stack.currentIndex()]
+
+    def _robot_changed(self, _name: str) -> None:
+        """A different robot was chosen on the bar."""
+        self.workspace.refresh()
 
     def _workspace_changed(self) -> None:
         """The current workspace rebuilt itself; re-read what it provides.
