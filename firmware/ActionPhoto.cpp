@@ -5,6 +5,8 @@
 #include "CameraFrameLease.h"
 #include "BuddyWifi.h"
 #include "BuddyMQTT.h"
+#include "ActionBaseRotate.h"
+#include "ActionPerch.h"
 
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
@@ -197,6 +199,24 @@ bool ActionPhoto::run(const String &message, String& errorDetails, int useModel)
   if (!BuddyWifi::isConnected()) {
     Serial.println("WiFi not connected; skipping camera");
     return failPhoto(errorDetails, "wifi_unavailable", "Wi-Fi is not connected.");
+  }
+
+  // A calibrated image is meaningful only from the same true-north/perch
+  // pose that created its grid. Pose preparation lives inside this blocking
+  // photo action so no second MQTT client can race the shutter between HOME,
+  // PERCH, and capture. Detection-only previews deliberately remain still.
+  bool automaticDetection = action == "detect_object" &&
+                            useModelRaw.is<bool>() && useModelRaw.as<bool>();
+  if (action == "calibrate_depth" || automaticDetection) {
+    String baseDetails;
+    if (!ActionBaseRotate::homeToTrueNorth("RIGHT", "veryslow", baseDetails)) {
+      return failPhoto(errorDetails, "capture_pose_home_failed",
+                       "The base could not reach true north before the photo.");
+    }
+    if (!ActionPerch::run(message)) {
+      return failPhoto(errorDetails, "capture_pose_perch_failed",
+                       "The arm could not reach the saved camera perch before the photo.");
+    }
   }
 
   CaptureDiagnostics diagnostics{actionId};

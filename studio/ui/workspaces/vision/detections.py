@@ -45,16 +45,27 @@ class DetectionsPage(Page):
     def status(self) -> str:
         state = self.workspace.manager.state
         if state.pending_detection:
+            if state.detection_message:
+                return state.detection_message
             stage = {
                 "preparing": "Preparing MQTT connection",
                 "waiting_camera": "Waiting for camera",
-                "capturing": "Robot is capturing",
+                "capturing": "Robot is preparing its pose and capturing",
                 "waiting_detection": "Photo received · waiting for detection",
                 "waiting_photo": "Detection received · waiting for photo",
+                "target_planned": "Calibrated target ready",
+                "executing_base": "Rotating the base",
+                "executing_ik": "Moving to the object",
+                "executing_grab": "Closing the gripper",
+                "outcome_unknown": "Robot state uncertain · waiting for a late result",
             }.get(state.detection_stage, "Detection in progress")
             return stage + (" · taking longer than expected" if state.detection_delayed else "")
         if self._result and self._result.get("status") == "completed":
-            return "Detection preview complete"
+            return (
+                "Reach and grab complete"
+                if self._result.get("stage") == "reach_and_grab_completed"
+                else "Detection preview complete"
+            )
         if self._result and self._result.get("status") == "failed":
             return "Detection preview failed"
         return "Preview mode · no motion"
@@ -120,6 +131,13 @@ class DetectionsPage(Page):
         else:
             self.workspace.manager.detect_robot(self.selected_robot, self._prompt)
 
+    def execute(self) -> None:
+        self._result = None
+        if self._source != "robot":
+            self.workspace.manager.report_error("Automatic movement requires a fresh robot-camera capture.")
+            return
+        self.workspace.manager.reach_and_grab(self.selected_robot, self._prompt)
+
     def source_changed(self, source: str) -> None:
         value = "local" if source == "Local photo" else "robot"
         if value != self._source:
@@ -153,7 +171,7 @@ class DetectionForm(QFrame):
         layout.setContentsMargins(CARD_MARGIN_H, CARD_MARGIN_V, CARD_MARGIN_H, CARD_MARGIN_V)
         layout.setSpacing(CARD_SPACING * 2)
 
-        title = QLabel("Preview input")
+        title = QLabel("Detection and control")
         title.setObjectName("CardTitle")
         layout.addWidget(title)
 
@@ -212,6 +230,8 @@ class DetectionForm(QFrame):
         prompt_row.addWidget(prompt, 1)
         detect = QPushButton("Preview Detection")
         detect.setObjectName("ContextPrimary")
+        execute = QPushButton("Find, Reach & Grab")
+        execute.setObjectName("ContextDanger")
         source_ready = bool(page._local_jpeg) if page._source == "local" else bool(page.selected_robot)
 
         def update_prompt(value: str) -> None:
@@ -221,12 +241,30 @@ class DetectionForm(QFrame):
                 current.ready and source_ready and bool(value.strip())
                 and not current.pending_detection and not current.operation
             )
+            execute.setEnabled(
+                current.ready and page._source == "robot" and bool(page.selected_robot)
+                and page.selected_robot in dict(current.calibration_profiles)
+                and bool(value.strip()) and not current.pending_detection and not current.operation
+            )
 
         update_prompt(page._prompt)
         prompt.textChanged.connect(update_prompt)
         detect.clicked.connect(page.detect)
         prompt_row.addWidget(detect)
+        execute.clicked.connect(page.execute)
+        prompt_row.addWidget(execute)
         layout.addLayout(prompt_row)
+
+        if page._source == "robot":
+            profile_id = dict(state.calibration_profiles).get(page.selected_robot, "")
+            profile = QLabel(
+                f"Active nine-point profile: {profile_id}"
+                if profile_id else
+                "Reach & Grab is locked until Calibration → Visual creates a nine-point profile."
+            )
+            profile.setObjectName("CardBody" if profile_id else "FieldError")
+            profile.setWordWrap(True)
+            layout.addWidget(profile)
 
         if not state.ready:
             hint = QLabel("Install and start a detector on Models before running a preview.")
@@ -246,7 +284,10 @@ class PreviewCard(QFrame):
         layout.addWidget(title)
         batch = result.get("detection_batch", {}) if result else {}
         selected = result.get("selected_detection") if result else None
-        view = DetectionOverlay(jpeg, batch.get("detections", ()), selected)
+        view = DetectionOverlay(
+            jpeg, batch.get("detections", ()), selected,
+            result.get("ik_target") if result else None,
+        )
         layout.addWidget(view)
         if result is None:
             text = "Photo ready; waiting for detector output…"
@@ -260,6 +301,14 @@ class PreviewCard(QFrame):
                 f"Selected {label} · {score:.1%} confidence\n"
                 f"{result.get('model_id')}@{result.get('revision')}"
             )
+            target = result.get("ik_target") or {}
+            if target.get("accepted"):
+                text += (
+                    f"\nCell {target.get('cell_id')} · base {float(target.get('angle_deg', 0)):g}°"
+                    f" · depth {float(target.get('distance_mm', 0)):g} mm · z 0 mm"
+                )
+            if result.get("stage") == "reach_and_grab_completed":
+                text += "\nBase, IK, and GRAB completed."
         summary = QLabel(text)
         summary.setObjectName("CardBody" if not result or result.get("status") == "completed" else "FieldError")
         summary.setWordWrap(True)
@@ -270,11 +319,12 @@ class PreviewCard(QFrame):
 class DetectionOverlay(QWidget):
     """Scale an image to fit and paint model boxes in image coordinates."""
 
-    def __init__(self, jpeg: bytes, detections, selected) -> None:
+    def __init__(self, jpeg: bytes, detections, selected, target=None) -> None:
         super().__init__()
         self.image = QImage.fromData(jpeg)
         self.detections = tuple(detections or ())
         self.selected = selected
+        self.target = dict(target or {})
         self.setMinimumHeight(320)
 
     def sizeHint(self) -> QSize:
@@ -306,6 +356,13 @@ class DetectionOverlay(QWidget):
             painter.fillRect(label_rect, color)
             painter.setPen(QColor("#101820"))
             painter.drawText(label_rect, Qt.AlignCenter, caption)
+        reference = self.target.get("reference_px")
+        if isinstance(reference, (list, tuple)) and len(reference) == 2:
+            point_x = target.left() + float(reference[0]) * target.width() / self.image.width()
+            point_y = target.top() + float(reference[1]) * target.height() / self.image.height()
+            painter.setPen(QPen(QColor("#ff4d6d"), 3))
+            painter.drawLine(round(point_x - 8), round(point_y), round(point_x + 8), round(point_y))
+            painter.drawLine(round(point_x), round(point_y - 8), round(point_x), round(point_y + 8))
         painter.end()
 
     def image_target_rect(self) -> QRect:
