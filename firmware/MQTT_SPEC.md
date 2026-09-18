@@ -129,7 +129,7 @@ Response nuances:
 | `servo` | `completed` or `failed` | none |
 | `baseRotate` | `completed` or `failed` | `base_rotation` |
 | `controlik` | `completed` or `failed` | none |
-| `perch` | Always publishes `completed` after calling the moves | none |
+| `perch` | `completed` only when all three guarded servo moves succeed; otherwise `failed` | none |
 | `calibrate` | Calibration-specific `completed` or `failed` | saved calibration key or `base_rotation` |
 | `calibrationvalues` | `completed`, or `failed` if Preferences cannot open | `calibrationvalues` |
 | `stencilCalibrate` | `completed` or `failed` | `stencil_calibration` |
@@ -200,7 +200,9 @@ Moves wrist, elbow, and twist to the saved perch pose, in that order. No action-
 | Middle reach | `p_mid` | `PERCH_MID` | `50` |
 | Maximum reach | `p_max` | `PERCH_MAX` | `100` |
 
-Only the three angles are moved by this action. The distance values are calibration metadata. The controller publishes `completed` even if an individual guarded servo move was blocked.
+Only the three angles are moved by this action. The distance values are
+calibration metadata. The controller publishes `failed` if JSON parsing or an
+individual guarded servo move is blocked, and later joints are not attempted.
 
 ### 4.4 `controlik`
 

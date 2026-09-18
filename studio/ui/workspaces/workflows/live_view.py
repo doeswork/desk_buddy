@@ -19,7 +19,7 @@ around the wrong thing entirely.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -40,6 +40,7 @@ class PhotoView(QWidget):
         super().__init__()
         self._image = QImage()
         self._detections: list[dict] = []
+        self._calibration: dict = {}
         self._caption = "No photo yet."
         self.setMinimumHeight(180)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -49,6 +50,7 @@ class PhotoView(QWidget):
         # the boxes belong to the photo they were drawn for, and keeping them
         # would paint the last detection over this one — or over nothing.
         self._detections = []
+        self._calibration = {}
         image = QImage()
         if jpeg and image.loadFromData(jpeg, "JPEG"):
             self._image = image
@@ -61,6 +63,13 @@ class PhotoView(QWidget):
     def set_detections(self, detections: list[dict], caption: str = "") -> None:
         self._detections = list(detections)
         self._caption = caption
+        self.update()
+
+    def set_calibration(self, result: dict) -> None:
+        """Draw worker-supplied candidates, anchors, and grid over this JPEG."""
+        self._calibration = dict(result)
+        error = result.get("error") or {}
+        self._caption = str(error.get("message") or "") if result.get("status") == "failed" else ""
         self.update()
 
     # ---- drawing ---------------------------------------------------------
@@ -86,6 +95,35 @@ class PhotoView(QWidget):
         x = (self.width() - scaled.width()) / 2
         y = (self.height() - scaled.height()) / 2
         painter.drawPixmap(int(x), int(y), QPixmap.fromImage(scaled))
+
+        def mapped(point) -> QPointF:
+            return QPointF(
+                x + float(point[0]) * scaled.width() / self._image.width(),
+                y + float(point[1]) * scaled.height() / self._image.height(),
+            )
+
+        grid = self._calibration.get("calibration_grid") or {}
+        painter.setPen(QPen(QColor("#5d7285"), 0.8))
+        for zone in grid.get("zones", ()):
+            polygon = zone.get("polygon") or ()
+            if len(polygon) != 4:
+                continue
+            points = [mapped(point) for point in polygon]
+            for start, end in zip(points, (*points[1:], points[0])):
+                painter.drawLine(start, end)
+
+        painter.setFont(self._label_font())
+        for candidate in self._calibration.get("calibration_candidates", ()):
+            if not isinstance(candidate, dict):
+                continue
+            center = mapped((candidate.get("x", 0), candidate.get("y", 0)))
+            painter.setPen(QPen(QColor("#ffb000"), 1.5))
+            painter.drawEllipse(center, 4, 4)
+        for name, point in (self._calibration.get("calibration_points") or {}).items():
+            center = mapped((point.get("x", 0), point.get("y", 0)))
+            painter.setPen(QPen(QColor("#ff4d6d"), 2.5))
+            painter.drawEllipse(center, 6, 6)
+            painter.drawText(center + QPointF(8, -5), str(name))
 
         # Boxes come back normalised, so they survive that scaling unchanged.
         accent = colors.highlight().color()

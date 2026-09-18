@@ -48,6 +48,7 @@ STATUS_SCHEMA = "desk_buddy.vision.status.v1"
 REQUEST_SCHEMA = "desk_buddy.vision.detect-request.v1"
 READY_TIMEOUT_MS = 300_000
 DETECTION_TIMEOUT_MS = 120_000
+EXECUTION_TIMEOUT_MS = 240_000
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,11 @@ class VisionState:
     start_with_studio: bool = False
     pending_detection: str = ""
     detection_stage: str = ""
+    detection_mode: str = "preview"
+    detection_message: str = ""
     detection_delayed: bool = False
+    detection_uncertain: bool = False
+    calibration_profiles: tuple[tuple[str, str], ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -164,6 +169,7 @@ class VisionServiceManager(QObject):
         self._request_sent = False
         self._sent_connection_revision = 0
         self._pending_vision_result = None
+        self._pending_execution = False
         self._autostart_attempted = False
         self._ready_timer = QTimer(self)
         self._ready_timer.setSingleShot(True)
@@ -377,7 +383,8 @@ class VisionServiceManager(QObject):
             operation="" if cancelling_start else self._state.operation,
             phase="" if cancelling_start else self._state.phase,
             progress_message="" if cancelling_start else self._state.progress_message,
-            pending_detection="", detection_stage="", detection_delayed=False,
+            pending_detection="", detection_stage="", detection_message="",
+            detection_delayed=False, detection_uncertain=False,
             error="Detection cancelled because the detector stopped." if had_detection else self._state.error,
         )
 
@@ -423,7 +430,7 @@ class VisionServiceManager(QObject):
         self._prepare_detection(action_id, REQUEST_TOPIC, payload, (RESULT_TOPIC,))
         return action_id if self._state.pending_detection else ""
 
-    def detect_robot(self, robot: str, prompt: str) -> str:
+    def detect_robot(self, robot: str, prompt: str, *, execute: bool = False) -> str:
         clean = prompt.strip()
         if not robot or not self._can_detect(clean):
             if not robot:
@@ -452,7 +459,7 @@ class VisionServiceManager(QObject):
         self._pending_result_topic = results
         command = {
             "sender": "studio", "action_id": action_id, "action": "detect_object",
-            "phrase": clean, "use_model": False,
+            "phrase": clean, "use_model": bool(execute),
             "model_name": active.source if active is not None else self._state.active_model_id,
         }
         # PubSubClient's receive buffer is a real byte bound. ArduinoJson 7's
@@ -463,15 +470,20 @@ class VisionServiceManager(QObject):
             self._replace(error="The detection request exceeds the robot's 6144-byte MQTT buffer. Shorten the prompt.")
             self._clear_robot_subscriptions()
             return ""
+        self._pending_execution = bool(execute)
         self._prepare_detection(action_id, commands, command, (photos, results, events))
         return action_id if self._state.pending_detection else ""
+
+    def reach_and_grab(self, robot: str, prompt: str) -> str:
+        """Run the explicit robot-camera workflow; local images can never move."""
+        return self.detect_robot(robot, prompt, execute=True)
 
     def _prepare_detection(self, action_id, topic, payload, required_topics) -> None:
         self._pending_publish = (topic, payload)
         self._required_topics = required_topics
         self._request_sent = False
         self._pending_vision_result = None
-        self._begin_detection(action_id)
+        self._begin_detection(action_id, execute=self._pending_execution)
         self._preparation_timer.start(10_000)
         self._try_send_detection()
 
@@ -501,7 +513,10 @@ class VisionServiceManager(QObject):
             # Fail requests sent on the old session, not a newly prepared one.
             if (not self.client.connected
                     or self.client.connection_revision != self._sent_connection_revision):
-                self._fail_detection("MQTT connection lost during detection. It was not retried.")
+                if self._pending_execution:
+                    self._mark_execution_uncertain("MQTT disconnected while the robot may have been moving.")
+                else:
+                    self._fail_detection("MQTT connection lost during detection. It was not retried.")
         elif connected:
             self._try_send_detection()
 
@@ -815,6 +830,10 @@ class VisionServiceManager(QObject):
             "mqtt_state": mqtt_state,
             "busy": bool(body.get("busy")),
             "device": str(body.get("device") or ""),
+            "calibration_profiles": tuple(sorted(
+                (str(robot), str(profile_id))
+                for robot, profile_id in dict(body.get("calibration_profiles") or {}).items()
+            )),
         }
         if ready:
             self._ready_timer.stop()
@@ -837,7 +856,10 @@ class VisionServiceManager(QObject):
             values["error"] = str(body.get("last_error") or "The worker reported a startup error.")
         self._replace(**values)
         if mqtt_state in {"offline", "error"} and self._state.pending_detection:
-            self._fail_detection("The detector became unavailable during detection. It was not retried.")
+            if self._pending_execution:
+                self._mark_execution_uncertain("The detector became unavailable while the robot may have been moving.")
+            else:
+                self._fail_detection("The detector became unavailable during detection. It was not retried.")
 
     def _on_raw(self, topic: str, payload: bytes) -> None:
         if not self._state.pending_detection or topic != self._pending_photo_topic:
@@ -859,6 +881,17 @@ class VisionServiceManager(QObject):
     def _on_result(self, topic: str, body: dict) -> None:
         action_id = str(body.get("action_id") or "")
         if not self._state.pending_detection or action_id != self._state.pending_detection:
+            return
+        is_vision_progress = (
+            topic == self._pending_result_topic
+            and body.get("sender") == "visual_ai"
+            and body.get("status") == "in_progress"
+        )
+        if is_vision_progress:
+            self._replace(
+                detection_stage=str(body.get("stage") or "processing"),
+                detection_message=str(body.get("log") or "Vision is processing the request."),
+            )
             return
         is_vision_result = (
             topic == self._pending_result_topic
@@ -890,11 +923,15 @@ class VisionServiceManager(QObject):
         self._pending_vision_result = None
         self._request_sent = False
         self._required_topics = ()
+        self._pending_execution = False
 
     def _finish_detection(self, body: dict) -> None:
         self._clear_detection_transport()
         self._clear_robot_subscriptions()
-        self._replace(pending_detection="", busy=False, detection_stage="", detection_delayed=False)
+        self._replace(
+            pending_detection="", busy=False, detection_stage="", detection_mode="preview",
+            detection_message="", detection_delayed=False, detection_uncertain=False,
+        )
         self.detection_result.emit(dict(body))
 
     def _fail_detection(self, message: str) -> None:
@@ -902,18 +939,43 @@ class VisionServiceManager(QObject):
             return
         self._clear_detection_transport()
         self._clear_robot_subscriptions()
-        self._replace(pending_detection="", busy=False, detection_stage="", detection_delayed=False, error=message)
+        self._replace(
+            pending_detection="", busy=False, detection_stage="", detection_mode="preview",
+            detection_message="", detection_delayed=False, detection_uncertain=False,
+            error=message,
+        )
 
-    def _begin_detection(self, action_id: str) -> None:
-        self._replace(pending_detection=action_id, error="", detection_stage="preparing", detection_delayed=False)
-        self._detection_timer.start(DETECTION_TIMEOUT_MS)
+    def _begin_detection(self, action_id: str, *, execute: bool = False) -> None:
+        self._replace(
+            pending_detection=action_id, error="", detection_stage="preparing",
+            detection_mode="reach_and_grab" if execute else "preview",
+            detection_message="", detection_delayed=False, detection_uncertain=False,
+        )
+        self._detection_timer.start(EXECUTION_TIMEOUT_MS if execute else DETECTION_TIMEOUT_MS)
         self._hint_timer.start(30_000)
 
     def _detection_timed_out(self) -> None:
+        if self._pending_execution:
+            self._mark_execution_uncertain("Reach-and-grab exceeded its 240-second deadline.")
+            return
         if self._pending_vision_result is not None:
             self._fail_detection("Incomplete preview: detection arrived but its photo did not arrive within 120 seconds. It was not retried.")
         else:
             self._fail_detection("Detection timed out after 120 seconds. It was not retried.")
+
+    def _mark_execution_uncertain(self, reason: str) -> None:
+        """Keep subscriptions alive for a late terminal result; never resend."""
+        self._detection_timer.stop()
+        self._hint_timer.stop()
+        self._replace(
+            detection_stage="outcome_unknown", detection_delayed=True,
+            detection_uncertain=True,
+            detection_message=(
+                f"{reason} The robot may already have moved. No retry was sent; "
+                "Studio is still watching for the matching terminal result."
+            ),
+            error="Robot state is uncertain. Do not retry this action automatically.",
+        )
 
     def _can_detect(self, prompt: str) -> bool:
         if not prompt:
@@ -970,6 +1032,7 @@ class VisionServiceManager(QObject):
                 "password_env": PASSWORD_ENV,
             },
             "robot_routes": list(robot_routes()) if credentials else [],
+            "calibration_dir": str(self.root / "calibrations"),
             "model": {**manifest.as_dict(), "cache_dir": str(cache_dir)},
         }
         path = self.root / "configs" / f"detector-{launch_id}.json"

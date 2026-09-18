@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import signal
@@ -10,16 +11,21 @@ import threading
 import time
 from dataclasses import dataclass
 from collections import OrderedDict
+from pathlib import Path
 
+from .calibration import ALGORITHM, CalibrationError, calibrate, project
 from .detector import HuggingFaceDetector
 from .frames import BinaryFrame, decode_frame, decode_metadata, validate_photo_frame
+from .motion import CommandSequencer, MotionError
+from .profiles import ProfileStore
 
 STATUS_SCHEMA = "desk_buddy.vision.status.v1"
 REQUEST_SCHEMA = "desk_buddy.vision.detect-request.v1"
 STATUS_TOPIC = "vision/detector/status"
 REQUEST_TOPIC = "vision/detector/request"
 RESULT_TOPIC = "vision/detector/result"
-REQUEST_TIMEOUT_SECONDS = 120
+PREVIEW_TIMEOUT_SECONDS = 120
+WORKFLOW_TIMEOUT_SECONDS = 240
 MAX_REQUESTS = 8
 TERMINAL_CACHE_SIZE = 256
 TERMINAL_TTL_SECONDS = 120
@@ -56,7 +62,12 @@ class DetectorService:
         self.jobs: queue.Queue[WorkItem | None] = queue.Queue(maxsize=1)
         self.requests: dict[tuple[str, str], RequestRecord] = {}
         self._lock = threading.RLock()
-        self._terminal: OrderedDict[tuple[str, str], float] = OrderedDict()
+        self._terminal: OrderedDict[tuple[str, str], tuple[float, dict]] = OrderedDict()
+        self._outbox: OrderedDict[tuple[str, str], dict] = OrderedDict()
+        default_profiles = Path(str(config["model"].get("cache_dir") or ".")).parent / "calibrations"
+        self.profiles = ProfileStore(config.get("calibration_dir") or default_profiles)
+        self.motion = CommandSequencer(self._publish_command, timeout_seconds=30.0)
+        self._perch_mutations: dict[tuple[str, str], str] = {}
         self._subscription_mids: set[int] = set()
         self._subscriptions_ready = False
         routes = tuple(config.get("robot_routes", ()))
@@ -199,14 +210,19 @@ class DetectorService:
             elif not self._subscription_mids:
                 self._subscriptions_ready = True
                 self.connected_event.set()
+                self._flush_outbox()
                 if self.loaded:
                     self._publish_status("busy" if self.processing else "ready")
 
     def _on_disconnect(self, _client, _userdata, _flags, _reason, _properties) -> None:
+        self.motion.disconnected()
         with self._lock:
             self._subscriptions_ready = False
             self._subscription_mids.clear()
-            records = tuple(self.requests.values())
+            records = tuple(
+                record for record in self.requests.values()
+                if record.stage == "waiting_photo"
+            )
         for record in records:
             self._publish_failure(record.key[0], record.key[1], "connection_lost",
                                   "The detector lost its MQTT connection.", record=record)
@@ -236,25 +252,38 @@ class DetectorService:
             return
         if not isinstance(body, dict):
             return
-        if body.get("action") != "detect_object":
+        action = str(body.get("action") or "")
+        action_id = _action_id(body)
+        event_topic = str(route.get("event_topic") or "")
+        robot = str(route.get("robot") or "")
+        if (
+            action == "calibrate"
+            and body.get("calibration_type") in {
+                "perch_elbow_angle", "perch_wrist_angle", "perch_twist_angle",
+            }
+            and action_id and event_topic
+        ):
+            with self._lock:
+                self._perch_mutations[(event_topic, action_id)] = robot
+            return
+        if action not in {"detect_object", "calibrate_depth"}:
             return
         if body.get("sender") in {"firmware", "visual_ai"}:
             return
-        action_id = _action_id(body)
-        prompt = body.get("phrase")
-        if not action_id or not isinstance(prompt, str) or not prompt.strip():
+        prompt = body.get("phrase", "")
+        if not action_id or (action == "detect_object" and (not isinstance(prompt, str) or not prompt.strip())):
             if action_id:
                 self._publish_failure(
                     result_topic, action_id, "invalid_request",
-                    "A scalar detection phrase is required.",
-                    robot=str(route.get("robot") or ""),
+                    "A scalar detection phrase is required." if action == "detect_object"
+                    else "A calibration action ID is required.",
+                    robot=robot, result_type=action,
                 )
             return
-        if body.get("use_model") is True:
+        if "use_model" in body and not isinstance(body.get("use_model"), bool):
             self._publish_failure(
-                result_topic, action_id, "automatic_execution_not_available",
-                "Automatic reach and grab is not available in basic vision.",
-                robot=str(route.get("robot") or ""),
+                result_topic, action_id, "invalid_request",
+                "use_model must be a JSON boolean.", robot=robot, result_type=action,
             )
             return
         if self._known((result_topic, action_id)):
@@ -270,8 +299,10 @@ class DetectorService:
             )
             return
         request = dict(body)
-        request["_robot"] = str(route.get("robot") or "")
+        request["_robot"] = robot
         request["_result_topic"] = result_topic
+        request["_command_topic"] = topic
+        request["_event_topic"] = event_topic
         self._admit(result_topic, action_id, request)
 
     def _receive_robot_event(self, topic: str, payload: bytes) -> None:
@@ -285,13 +316,19 @@ class DetectorService:
             body = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return
-        if (
-            not isinstance(body, dict)
-            or body.get("sender") != "firmware"
-            or body.get("status") != "failed"
-        ):
+        if not isinstance(body, dict) or body.get("sender") != "firmware":
             return
         action_id = _action_id(body)
+        self.motion.handle_event(topic, body)
+        status = str(body.get("status") or "")
+        with self._lock:
+            changed_robot = self._perch_mutations.pop((topic, action_id), None) \
+                if status in {"completed", "failed"} else None
+        if changed_robot and status == "completed":
+            if self.profiles.invalidate(changed_robot):
+                self._publish_status("busy" if self.processing else "ready")
+        if status != "failed":
+            return
         with self._lock:
             pending = self.requests.get((result_topic, action_id))
         if pending is None:
@@ -319,7 +356,7 @@ class DetectorService:
             if metadata.get("use_model") is True:
                 self._publish_failure(
                     RESULT_TOPIC, action_id, "automatic_execution_not_available",
-                    "Automatic reach and grab is not available in basic vision.",
+                    "Automatic movement is only available from a correlated robot-camera request.",
                 )
                 return
             requested_model = metadata.get("model_name")
@@ -362,17 +399,20 @@ class DetectorService:
             # Reuse the extracted JPEG instead of copying the full frame twice.
             frame = BinaryFrame(metadata, jpeg)
             validate_photo_frame(frame)
+            expected_type = str(record.request.get("action") or "")
+            if expected_type and metadata.get("type") not in {None, expected_type}:
+                raise ValueError("photo type does not match the admitted request")
         except ValueError as exc:
             self._publish_failure(result_topic, action_id, "invalid_image",
                                   f"The robot published an invalid photo: {_safe_error(exc)}",
                                   robot=robot, record=record)
             return
-        self._enqueue(WorkItem(action_id, str(record.request["phrase"]).strip(),
+        self._enqueue(WorkItem(action_id, str(record.request.get("phrase") or "").strip(),
                                frame.jpeg, result_topic, record.request, record))
 
     def _prune_terminal(self) -> None:
         cutoff = time.monotonic() - TERMINAL_TTL_SECONDS
-        while self._terminal and next(iter(self._terminal.values())) <= cutoff:
+        while self._terminal and next(iter(self._terminal.values()))[0] <= cutoff:
             self._terminal.popitem(last=False)
 
     def _known(self, key: tuple[str, str]) -> bool:
@@ -420,7 +460,7 @@ class DetectorService:
             with self._lock:
                 if self.requests.get(item.record.key) is not item.record:
                     continue
-                if time.monotonic() - item.record.received >= REQUEST_TIMEOUT_SECONDS:
+                if time.monotonic() - item.record.received >= self._timeout_for(item.record):
                     self._publish_failure(item.result_topic, item.action_id, "detection_timeout",
                                           "The queued detection expired.", record=item.record)
                     continue
@@ -428,53 +468,238 @@ class DetectorService:
                 self.processing = True
             self._publish_status("busy")
             try:
-                batch = self.detector.detect(item.jpeg, item.prompt)
-                detections = batch["detections"]
-                robot = str(item.request.get("_robot") or "")
-                if not detections:
-                    self._publish_failure(
-                        item.result_topic, item.action_id, "no_detection",
-                        f"No {item.prompt!r} detection met the confidence threshold.",
-                        batch=batch, robot=robot, record=item.record,
-                    )
+                if item.request.get("action") == "calibrate_depth":
+                    self._calibrate_item(item)
                 else:
-                    result = {
-                        "sender": "visual_ai",
-                        "action_id": item.action_id,
-                        "status": "completed",
-                        "type": "detect_object",
-                        "stage": "detection_only",
-                        "detection_batch": batch,
-                        "selected_detection": detections[0],
-                        "model_id": self.detector.model_id,
-                        "catalog_id": self.detector.catalog_id,
-                        "revision": self.detector.revision,
-                    }
-                    if robot:
-                        result["robot"] = robot
-                    self._publish_result(item.result_topic, result, record=item.record)
+                    self._detect_item(item)
                 self.last_error = ""
+            except CalibrationError as exc:
+                is_calibration = item.request.get("action") == "calibrate_depth"
+                self._publish_failure(
+                    item.result_topic, item.action_id, exc.code, str(exc),
+                    robot=str(item.request.get("_robot") or ""), record=item.record,
+                    result_type="calibrate_depth" if is_calibration else "detect_object",
+                    stage="calibration_failed" if is_calibration else "reach_and_grab_failed",
+                    details={"calibration_candidates": list(exc.candidates)},
+                )
             except Exception as exc:
                 self.last_error = _safe_error(exc)
                 self._publish_failure(
                     item.result_topic, item.action_id, "inference_failed",
                     self.last_error, robot=str(item.request.get("_robot") or ""), record=item.record,
+                    result_type=str(item.request.get("action") or "detect_object"),
                 )
             finally:
                 with self._lock:
                     self.processing = False
                 self._publish_status("ready")
 
+    def _calibrate_item(self, item: WorkItem) -> None:
+        robot = str(item.request.get("_robot") or "")
+        result = calibrate(item.jpeg)
+        try:
+            _child_id, response = self.motion.execute(
+                command_topic=str(item.request["_command_topic"]),
+                event_topic=str(item.request["_event_topic"]),
+                operation_id=item.action_id, index=0, action="calibrationvalues",
+            )
+        except MotionError as exc:
+            raise CalibrationError(exc.code, str(exc), candidates=result.candidates) from exc
+        values = response.get("calibrationvalues")
+        if not isinstance(values, dict) or values.get("perch_configured") is not True:
+            raise CalibrationError(
+                "perch_not_configured",
+                "Save elbow, wrist, and twist as the camera perch before calibrating the grid.",
+                candidates=result.candidates,
+            )
+        perch = self._perch(values)
+        profile = self.profiles.create(
+            robot=robot, width=result.width, height=result.height,
+            points=result.points, grid=result.grid, perch=perch, algorithm=ALGORITHM,
+        )
+        self.profiles.save(profile)
+        self._publish_status("busy")
+        self._publish_result(item.result_topic, {
+            "sender": "visual_ai", "action_id": item.action_id,
+            "status": "completed", "type": "calibrate_depth",
+            "stage": "calibration_completed", "profile_id": profile["profile_id"],
+            "calibration_schema": profile["schema"],
+            "calibration_points": result.points, "calibration_grid": result.grid,
+            "calibration_candidates": list(result.candidates),
+            "calibration_profile": {
+                "profile_id": profile["profile_id"], "created_at": profile["created_at"],
+                "image_width": result.width, "image_height": result.height,
+                "capture_pose": profile["capture_pose"], "algorithm": ALGORITHM,
+            },
+        }, record=item.record)
+
+    def _detect_item(self, item: WorkItem) -> None:
+        robot = str(item.request.get("_robot") or "")
+        batch = self.detector.detect(item.jpeg, item.prompt)
+        detections = batch["detections"]
+        if not detections:
+            self._publish_failure(
+                item.result_topic, item.action_id, "no_detection",
+                f"No {item.prompt!r} detection met the confidence threshold.",
+                batch=batch, robot=robot, record=item.record,
+            )
+            return
+        selected = detections[0]
+        common = {
+            "detection_batch": batch, "selected_detection": selected,
+            "model_id": self.detector.model_id, "catalog_id": self.detector.catalog_id,
+            "revision": self.detector.revision,
+        }
+        if item.request.get("use_model") is not True:
+            self._publish_result(item.result_topic, {
+                "sender": "visual_ai", "action_id": item.action_id,
+                "status": "completed", "type": "detect_object",
+                "stage": "detection_only", **common,
+            }, record=item.record)
+            return
+
+        profile = self.profiles.active(robot)
+        if profile is None:
+            self._workflow_failure(item, "missing_calibration_profile",
+                                   "Run the nine-point visual calibration for this robot first.",
+                                   common=common)
+            return
+        if (
+            int(profile.get("image_width") or 0) != int(batch.get("image_width") or 0)
+            or int(profile.get("image_height") or 0) != int(batch.get("image_height") or 0)
+        ):
+            self._workflow_failure(item, "calibration_resolution_mismatch",
+                                   "The camera resolution changed; recalibrate the nine-point grid.",
+                                   common=common)
+            return
+        target = project(selected.get("box_px", ()), profile)
+        if not self._valid_target(target):
+            reason = (target.get("rejection_reasons") or ["invalid_target"])[0]
+            self._workflow_failure(item, reason,
+                                   "The detected object's table-contact point is outside the calibrated workspace.",
+                                   common=common, target=target)
+            return
+
+        self._publish_progress(item, "target_planned", "Calibrated target ready.", target=target)
+        attempted_motion = False
+        failed_step = "calibrationvalues"
+        try:
+            _child, response = self.motion.execute(
+                command_topic=str(item.request["_command_topic"]),
+                event_topic=str(item.request["_event_topic"]),
+                operation_id=item.action_id, index=1, action="calibrationvalues",
+            )
+            values = response.get("calibrationvalues")
+            if not isinstance(values, dict) or values.get("motion_calibration_ready") is not True:
+                raise MotionError("motion_calibration_not_ready", "Base rotation and table-height IK must be calibrated.")
+            try:
+                current_perch = self._perch(values)
+            except CalibrationError as exc:
+                raise MotionError(exc.code, str(exc)) from exc
+            if values.get("perch_configured") is not True or current_perch != profile["capture_pose"]["perch"]:
+                raise MotionError("calibration_pose_mismatch", "The saved camera perch changed; recalibrate the grid.")
+
+            attempted_motion = True
+            failed_step = "baseRotate"
+            self._publish_progress(item, "executing_base", "Rotating the base.", target=target)
+            self.motion.execute(
+                command_topic=str(item.request["_command_topic"]),
+                event_topic=str(item.request["_event_topic"]),
+                operation_id=item.action_id, index=2, action="baseRotate",
+                fields={"controlType": "ANGLE", "value": target["angle_deg"] % 360.0, "speed": "veryslow"},
+            )
+            failed_step = "controlik"
+            self._publish_progress(item, "executing_ik", "Moving to the calibrated table depth.", target=target)
+            self.motion.execute(
+                command_topic=str(item.request["_command_topic"]),
+                event_topic=str(item.request["_event_topic"]),
+                operation_id=item.action_id, index=3, action="controlik",
+                fields={"distance": target["distance_mm"], "z_height": 0.0},
+            )
+            failed_step = "gripper"
+            self._publish_progress(item, "executing_grab", "Closing the gripper.", target=target)
+            self.motion.execute(
+                command_topic=str(item.request["_command_topic"]),
+                event_topic=str(item.request["_event_topic"]),
+                operation_id=item.action_id, index=4, action="gripper",
+                fields={"command": "GRAB"},
+            )
+        except MotionError as exc:
+            self._workflow_failure(
+                item, exc.code, str(exc), common=common, target=target,
+                failed_step=failed_step,
+                physical_state="possibly_moved" if attempted_motion or exc.uncertain else "unchanged",
+            )
+            return
+
+        self._publish_result(item.result_topic, {
+            "sender": "visual_ai", "action_id": item.action_id,
+            "status": "completed", "type": "detect_object",
+            "stage": "reach_and_grab_completed", "grab_status": "completed",
+            "physical_state": "moved", "ik_target": target, **common,
+        }, record=item.record)
+
+    @staticmethod
+    def _perch(values: Mapping[str, object]) -> dict[str, int]:
+        effective = values.get("perch_effective")
+        if not isinstance(effective, Mapping):
+            raise CalibrationError("missing_perch_values", "Firmware did not return the effective perch pose.")
+        try:
+            # ActionPerch uses C++ static_cast<int>, so truncate here too.  The
+            # profile fingerprint then describes the angles actually moved.
+            return {name: int(float(effective[name])) for name in ("ELBOW", "WRIST", "TWIST")}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CalibrationError("invalid_perch_values", "Firmware returned an invalid perch pose.") from exc
+
+    @staticmethod
+    def _valid_target(target: Mapping[str, Any]) -> bool:
+        values = (target.get("angle_deg"), target.get("distance_mm"), target.get("z_height_mm"))
+        try:
+            angle, distance, z_height = (float(value) for value in values)
+        except (TypeError, ValueError):
+            return False
+        return (
+            target.get("accepted") is True and all(math.isfinite(value) for value in (angle, distance, z_height))
+            and -30.0 <= angle <= 30.0 and 0.0 <= distance <= 120.0 and z_height == 0.0
+        )
+
+    def _workflow_failure(
+        self, item: WorkItem, code: str, message: str, *, common: Mapping[str, Any],
+        target: Mapping[str, Any] | None = None, failed_step: str = "planning",
+        physical_state: str = "unchanged",
+    ) -> None:
+        result = {
+            "sender": "visual_ai", "action_id": item.action_id,
+            "status": "failed", "type": "detect_object",
+            "stage": "reach_and_grab_failed", "error": {"code": code, "message": message},
+            "failed_step": failed_step, "physical_state": physical_state, **dict(common),
+        }
+        if target is not None:
+            result["ik_target"] = dict(target)
+        self._publish_result(item.result_topic, result, record=item.record)
+
+    def _publish_progress(self, item: WorkItem, stage: str, message: str, *, target=None) -> None:
+        result = {
+            "sender": "visual_ai", "action_id": item.action_id,
+            "status": "in_progress", "type": "detect_object",
+            "stage": stage, "log": message,
+        }
+        if target is not None:
+            result["ik_target"] = dict(target)
+        self._publish_json(item.result_topic, result)
+
     def _publish_failure(
         self, topic: str, action_id: str, code: str, message: str, *,
         batch: dict | None = None, robot: str = "", record: RequestRecord | None = None,
+        result_type: str = "detect_object", stage: str = "detection_only",
+        details: Mapping[str, Any] | None = None,
     ) -> None:
         result = {
             "sender": "visual_ai",
             "action_id": action_id,
             "status": "failed",
-            "type": "detect_object",
-            "stage": "detection_only",
+            "type": result_type,
+            "stage": stage,
             "error": {"code": code, "message": message},
             "model_id": self.detector.model_id,
             "catalog_id": self.detector.catalog_id,
@@ -485,6 +710,8 @@ class DetectorService:
             result["selected_detection"] = None
         if robot:
             result["robot"] = robot
+        if details:
+            result.update(dict(details))
         self._publish_result(topic, result, record=record)
 
     def _publish_result(self, topic: str, result: dict, *, record: RequestRecord | None = None) -> None:
@@ -494,7 +721,8 @@ class DetectorService:
             if record is not None:
                 if self.requests.get(key) is not record:
                     return
-                if time.monotonic() - record.received >= REQUEST_TIMEOUT_SECONDS:
+                timeout = self._timeout_for(record)
+                if time.monotonic() - record.received >= timeout:
                     result = {
                         "sender": "visual_ai", "action_id": key[1], "status": "failed",
                         "type": "detect_object", "stage": "detection_only",
@@ -502,7 +730,7 @@ class DetectorService:
                         "revision": self.detector.revision,
                         "error": {
                             "code": "photo_timeout" if record.stage == "waiting_photo" else "detection_timeout",
-                            "message": "The detection request exceeded its 120-second deadline.",
+                            "message": f"The vision request exceeded its {int(timeout)}-second deadline.",
                         },
                     }
                 robot = str(record.request.get("_robot") or "")
@@ -512,11 +740,42 @@ class DetectorService:
                 record.stage = "terminal"
             elif key in self.requests or key in self._terminal:
                 return
-            self._terminal[key] = time.monotonic()
+            self._terminal[key] = (time.monotonic(), dict(result))
             while len(self._terminal) > TERMINAL_CACHE_SIZE:
                 self._terminal.popitem(last=False)
-        if self.client is not None:
-            self.client.publish(topic, json.dumps(result, separators=(",", ":")), qos=1)
+        self._publish_json(topic, result, terminal_key=key)
+
+    def _publish_json(self, topic: str, result: Mapping[str, Any], *, terminal_key=None) -> None:
+        if self.client is None:
+            if terminal_key:
+                self._outbox[terminal_key] = {"topic": topic, "result": dict(result)}
+            return
+        try:
+            info = self.client.publish(topic, json.dumps(result, separators=(",", ":")), qos=1)
+            if getattr(info, "rc", 0) not in (None, 0) and terminal_key:
+                self._outbox[terminal_key] = {"topic": topic, "result": dict(result)}
+        except Exception:
+            if terminal_key:
+                self._outbox[terminal_key] = {"topic": topic, "result": dict(result)}
+
+    def _flush_outbox(self) -> None:
+        with self._lock:
+            pending = tuple(self._outbox.items())
+        for key, item in pending:
+            try:
+                info = self.client.publish(
+                    item["topic"], json.dumps(item["result"], separators=(",", ":")), qos=1,
+                )
+                if getattr(info, "rc", 0) in (None, 0):
+                    with self._lock:
+                        self._outbox.pop(key, None)
+            except Exception:
+                return
+
+    def _publish_command(self, topic: str, payload: str, **options):
+        if self.client is None:
+            raise RuntimeError("MQTT client is unavailable")
+        return self.client.publish(topic, payload, **options)
 
     def _status(self, state: str) -> dict:
         return {
@@ -532,6 +791,7 @@ class DetectorService:
             "catalog_id": self.detector.catalog_id,
             "revision": self.detector.revision,
             "last_error": self.last_error,
+            "calibration_profiles": self.profiles.active_ids(),
         }
 
     def _publish_status(self, state: str) -> None:
@@ -542,20 +802,28 @@ class DetectorService:
                 self.client.publish(STATUS_TOPIC, json.dumps(self._status(state), separators=(",", ":")), qos=1, retain=True)
 
     def _expire_requests(self) -> None:
-        cutoff = time.monotonic() - REQUEST_TIMEOUT_SECONDS
         with self._lock:
             records = tuple(self.requests.values())
             self._prune_terminal()
         for record in records:
-            if record.received <= cutoff:
+            timeout = self._timeout_for(record)
+            if time.monotonic() - record.received >= timeout:
                 waiting = record.stage == "waiting_photo"
                 self._publish_failure(
                     record.key[0], record.key[1],
                     "photo_timeout" if waiting else "detection_timeout",
-                    "The robot photo did not arrive within 120 seconds." if waiting
-                    else "Detection did not finish within 120 seconds.",
+                    f"The robot photo did not arrive within {int(timeout)} seconds." if waiting
+                    else f"Vision did not finish within {int(timeout)} seconds.",
                     robot=str(record.request.get("_robot") or ""), record=record,
+                    result_type=str(record.request.get("action") or "detect_object"),
                 )
+
+    @staticmethod
+    def _timeout_for(record: RequestRecord) -> float:
+        return WORKFLOW_TIMEOUT_SECONDS if (
+            record.request.get("action") == "calibrate_depth"
+            or record.request.get("use_model") is True
+        ) else PREVIEW_TIMEOUT_SECONDS
 
 
 def _action_id(value: dict) -> str:

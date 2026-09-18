@@ -54,8 +54,7 @@ namespace {
   }
 
   bool handlePerch(const ActionRouter::Context& ctx, String&) {
-    ActionPerch::run(ctx.message);
-    return true;
+    return ActionPerch::run(ctx.message);
   }
 
   // ActionCalibrate publishes its own MQTT reply.
