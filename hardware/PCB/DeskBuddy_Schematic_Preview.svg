@@ -1,0 +1,558 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1440" viewBox="0 0 2000 1440">
+<rect width="100%" height="100%" fill="white"/>
+<rect x="20" y="20" rx="0" ry="0" width="1960" height="1400" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="45" y="61" fill="#0F172A" font-family="Arial, sans-serif" font-size="26pt" text-anchor="start" font-weight="bold">DESKBUDDY / SMD v1.0</text>
+<text x="45" y="89" fill="#334155" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="normal">Editable schematic reconstructed from the repaired PCB • 29 components • 19 named nets</text>
+<text x="1955" y="61" fill="#334155" font-family="Arial, sans-serif" font-size="13pt" text-anchor="end" font-weight="bold">PCB-DERIVED / REV A</text>
+<text x="1955" y="86" fill="#334155" font-family="Arial, sans-serif" font-size="10pt" text-anchor="end" font-weight="normal">2026-09-19   |   Sheet 1 of 1</text>
+<rect x="40" y="120" rx="0" ry="0" width="1150" height="470" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="60" y="150" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">01 / POWER INPUT, FUSE HOLDER &amp; FILTERING</text>
+<text x="60" y="173" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Net names are copied literally from the PCB; this board does not contain a voltage regulator.</text>
+<text x="190" y="233" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">PWR</text>
+<text x="190" y="253" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">2-pin / 5.00 mm</text>
+<rect x="170" y="255" rx="4" ry="4" width="40" height="60" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="180" cy="265" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 150 275 L 170 275" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="162" y="268" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 150 295 L 170 295" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="162" y="288" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="100 275 150 275" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="97" y="271" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+V</text>
+<polyline points="100 295 150 295" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="97" y="291" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="480" y="188" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">FH1</text>
+<text x="480" y="208" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">XF-506P fuse holder</text>
+<path d="M 400 230 L 440 230" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="412" y="223" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 560 230 L 520 230" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="548" y="223" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<polyline points="520 230 440 230" stroke="#880000" stroke-width="1.5" fill="none"/>
+<rect x="458" y="222" rx="0" ry="0" width="44" height="16" stroke="#880000" stroke-width="1.5" fill="none"/>
+<rect x="430" y="212" rx="6" ry="6" width="100" height="34" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="516 212 516 218 500 218 500 212" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="460 212 460 218 444 218 444 212 444 212" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="320 230 400 230" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="317" y="226" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+V</text>
+<polyline points="560 230 1100 230" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1097" y="226" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<text x="835" y="287" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C7</text>
+<text x="835" y="307" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">330uF</text>
+<polyline points="816 286 784 286" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 800 260 L 800 280" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="810" y="275" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<path d="M 800 320 L 800 300" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="810" y="313" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="800 280 800 286" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="800 294 800 300" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 815.334 300.444 A 18 20 90 0 0 785.614 299.494" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<polyline points="806 270 806 278" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="810 274 802 274" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="800 230 800 260" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="800" cy="230" r="2.5" fill="#008800"/>
+<polyline points="800 320 800 350" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1085" y="287" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C8</text>
+<text x="1085" y="307" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">330uF</text>
+<polyline points="1066 286 1034 286" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1050 260 L 1050 280" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1060" y="275" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<path d="M 1050 320 L 1050 300" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1060" y="313" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="1050 280 1050 286" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1050 294 1050 300" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1065.334 300.444 A 18 20 90 0 0 1035.614 299.494" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<polyline points="1056 270 1056 278" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1060 274 1052 274" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1050 230 1050 260" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="1050" cy="230" r="2.5" fill="#008800"/>
+<polyline points="1050 320 1050 350" stroke="#008800" stroke-width="1.5" fill="none"/>
+<polyline points="800 350 1100 350" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="1050" cy="350" r="2.5" fill="#008800"/>
+<text x="1097" y="346" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="480" y="368" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">DIODE</text>
+<text x="480" y="388" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">SS34 • A=2 / K=1</text>
+<path d="M 440 410 L 470 410" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="452" y="403" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 520 410 L 490 410" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="508" y="403" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 470 422 L 490 410 L 470 396 Z" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<polyline points="490 410 490 394 486 394 486 396" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="490 410 490 426 494 426 494 424" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="320 230 320 410 440 410" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="320" cy="230" r="2.5" fill="#008800"/>
+<polyline points="520 410 780 410" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="653" y="406" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">ESP32_+V</text>
+<text x="820" y="368" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">FERRITE</text>
+<text x="820" y="388" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">BLM21PG221SN1D / 220Ω</text>
+<path d="M 860 410 L 854 410" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="848" y="403" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 780 410 L 786 410" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="792" y="403" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 786.24 409.86 A 8 7.8 0 1 1 802.16 409.88" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<path d="M 803.2 409.86 A 8 7.8 0 1 1 819.12 409.86" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<path d="M 820.14 409.86 A 8 7.8 0 1 1 836.06 409.86" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<path d="M 837.4 409.86 A 8 7.8 0 1 1 853.34 409.88" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<polyline points="860 410 1130 410" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1127" y="406" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+5V</text>
+<text x="682" y="470" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C9</text>
+<text x="682" y="490" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">22uF</text>
+<polyline points="634 479 666 479" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="634 471 666 471" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 650 505 L 650 485" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="660" y="498" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<path d="M 650 445 L 650 465" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="660" y="460" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="650 485 650 479" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="650 471 650 465" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="650 410 650 445" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="650" cy="410" r="2.5" fill="#008800"/>
+<polyline points="650 505 650 535" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="962" y="470" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">1UF</text>
+<text x="962" y="490" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">1uF</text>
+<polyline points="946 471 914 471" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="946 479 914 479" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 930 445 L 930 465" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="940" y="460" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<path d="M 930 505 L 930 485" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="940" y="498" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="930 465 930 471" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="930 479 930 485" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="930 410 930 445" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="930" cy="410" r="2.5" fill="#008800"/>
+<polyline points="930 505 930 535" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1112" y="470" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C6</text>
+<text x="1112" y="490" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="1080 471 1080 455" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 1080 495 L 1080 515" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1090" y="508" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="1096 479 1064 479" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="1080 495 1080 479" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 1080 455 L 1080 435" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1090" y="450" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="1064 471 1096 471" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="1080 410 1080 435" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="1080" cy="410" r="2.5" fill="#008800"/>
+<polyline points="1080 515 1080 535" stroke="#008800" stroke-width="1.5" fill="none"/>
+<polyline points="650 535 1130 535" stroke="#008800" stroke-width="1.5" fill="none"/>
+<circle cx="930" cy="535" r="2.5" fill="#008800"/>
+<circle cx="1080" cy="535" r="2.5" fill="#008800"/>
+<text x="1127" y="531" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="60" y="565" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">FH1: fuse rating is not specified by the PCB.  “3V” elsewhere is also a literal net name.</text>
+<rect x="1220" y="120" rx="0" ry="0" width="740" height="650" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="1240" y="150" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">02 / CONTROLLER SOCKETS</text>
+<text x="1240" y="173" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">U3 and U4 are separate 1×20 headers, not an assumed MCU pinout.</text>
+<text x="1460" y="238" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">U3</text>
+<text x="1460" y="258" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">1×20 female / 2.54 mm</text>
+<rect x="1440" y="260" rx="4" ry="4" width="40" height="420" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="1450" cy="270" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 1420 280 L 1440 280" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="273" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 1420 300 L 1440 300" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="293" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1420 320 L 1440 320" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="313" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<path d="M 1420 340 L 1440 340" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="333" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">4</text>
+<path d="M 1420 360 L 1440 360" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="353" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">5</text>
+<path d="M 1420 380 L 1440 380" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="373" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">6</text>
+<path d="M 1420 400 L 1440 400" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="393" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">7</text>
+<path d="M 1420 420 L 1440 420" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="413" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">8</text>
+<path d="M 1420 440 L 1440 440" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="433" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">9</text>
+<path d="M 1420 460 L 1440 460" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="453" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">10</text>
+<path d="M 1420 480 L 1440 480" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="473" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">11</text>
+<path d="M 1420 500 L 1440 500" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="493" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">12</text>
+<path d="M 1420 520 L 1440 520" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="513" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">13</text>
+<path d="M 1420 540 L 1440 540" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="533" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">14</text>
+<path d="M 1420 560 L 1440 560" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="553" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">15</text>
+<path d="M 1420 580 L 1440 580" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="573" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">16</text>
+<path d="M 1420 600 L 1440 600" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="593" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">17</text>
+<path d="M 1420 620 L 1440 620" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="613" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">18</text>
+<path d="M 1420 640 L 1440 640" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="633" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">19</text>
+<path d="M 1420 660 L 1440 660" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1432" y="653" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">20</text>
+<polyline points="1370 280 1420 280" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1367" y="276" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">3V</text>
+<text x="1408" y="304" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="324" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="344" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="364" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="384" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="404" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="424" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="444" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="464" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="484" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="504" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1370 520 1420 520" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1367" y="516" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">B2</text>
+<text x="1408" y="544" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="564" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="584" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="604" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1408" y="624" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1370 640 1420 640" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1367" y="636" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">M1</text>
+<polyline points="1370 660 1420 660" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1367" y="656" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+5V</text>
+<text x="1810" y="238" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">U4</text>
+<text x="1810" y="258" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">1×20 female / 2.54 mm</text>
+<rect x="1790" y="260" rx="4" ry="4" width="40" height="420" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="1800" cy="270" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 1770 280 L 1790 280" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="273" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 1770 300 L 1790 300" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="293" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1770 320 L 1790 320" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="313" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<path d="M 1770 340 L 1790 340" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="333" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">4</text>
+<path d="M 1770 360 L 1790 360" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="353" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">5</text>
+<path d="M 1770 380 L 1790 380" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="373" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">6</text>
+<path d="M 1770 400 L 1790 400" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="393" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">7</text>
+<path d="M 1770 420 L 1790 420" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="413" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">8</text>
+<path d="M 1770 440 L 1790 440" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="433" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">9</text>
+<path d="M 1770 460 L 1790 460" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="453" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">10</text>
+<path d="M 1770 480 L 1790 480" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="473" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">11</text>
+<path d="M 1770 500 L 1790 500" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="493" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">12</text>
+<path d="M 1770 520 L 1790 520" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="513" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">13</text>
+<path d="M 1770 540 L 1790 540" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="533" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">14</text>
+<path d="M 1770 560 L 1790 560" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="553" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">15</text>
+<path d="M 1770 580 L 1790 580" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="573" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">16</text>
+<path d="M 1770 600 L 1790 600" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="593" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">17</text>
+<path d="M 1770 620 L 1790 620" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="613" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">18</text>
+<path d="M 1770 640 L 1790 640" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="633" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">19</text>
+<path d="M 1770 660 L 1790 660" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1782" y="653" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">20</text>
+<text x="1758" y="284" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1758" y="304" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1720 320 1770 320" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="316" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">CLK</text>
+<text x="1758" y="344" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1720 360 1770 360" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="356" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">42</text>
+<polyline points="1720 380 1770 380" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="376" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">41</text>
+<text x="1758" y="404" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1720 420 1770 420" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="416" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S3</text>
+<text x="1758" y="444" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1758" y="464" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1758" y="484" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1758" y="504" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<text x="1758" y="524" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1720 540 1770 540" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="536" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">B1</text>
+<text x="1758" y="564" fill="#94A3B8" font-family="Arial, sans-serif" font-size="8pt" text-anchor="end" font-weight="normal">open</text>
+<polyline points="1720 580 1770 580" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="576" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S1</text>
+<polyline points="1720 600 1770 600" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="596" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S2</text>
+<polyline points="1720 620 1770 620" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="616" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S5</text>
+<polyline points="1720 640 1770 640" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="636" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S4</text>
+<polyline points="1720 660 1770 660" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1717" y="656" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="1240" y="716" fill="#334155" font-family="Arial, sans-serif" font-size="10pt" text-anchor="start" font-weight="normal">“open” = no net or copper connection on the source PCB.</text>
+<text x="1240" y="740" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">No no-connect flags were added; confirm intent before changing these pins.</text>
+<rect x="40" y="620" rx="0" ry="0" width="1150" height="480" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="60" y="650" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">03 / SERVO CONNECTORS &amp; LOCAL DECOUPLING</text>
+<text x="60" y="673" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Each output keeps its existing signal / +SV / GND pin order. Motors and controller are off-board.</text>
+<text x="200" y="728" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">BASE</text>
+<text x="200" y="748" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin / 2.54 mm</text>
+<rect x="180" y="750" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="190" cy="760" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 160 770 L 180 770" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="172" y="763" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 160 790 L 180 790" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="172" y="783" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 160 810 L 180 810" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="172" y="803" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="110 770 160 770" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="107" y="766" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S1</text>
+<polyline points="110 790 160 790" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="107" y="786" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<polyline points="110 810 160 810" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="107" y="806" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="420" y="728" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">BICEP</text>
+<text x="420" y="748" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin / 2.54 mm</text>
+<rect x="400" y="750" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="410" cy="760" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 380 770 L 400 770" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="392" y="763" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 380 790 L 400 790" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="392" y="783" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 380 810 L 400 810" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="392" y="803" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="330 770 380 770" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="327" y="766" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S2</text>
+<polyline points="330 790 380 790" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="327" y="786" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<polyline points="330 810 380 810" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="327" y="806" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="640" y="728" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">ELBOW</text>
+<text x="640" y="748" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin / 2.54 mm</text>
+<rect x="620" y="750" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="630" cy="760" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 600 770 L 620 770" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="612" y="763" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 600 790 L 620 790" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="612" y="783" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 600 810 L 620 810" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="612" y="803" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="550 770 600 770" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="547" y="766" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S3</text>
+<polyline points="550 790 600 790" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="547" y="786" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<polyline points="550 810 600 810" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="547" y="806" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="860" y="728" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">TWIST</text>
+<text x="860" y="748" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin / 2.54 mm</text>
+<rect x="840" y="750" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="850" cy="760" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 820 770 L 840 770" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="832" y="763" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 820 790 L 840 790" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="832" y="783" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 820 810 L 840 810" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="832" y="803" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="770 770 820 770" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="767" y="766" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S4</text>
+<polyline points="770 790 820 790" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="767" y="786" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<polyline points="770 810 820 810" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="767" y="806" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="1080" y="728" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">GRIPPER</text>
+<text x="1080" y="748" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin / 2.54 mm</text>
+<rect x="1060" y="750" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="1070" cy="760" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 1040 770 L 1060 770" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="763" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 1040 790 L 1060 790" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="783" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1040 810 L 1060 810" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="803" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="990 770 1040 770" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="766" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">S5</text>
+<polyline points="990 790 1040 790" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="786" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">+SV</text>
+<polyline points="990 810 1040 810" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="806" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="215" y="965" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C1</text>
+<text x="215" y="985" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="180 966 180 950" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 180 990 L 180 1010" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="190" y="1003" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="196 974 164 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="180 990 180 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 180 950 L 180 930" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="190" y="945" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="164 966 196 966" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="180 900 180 930" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="183" y="896" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">+SV</text>
+<polyline points="180 1010 180 1040" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="183" y="1036" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">GND</text>
+<text x="435" y="965" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C2</text>
+<text x="435" y="985" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="400 966 400 950" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 400 990 L 400 1010" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="410" y="1003" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="416 974 384 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="400 990 400 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 400 950 L 400 930" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="410" y="945" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="384 966 416 966" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="400 900 400 930" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="403" y="896" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">+SV</text>
+<polyline points="400 1010 400 1040" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="403" y="1036" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">GND</text>
+<text x="655" y="965" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C3</text>
+<text x="655" y="985" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="620 966 620 950" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 620 990 L 620 1010" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="630" y="1003" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="636 974 604 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="620 990 620 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 620 950 L 620 930" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="630" y="945" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="604 966 636 966" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="620 900 620 930" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="623" y="896" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">+SV</text>
+<polyline points="620 1010 620 1040" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="623" y="1036" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">GND</text>
+<text x="875" y="965" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C4</text>
+<text x="875" y="985" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="840 966 840 950" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 840 990 L 840 1010" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="850" y="1003" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="856 974 824 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="840 990 840 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 840 950 L 840 930" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="850" y="945" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="824 966 856 966" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="840 900 840 930" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="843" y="896" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">+SV</text>
+<polyline points="840 1010 840 1040" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="843" y="1036" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">GND</text>
+<text x="1095" y="965" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="start" font-weight="bold">C5</text>
+<text x="1095" y="985" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">100nF</text>
+<polyline points="1060 966 1060 950" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 1060 990 L 1060 1010" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1070" y="1003" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">2</text>
+<polyline points="1076 974 1044 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="1060 990 1060 974" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<path d="M 1060 950 L 1060 930" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1070" y="945" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="start" font-weight="normal">1</text>
+<polyline points="1044 966 1076 966" stroke="#A00000" stroke-width="1.5" fill="none"/>
+<polyline points="1060 900 1060 930" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1063" y="896" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">+SV</text>
+<polyline points="1060 1010 1060 1040" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1063" y="1036" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">GND</text>
+<rect x="40" y="1130" rx="0" ry="0" width="1150" height="260" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="60" y="1160" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">04 / INPUT &amp; AUXILIARY HEADERS</text>
+<text x="60" y="1183" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Reference names and pin assignments are retained exactly, including the name BICEP1.</text>
+<text x="250" y="1228" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">BTNFING2</text>
+<text x="250" y="1248" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">2-pin / B1</text>
+<rect x="230" y="1250" rx="4" ry="4" width="40" height="60" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="240" cy="1260" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 210 1270 L 230 1270" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="222" y="1263" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 210 1290 L 230 1290" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="222" y="1283" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="160 1270 210 1270" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="157" y="1266" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">B1</text>
+<polyline points="160 1290 210 1290" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="157" y="1286" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="510" y="1228" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">BTNFING1</text>
+<text x="510" y="1248" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">2-pin / B2</text>
+<rect x="490" y="1250" rx="4" ry="4" width="40" height="60" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="500" cy="1260" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 470 1270 L 490 1270" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="482" y="1263" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 470 1290 L 490 1290" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="482" y="1283" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="420 1270 470 1270" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="417" y="1266" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">B2</text>
+<polyline points="420 1290 470 1290" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="417" y="1286" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="760" y="1228" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">U1</text>
+<text x="760" y="1248" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">2-pin / M1</text>
+<rect x="740" y="1250" rx="4" ry="4" width="40" height="60" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="750" cy="1260" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 720 1270 L 740 1270" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="732" y="1263" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 720 1290 L 740 1290" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="732" y="1283" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="670 1270 720 1270" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="667" y="1266" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">M1</text>
+<polyline points="670 1290 720 1290" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="667" y="1286" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="1080" y="1218" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">BICEP1</text>
+<text x="1080" y="1238" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">3-pin auxiliary</text>
+<rect x="1060" y="1240" rx="4" ry="4" width="40" height="80" stroke="#880000" stroke-width="1.5" fill="none"/>
+<ellipse cx="1070" cy="1250" rx="3" ry="3" stroke="#880000" stroke-width="1.5" fill="#880000"/>
+<path d="M 1040 1260 L 1060 1260" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="1253" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<path d="M 1040 1280 L 1060 1280" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="1273" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1040 1300 L 1060 1300" stroke="#880000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1052" y="1293" fill="#0000FF" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">3</text>
+<polyline points="990 1260 1040 1260" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="1256" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">CLK</text>
+<polyline points="990 1280 1040 1280" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="1276" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">3V</text>
+<polyline points="990 1300 1040 1300" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="987" y="1296" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="60" y="1365" fill="#334155" font-family="Arial, sans-serif" font-size="10pt" text-anchor="start" font-weight="normal">BICEP1 carries CLK / 3V / GND; it is not the S2 / +SV / GND servo connector named BICEP.</text>
+<rect x="1220" y="800" rx="0" ry="0" width="740" height="310" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="1240" y="830" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">05 / INDICATORS</text>
+<text x="1240" y="853" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Supplier symbols confirm LED pin 1 = anode, pin 2 = cathode.</text>
+<text x="1430" y="908" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">LED1</text>
+<text x="1430" y="928" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">KT-0805G / green</text>
+<path d="M 1462 976 L 1454 972 L 1458 968 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<path d="M 1454 984 L 1446 980 L 1450 976 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<path d="M 1470 950 L 1440 950" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1458" y="943" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="1448 962 1462 976" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1440 970 1454 984" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1390 950 L 1420 950" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1402" y="943" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<polyline points="1440 966 1440 934" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1420 938 L 1440 950 L 1420 964 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<text x="1720" y="908" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">R1</text>
+<text x="1720" y="928" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">1kΩ</text>
+<path d="M 1760 950 L 1740 950" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1748" y="943" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1680 950 L 1700 950" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1692" y="943" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<rect x="1700" y="942" rx="0" ry="0" width="40" height="16" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1290 950 1390 950" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1293" y="946" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">41</text>
+<polyline points="1470 950 1680 950" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1573" y="946" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">R1</text>
+<polyline points="1760 950 1900 950" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1897" y="946" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<text x="1430" y="1018" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">LED2</text>
+<text x="1430" y="1038" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">KT-0805B / blue</text>
+<path d="M 1460 1086 L 1452 1082 L 1456 1078 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<path d="M 1452 1094 L 1444 1090 L 1448 1086 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<path d="M 1470 1060 L 1440 1060" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1458" y="1053" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<polyline points="1446 1072 1460 1086" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1438 1080 1452 1094" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1390 1060 L 1420 1060" stroke="#800" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1402" y="1053" fill="#800" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<polyline points="1440 1076 1440 1044" stroke="#880000" stroke-width="1.5" fill="none"/>
+<path d="M 1420 1048 L 1440 1060 L 1420 1074 Z" stroke="#880000" stroke-width="1.5" fill="#880000" stroke-linejoin="round"/>
+<text x="1720" y="1018" fill="#0F172A" font-family="Arial, sans-serif" font-size="12pt" text-anchor="middle" font-weight="bold">R2</text>
+<text x="1720" y="1038" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="middle" font-weight="normal">1kΩ</text>
+<path d="M 1760 1060 L 1740 1060" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1748" y="1053" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">2</text>
+<path d="M 1680 1060 L 1700 1060" stroke="#000000" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+<text x="1692" y="1053" fill="#000000" font-family="Arial, sans-serif" font-size="7pt" text-anchor="middle" font-weight="normal">1</text>
+<rect x="1700" y="1052" rx="0" ry="0" width="40" height="16" stroke="#880000" stroke-width="1.5" fill="none"/>
+<polyline points="1290 1060 1390 1060" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1293" y="1056" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">42</text>
+<polyline points="1470 1060 1680 1060" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1573" y="1056" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">R2</text>
+<polyline points="1760 1060 1900 1060" stroke="#008800" stroke-width="1.5" fill="none"/>
+<text x="1897" y="1056" fill="#006B38" font-family="Arial, sans-serif" font-size="9pt" text-anchor="end" font-weight="normal">GND</text>
+<rect x="1220" y="1140" rx="0" ry="0" width="740" height="250" stroke="#CBD5E1" stroke-width="1" fill="none"/>
+<text x="1240" y="1170" fill="#0F172A" font-family="Arial, sans-serif" font-size="15pt" text-anchor="start" font-weight="bold">RECONSTRUCTION NOTES</text>
+<text x="1240" y="1193" fill="#64748B" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">An as-wired companion to the PCB, not a recovered original schematic.</text>
+<text x="1240" y="1228" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">All component IDs, footprint UUIDs, pad numbers and named nets are retained.</text>
+<text x="1240" y="1256" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">FH1 has four physical pads but only two electrical terminals (1 and 2).</text>
+<text x="1240" y="1284" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">The PCB export does not define external module circuitry or supply limits.</text>
+<text x="1240" y="1312" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Do not treat a netlist match or manufacturing DRC as circuit approval.</text>
+<text x="1240" y="1340" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Open the JSON in EasyEDA Standard; see the import notes before Update PCB.</text>
+<text x="1240" y="1370" fill="#334155" font-family="Arial, sans-serif" font-size="9pt" text-anchor="start" font-weight="normal">Source PCB SHA-256: 1ccdc89fb0ed…   |   Original PCB is unchanged.</text>
+</svg>

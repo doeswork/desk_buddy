@@ -1,0 +1,714 @@
+{
+  "retrieved_utc": "2026-09-19T14:33:38.336875+00:00",
+  "symbols": {
+    "C12891": {
+      "url": "https://lceda.cn/api/products/C12891/components?version=6.5.51",
+      "response_sha256": "14ee76ac490b9d9e05a8c718f09dd6cab075307649ef36119cdd875b45458bc2",
+      "title": "CL31A226KAHNNNE",
+      "uuid": "6596cfa97904606b0a27108659fa30e7",
+      "updated_at": "2026-09-19 05:02:31",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "5.8.20",
+          "c_para": {
+            "pre": "C?",
+            "name": "CL31A226KAHNNNE",
+            "package": "C1206",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer Part": "CL31A226KAHNNNE",
+            "Manufacturer": "SAMSUNG(三星)",
+            "Value": "22uF",
+            "Supplier Part": "C12891",
+            "JLCPCB Part Class": "Basic Part"
+          },
+          "puuid": "7bdec8012728462a85919a4d0d033579",
+          "uuid": "6596cfa97904606b0a27108659fa30e7",
+          "utime": 1542802902,
+          "x": 15,
+          "y": 0,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~15~0",
+        "shape": [
+          "PL~13 -8 13 8~#880000~1~0~none~rep2~0",
+          "PL~17 -8 17 8~#880000~1~0~none~rep3~0",
+          "P~show~1~1~0~0~180~rep4~0^^0~0^^M 0 -0 h10~#000000^^0~15~3~0~1~start~~~#000000^^0~5~-1~0~1~end~~~#000000^^0~7~0^^0~M 10 3 L 13 0 L 10 -3",
+          "P~show~1~2~30~0~0~rep5~0^^30~0^^M 30 -0 h-10~#000000^^0~15~3~0~2~end~~~#000000^^0~25~-1~0~2~start~~~#000000^^0~23~0^^0~M 20 -3 L 17 0 L 20 3",
+          "PL~10 0 13 0~#880000~1~0~none~rep6~0",
+          "PL~17 0 20 0~#880000~1~0~none~rep7~0"
+        ],
+        "BBox": {
+          "x": -4,
+          "y": -8,
+          "width": 38,
+          "height": 16
+        },
+        "colors": []
+      },
+      "footprint_uuid": "7bdec8012728462a85919a4d0d033579"
+    },
+    "C2293": {
+      "url": "https://lceda.cn/api/products/C2293/components?version=6.5.51",
+      "response_sha256": "e35415266e722849683dfe758c8bfbb3de93223bc8bb0d2bb4da64c42a9b5a4c",
+      "title": "XL-0805QBC",
+      "uuid": "cab21b4f5567a8ffaccdc0ea97064643",
+      "updated_at": "2026-09-19 05:16:30",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.23",
+          "c_para": {
+            "pre": "LED?",
+            "name": "XL-0805QBC",
+            "package": "LED0805-R-RD",
+            "Supplier": "LCSC",
+            "Manufacturer": "KENTO",
+            "Manufacturer Part": "KT-0805B",
+            "Supplier Part": "C2293",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "x": 0,
+          "y": -5,
+          "puuid": "82605a93a0be4c79a27d82f67f2aca29",
+          "uuid": "cab21b4f5567a8ffaccdc0ea97064643",
+          "utime": 1676468611,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~0~-5",
+        "shape": [
+          "PT~M -15 -18 L -11 -16 L -13 -14 Z ~#880000~1~0~#880000~gge26~0~",
+          "PT~M -11 -22 L -7 -20 L -9 -18 Z ~#880000~1~0~#880000~gge27~0~",
+          "P~show~0~2~-20~-5~180~gge28~0^^-20~-5^^M -20 -5 h 15~#800^^0~-1~-5~0~K~start~~~#800^^0~-9~-9~0~2~end~~~#800^^0~-8~-5^^0~M -5 -2 L -2 -5 L -5 -8",
+          "PL~-8 -11 -15 -18~#880000~1~0~none~gge35~0",
+          "PL~-4 -15 -11 -22~#880000~1~0~none~gge36~0",
+          "P~show~0~1~20~-5~0~gge37~0^^20~-5^^M 20 -5 h -15~#800^^0~1~-5~0~A~end~~~#800^^0~9~-9~0~1~start~~~#800^^0~8~-5^^0~M 5 -8 L 2 -5 L 5 -2",
+          "PL~-5 -13 -5 3~#880000~1~0~none~gge44~0",
+          "PT~M 5 1 L -5 -5 L 5 -12 Z ~#880000~1~0~#880000~gge45~0~"
+        ],
+        "BBox": {
+          "x": -21,
+          "y": -22,
+          "width": 42,
+          "height": 25
+        },
+        "colors": []
+      },
+      "footprint_uuid": "82605a93a0be4c79a27d82f67f2aca29"
+    },
+    "C2297": {
+      "url": "https://lceda.cn/api/products/C2297/components?version=6.5.51",
+      "response_sha256": "190695a863eb0d553bbe2cf89636ad7cb5105425ded86d4198bcdaa3eca84236",
+      "title": "0805G (Green)",
+      "uuid": "174fc9d3f6c85723c8c5def63b722ca6",
+      "updated_at": "2026-09-19 05:16:30",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.23",
+          "c_para": {
+            "pre": "LED?",
+            "name": "0805G (Green)",
+            "package": "LED0805-R-RD",
+            "Supplier": "LCSC",
+            "Manufacturer": "KENTO",
+            "Manufacturer Part": "KT-0805G",
+            "Supplier Part": "C2297",
+            "JLCPCB Part Class": "Basic Part"
+          },
+          "x": 0,
+          "y": -5,
+          "puuid": "82605a93a0be4c79a27d82f67f2aca29",
+          "uuid": "174fc9d3f6c85723c8c5def63b722ca6",
+          "utime": 1676468559,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~0~-5",
+        "shape": [
+          "PT~M -16 -18 L -12 -16 L -14 -14 Z ~#880000~1~0~#880000~gge26~0~",
+          "PT~M -12 -22 L -8 -20 L -10 -18 Z ~#880000~1~0~#880000~gge27~0~",
+          "P~show~0~2~-20~-5~180~gge28~0^^-20~-5^^M -20 -5 h 15~#800^^0~-1~-5~0~K~start~~~#800^^0~-9~-9~0~2~end~~~#800^^0~-8~-5^^0~M -5 -2 L -2 -5 L -5 -8",
+          "PL~-9 -11 -16 -18~#880000~1~0~none~gge35~0",
+          "PL~-5 -15 -12 -22~#880000~1~0~none~gge36~0",
+          "P~show~0~1~20~-5~0~gge37~0^^20~-5^^M 20 -5 h -15~#800^^0~1~-5~0~A~end~~~#800^^0~9~-9~0~1~start~~~#800^^0~8~-5^^0~M 5 -8 L 2 -5 L 5 -2",
+          "PL~-5 -13 -5 3~#880000~1~0~none~gge44~0",
+          "PT~M 5 1 L -5 -5 L 5 -12 Z ~#880000~1~0~#880000~gge45~0~"
+        ],
+        "BBox": {
+          "x": -21,
+          "y": -22,
+          "width": 42,
+          "height": 25
+        },
+        "colors": []
+      },
+      "footprint_uuid": "82605a93a0be4c79a27d82f67f2aca29"
+    },
+    "C28323": {
+      "url": "https://lceda.cn/api/products/C28323/components?version=6.5.51",
+      "response_sha256": "632415fc90daa2dda2a9c0dad27ca91a3ee3ad0c0ffdf4a019cef81a56d302d3",
+      "title": "CL21B105KBFNNNE",
+      "uuid": "e11771cc556d68362545db4859eeb82e",
+      "updated_at": "2026-09-19 05:02:30",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "5.8.20",
+          "c_para": {
+            "pre": "C?",
+            "name": "CL21B105KBFNNNE",
+            "package": "C0805",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer Part": "CL21B105KBFNNNE",
+            "Manufacturer": "SAMSUNG(三星)",
+            "Value": "1uF",
+            "Supplier Part": "C28323",
+            "JLCPCB Part Class": "Basic Part"
+          },
+          "puuid": "2ee8eb13a0124a108e622ce40c0c25a8",
+          "uuid": "e11771cc556d68362545db4859eeb82e",
+          "utime": 1542802425,
+          "x": 15,
+          "y": 0,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~15~0",
+        "shape": [
+          "PL~13 -8 13 8~#880000~1~0~none~rep2~0",
+          "PL~17 -8 17 8~#880000~1~0~none~rep3~0",
+          "P~show~1~1~0~0~180~rep4~0^^0~0^^M 0 -0 h10~#000000^^0~15~3~0~1~start~~~#000000^^0~5~-1~0~1~end~~~#000000^^0~7~0^^0~M 10 3 L 13 0 L 10 -3",
+          "P~show~1~2~30~0~0~rep5~0^^30~0^^M 30 -0 h-10~#000000^^0~15~3~0~2~end~~~#000000^^0~25~-1~0~2~start~~~#000000^^0~23~0^^0~M 20 -3 L 17 0 L 20 3",
+          "PL~10 0 13 0~#880000~1~0~none~rep6~0",
+          "PL~17 0 20 0~#880000~1~0~none~rep7~0"
+        ],
+        "BBox": {
+          "x": -4,
+          "y": -8,
+          "width": 38,
+          "height": 16
+        },
+        "colors": []
+      },
+      "footprint_uuid": "2ee8eb13a0124a108e622ce40c0c25a8"
+    },
+    "C2937625": {
+      "url": "https://lceda.cn/api/products/C2937625/components?version=6.5.51",
+      "response_sha256": "7ed096abbcdae7a4ca6cd033f826bc89ab1bb594613332d6a52bad9fca4e66c7",
+      "title": "PZ254V-11-03P_C2937625",
+      "uuid": "4dd8e5004bac4eb1a16b3b145b69092a",
+      "updated_at": "2026-09-19 02:03:39",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.51",
+          "x": 400,
+          "y": 300,
+          "c_para": {
+            "pre": "H?",
+            "name": "PZ254V-11-03P_C2937625",
+            "package": "HDR-TH_3P-P2.54-V-M_PZ254V-11-03P",
+            "Contributor": "LCSC",
+            "Supplier": "LCSC",
+            "Supplier Part": "C2937625",
+            "Manufacturer": "XFCN(兴飞)",
+            "Manufacturer Part": "PZ254V-11-03P",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "uuid": "4dd8e5004bac4eb1a16b3b145b69092a",
+          "puuid": "22f8016875094ca7b1960ce4c2fa59b2",
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "pre": "H?",
+          "name": "PZ254V-11-03P_C2937625",
+          "hasIdFlag": true,
+          "utime": 1766733531
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~400~300",
+        "shape": [
+          "R~390~280~2~2~20~40~#880000~1~0~none~gge1~0~",
+          "E~395~285~1.5~1.5~#880000~1~0~#880000~gge2~0",
+          "P~show~0~1~380~290~180~gge5~0^^380~290^^M380,290h10~#880000^^1~393.7~294~0~1~start~~~#0000FF^^1~389.5~289~0~1~end~~~#0000FF^^0~387~290^^0~M 390 293 L 393 290 L 390 287",
+          "P~show~0~2~380~300~180~gge6~0^^380~300^^M380,300h10~#880000^^1~393.7~304~0~2~start~~~#0000FF^^1~389.5~299~0~2~end~~~#0000FF^^0~387~300^^0~M 390 303 L 393 300 L 390 297",
+          "P~show~0~3~380~310~180~gge7~0^^380~310^^M380,310h10~#880000^^1~393.7~314~0~3~start~~~#0000FF^^1~389.5~309~0~3~end~~~#0000FF^^0~387~310^^0~M 390 313 L 393 310 L 390 307"
+        ],
+        "BBox": {
+          "x": 379,
+          "y": 279.6,
+          "width": 31,
+          "height": 40.4
+        },
+        "colors": []
+      },
+      "footprint_uuid": "22f8016875094ca7b1960ce4c2fa59b2"
+    },
+    "C32713268": {
+      "url": "https://lceda.cn/api/products/C32713268/components?version=6.5.51",
+      "response_sha256": "eb0c0506c60bcdbc0a5eed1206f15b75aa52c62a55ec62ae8ebd1c09a78de56f",
+      "title": "HX PZ2.54-1X2P ZZ",
+      "uuid": "5bb797349d684665a3b33009571ff3b6",
+      "updated_at": "2026-09-19 03:00:23",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.46",
+          "x": 400,
+          "y": 300,
+          "c_para": {
+            "pre": "U?",
+            "name": "HX PZ2.54-1X2P ZZ",
+            "package": "HDR-TH_2P-P2.54-V-M-3",
+            "Supplier": "LCSC",
+            "Supplier Part": "C32713268",
+            "Manufacturer": "hanxia(韩下)",
+            "Manufacturer Part": "HX PZ2.54-1x2P ZZ",
+            "Contributor": "lcsc",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "uuid": "5bb797349d684665a3b33009571ff3b6",
+          "utime": 1723977559,
+          "puuid": "c1e7930568a246c7aca1be33bf9ee5d4",
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "pre": "U?",
+          "name": "HX PZ2.54-1X2P ZZ",
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~400~300",
+        "shape": [
+          "R~390~285~2~2~20~30~#880000~1~0~none~gge1~0~",
+          "E~395~290~1.5~1.5~#880000~1~0~#880000~gge2~0",
+          "P~show~0~1~380~295~180~gge5~0^^380~295^^M380,295h10~#880000^^1~393.7~299~0~1~start~~~#0000FF^^1~389.5~294~0~1~end~~~#0000FF^^0~387~295^^0~M 390 298 L 393 295 L 390 292",
+          "P~show~0~2~380~305~180~gge6~0^^380~305^^M380,305h10~#880000^^1~393.7~309~0~2~start~~~#0000FF^^1~389.5~304~0~2~end~~~#0000FF^^0~387~305^^0~M 390 308 L 393 305 L 390 302"
+        ],
+        "BBox": {
+          "x": 379,
+          "y": 284.6,
+          "width": 31,
+          "height": 30.4
+        },
+        "colors": []
+      },
+      "footprint_uuid": "c1e7930568a246c7aca1be33bf9ee5d4"
+    },
+    "C474881": {
+      "url": "https://lceda.cn/api/products/C474881/components?version=6.5.51",
+      "response_sha256": "2dc2297d9ba8c8ee8e60ee91f9d1e610b3f12d74b8886aec54e7f7ce4365ada3",
+      "title": "KF301-5.0-2P",
+      "uuid": "45ddbab4559a43c6bc95d2ca22fb25a0",
+      "updated_at": "2026-09-19 05:31:13",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.3.22",
+          "x": 400,
+          "y": 300,
+          "c_para": {
+            "pre": "U?",
+            "name": "KF301-5.0-2P",
+            "package": "CONN-TH_P5.00_KF301-5.0-2P",
+            "Contributor": "LCSC",
+            "Supplier": "LCSC",
+            "Supplier Part": "C474881",
+            "Manufacturer": "KEFA(科发)",
+            "Manufacturer Part": "KF301-5.0-2P",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "uuid": "45ddbab4559a43c6bc95d2ca22fb25a0",
+          "puuid": "c444d117946441c3ab8b7492a6a9cd72",
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true,
+          "utime": 1582532522
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~400~300",
+        "shape": [
+          "R~390~285~2~2~20~30~#880000~1~0~none~gge1~0~",
+          "E~395~290~1.5~1.5~#880000~1~0~#880000~gge2~0",
+          "P~show~0~1~380~295~180~gge5~0^^380~295^^M380,295h10~#880000^^1~393.7~299~0~1~start~~~#0000FF^^1~389.5~294~0~1~end~~~#0000FF^^0~387~295^^0~M 390 298 L 393 295 L 390 292",
+          "P~show~0~2~380~305~180~gge6~0^^380~305^^M380,305h10~#880000^^1~393.7~309~0~2~start~~~#0000FF^^1~389.5~304~0~2~end~~~#0000FF^^0~387~305^^0~M 390 308 L 393 305 L 390 302"
+        ],
+        "BBox": {
+          "x": 378,
+          "y": 284.4,
+          "width": 32,
+          "height": 30.6
+        },
+        "colors": []
+      },
+      "footprint_uuid": "c444d117946441c3ab8b7492a6a9cd72"
+    },
+    "C492610": {
+      "url": "https://lceda.cn/api/products/C492610/components?version=6.5.51",
+      "response_sha256": "a5486b4116cc4f1672334695a659a138f617d2fd74376df305a88a8330ee40ad",
+      "title": "XF-506P",
+      "uuid": "d19a2d13971c4581bf3df09980249cff",
+      "updated_at": "2026-09-19 05:15:07",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.14",
+          "x": 400,
+          "y": 300,
+          "c_para": {
+            "pre": "FH?",
+            "name": "XF-506P",
+            "package": "FUSE-TH_XF-506P",
+            "Contributor": "LCSC",
+            "Supplier": "LCSC",
+            "Supplier Part": "C492610",
+            "Manufacturer": "XFCN(兴飞)",
+            "Manufacturer Part": "XF-506P",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "uuid": "d19a2d13971c4581bf3df09980249cff",
+          "puuid": "572dfad4c34444bab608b5dfef4e163a",
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true,
+          "utime": 1661246261
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~10~1000~1000~line~10~pixel~1~400~300",
+        "shape": [
+          "P~show~0~2~440~300~0~gge20~0^^440~300^^M 440 300 h -20~#880000^^0~418~303~0~2~end~~~#0000FF^^1~425~299~0~2~start~~~#0000FF^^0~423~300^^0~M 420 297 L 417 300 L 420 303",
+          "P~show~0~1~360~300~180~gge27~0^^360~300^^M 360 300 h 20~#880000^^0~382~303~0~1~start~~~#0000FF^^1~375~299~0~1~end~~~#0000FF^^0~377~300^^0~M 380 303 L 383 300 L 380 297",
+          "PL~380 300 420 300~#880000~1~0~none~gge34~0",
+          "R~389~296~~~22~8~#880000~1~0~none~gge35~0~",
+          "R~375~292~3~3~50~17~#880000~1~0~none~gge39~0~",
+          "PL~382 309 382 306 390 306 390 309~#880000~1~0~none~gge42~0",
+          "PL~410 309 410 306 418 306 418 309 418 309~#880000~1~0~none~gge45~0"
+        ],
+        "BBox": {
+          "x": 359,
+          "y": 289.6,
+          "width": 82,
+          "height": 19.4
+        },
+        "colors": []
+      },
+      "footprint_uuid": "572dfad4c34444bab608b5dfef4e163a"
+    },
+    "C49678": {
+      "url": "https://lceda.cn/api/products/C49678/components?version=6.5.51",
+      "response_sha256": "06bca3b0112d5420e84a2b6eabd5aa9b07f54406e93a1ccc76b28cdf541cec70",
+      "title": "CC0805KRX7R9BB104",
+      "uuid": "2f2c771dc147fb0210616ca49e419712",
+      "updated_at": "2026-09-19 05:02:31",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.47",
+          "c_para": {
+            "pre": "C?",
+            "name": "CC0805KRX7R9BB104",
+            "package": "C0805",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer Part": "CC0805KRX7R9BB104",
+            "Manufacturer": "YAGEO(国巨)",
+            "Value": "100nF",
+            "Supplier Part": "C49678",
+            "JLCPCB Part Class": "Basic Part"
+          },
+          "puuid": "2ee8eb13a0124a108e622ce40c0c25a8",
+          "uuid": "2f2c771dc147fb0210616ca49e419712",
+          "utime": 1726193578,
+          "x": 25,
+          "y": 45,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~25~45",
+        "shape": [
+          "PL~23 45 15 45~#A00000~1~0~none~gge14~0",
+          "P~show~0~2~45~45~0~gge17~0^^45~45^^M 35 45 h 10~#800^^0~31~45~0~2~end~~~#800^^0~39~41~0~2~start~~~#800^^0~58~45^^0~M 55 42 L 52 45 L 55 48",
+          "PL~27 37 27 53~#A00000~1~0~none~gge38~0",
+          "PL~35 45 27 45~#A00000~1~0~none~gge41~0",
+          "P~show~0~1~5~45~180~gge44~0^^5~45^^M 15 45 h -10~#800^^0~19~45~0~1~start~~~#800^^0~11~41~0~1~end~~~#800^^0~-8~45^^0~M -5 48 L -2 45 L -5 42",
+          "PL~23 53 23 37~#A00000~1~0~none~gge65~0"
+        ],
+        "BBox": {
+          "x": 3.9,
+          "y": 37,
+          "width": 42.1,
+          "height": 16
+        },
+        "colors": []
+      },
+      "footprint_uuid": "2ee8eb13a0124a108e622ce40c0c25a8"
+    },
+    "C7499336": {
+      "url": "https://lceda.cn/api/products/C7499336/components?version=6.5.51",
+      "response_sha256": "5564c1174412b0eca92f202dfcb8b6ae6dada3406e7e5adc3f299fd93e28990a",
+      "title": "ZX-PM2.54-1-20PY",
+      "uuid": "b2fd70abc3014ddcb064ee8419f0a308",
+      "updated_at": "2026-09-19 02:32:13",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.34",
+          "x": 400,
+          "y": 300,
+          "c_para": {
+            "pre": "U?",
+            "name": "ZX-PM2.54-1-20PY",
+            "package": "HDR-TH_20P-P2.54-V-F",
+            "Supplier": "LCSC",
+            "Supplier Part": "C7499336",
+            "Manufacturer": "Megastar(兆星)",
+            "Manufacturer Part": "ZX-PM2.54-1-20PY",
+            "Contributor": "lcsc",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "uuid": "b2fd70abc3014ddcb064ee8419f0a308",
+          "utime": 1691160547,
+          "puuid": "056e53c5990646b8a54edd935246880c",
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "pre": "U?",
+          "name": "ZX-PM2.54-1-20PY",
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~400~300",
+        "shape": [
+          "R~390~195~2~2~20~210~#880000~1~0~none~gge1~0~",
+          "E~395~200~1.5~1.5~#880000~1~0~#880000~gge2~0",
+          "P~show~0~1~380~205~180~gge41~0^^380~205^^M380,205h10~#880000^^1~393.7~209~0~1~start~~~#0000FF^^1~389.5~204~0~1~end~~~#0000FF^^0~387~205^^0~M 390 208 L 393 205 L 390 202",
+          "P~show~0~2~380~215~180~gge42~0^^380~215^^M380,215h10~#880000^^1~393.7~219~0~2~start~~~#0000FF^^1~389.5~214~0~2~end~~~#0000FF^^0~387~215^^0~M 390 218 L 393 215 L 390 212",
+          "P~show~0~3~380~225~180~gge43~0^^380~225^^M380,225h10~#880000^^1~393.7~229~0~3~start~~~#0000FF^^1~389.5~224~0~3~end~~~#0000FF^^0~387~225^^0~M 390 228 L 393 225 L 390 222",
+          "P~show~0~4~380~235~180~gge44~0^^380~235^^M380,235h10~#880000^^1~393.7~239~0~4~start~~~#0000FF^^1~389.5~234~0~4~end~~~#0000FF^^0~387~235^^0~M 390 238 L 393 235 L 390 232",
+          "P~show~0~5~380~245~180~gge45~0^^380~245^^M380,245h10~#880000^^1~393.7~249~0~5~start~~~#0000FF^^1~389.5~244~0~5~end~~~#0000FF^^0~387~245^^0~M 390 248 L 393 245 L 390 242",
+          "P~show~0~6~380~255~180~gge46~0^^380~255^^M380,255h10~#880000^^1~393.7~259~0~6~start~~~#0000FF^^1~389.5~254~0~6~end~~~#0000FF^^0~387~255^^0~M 390 258 L 393 255 L 390 252",
+          "P~show~0~7~380~265~180~gge47~0^^380~265^^M380,265h10~#880000^^1~393.7~269~0~7~start~~~#0000FF^^1~389.5~264~0~7~end~~~#0000FF^^0~387~265^^0~M 390 268 L 393 265 L 390 262",
+          "P~show~0~8~380~275~180~gge48~0^^380~275^^M380,275h10~#880000^^1~393.7~279~0~8~start~~~#0000FF^^1~389.5~274~0~8~end~~~#0000FF^^0~387~275^^0~M 390 278 L 393 275 L 390 272",
+          "P~show~0~9~380~285~180~gge49~0^^380~285^^M380,285h10~#880000^^1~393.7~289~0~9~start~~~#0000FF^^1~389.5~284~0~9~end~~~#0000FF^^0~387~285^^0~M 390 288 L 393 285 L 390 282",
+          "P~show~0~10~380~295~180~gge410~0^^380~295^^M380,295h10~#880000^^1~393.7~299~0~10~start~~~#0000FF^^1~389.5~294~0~10~end~~~#0000FF^^0~387~295^^0~M 390 298 L 393 295 L 390 292",
+          "P~show~0~11~380~305~180~gge411~0^^380~305^^M380,305h10~#880000^^1~393.7~309~0~11~start~~~#0000FF^^1~389.5~304~0~11~end~~~#0000FF^^0~387~305^^0~M 390 308 L 393 305 L 390 302",
+          "P~show~0~12~380~315~180~gge412~0^^380~315^^M380,315h10~#880000^^1~393.7~319~0~12~start~~~#0000FF^^1~389.5~314~0~12~end~~~#0000FF^^0~387~315^^0~M 390 318 L 393 315 L 390 312",
+          "P~show~0~13~380~325~180~gge413~0^^380~325^^M380,325h10~#880000^^1~393.7~329~0~13~start~~~#0000FF^^1~389.5~324~0~13~end~~~#0000FF^^0~387~325^^0~M 390 328 L 393 325 L 390 322",
+          "P~show~0~14~380~335~180~gge414~0^^380~335^^M380,335h10~#880000^^1~393.7~339~0~14~start~~~#0000FF^^1~389.5~334~0~14~end~~~#0000FF^^0~387~335^^0~M 390 338 L 393 335 L 390 332",
+          "P~show~0~15~380~345~180~gge415~0^^380~345^^M380,345h10~#880000^^1~393.7~349~0~15~start~~~#0000FF^^1~389.5~344~0~15~end~~~#0000FF^^0~387~345^^0~M 390 348 L 393 345 L 390 342",
+          "P~show~0~16~380~355~180~gge416~0^^380~355^^M380,355h10~#880000^^1~393.7~359~0~16~start~~~#0000FF^^1~389.5~354~0~16~end~~~#0000FF^^0~387~355^^0~M 390 358 L 393 355 L 390 352",
+          "P~show~0~17~380~365~180~gge417~0^^380~365^^M380,365h10~#880000^^1~393.7~369~0~17~start~~~#0000FF^^1~389.5~364~0~17~end~~~#0000FF^^0~387~365^^0~M 390 368 L 393 365 L 390 362",
+          "P~show~0~18~380~375~180~gge418~0^^380~375^^M380,375h10~#880000^^1~393.7~379~0~18~start~~~#0000FF^^1~389.5~374~0~18~end~~~#0000FF^^0~387~375^^0~M 390 378 L 393 375 L 390 372",
+          "P~show~0~19~380~385~180~gge419~0^^380~385^^M380,385h10~#880000^^1~393.7~389~0~19~start~~~#0000FF^^1~389.5~384~0~19~end~~~#0000FF^^0~387~385^^0~M 390 388 L 393 385 L 390 382",
+          "P~show~0~20~380~395~180~gge420~0^^380~395^^M380,395h10~#880000^^1~393.7~399~0~20~start~~~#0000FF^^1~389.5~394~0~20~end~~~#0000FF^^0~387~395^^0~M 390 398 L 393 395 L 390 392"
+        ],
+        "BBox": {
+          "x": 377.6,
+          "y": 195,
+          "width": 32.4,
+          "height": 210
+        },
+        "colors": []
+      },
+      "footprint_uuid": "056e53c5990646b8a54edd935246880c"
+    },
+    "C85840": {
+      "url": "https://lceda.cn/api/products/C85840/components?version=6.5.51",
+      "response_sha256": "cf5b492e1052f64c2d03a55b2cbe63cc6f27f88029944f7d2ff9f8f152365f08",
+      "title": "BLM21PG221SN1D",
+      "uuid": "96fded47fcd7090abe7c9628e7fc1917",
+      "updated_at": "2026-09-19 05:30:46",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.2.41",
+          "c_para": {
+            "pre": "L?",
+            "name": "BLM21PG221SN1D",
+            "Value": "220Ω",
+            "package": "L0805",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer": "muRata(村田)",
+            "Manufacturer Part": "BLM21PG221SN1D",
+            "Supplier Part": "C85840",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "x": 0,
+          "y": 0,
+          "puuid": "bcc8ca20dcc84ccfa139b07aa569efaf",
+          "uuid": "96fded47fcd7090abe7c9628e7fc1917",
+          "utime": 1567478020,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~0~0",
+        "shape": [
+          "P~show~0~2~20~0~0~gge2~0^^20~0^^M 20 0 h -3~#800^^0~13~0~0~2~end~~~#800^^0~21~-4~0~2~start~~~#800^^0~20~0^^0~M 17 -3 L 14 0 L 17 3",
+          "P~show~0~1~-20~0~180~gge9~0^^-20~0^^M -20 0 h 3~#800^^0~-13~0~0~1~start~~~#800^^0~-21~-4~0~1~end~~~#800^^0~-20~0^^0~M -17 3 L -14 0 L -17 -3",
+          "A~M -16.88 -0.07 A 4 3.9 0 1 1 -8.92 -0.06~~#880000~1~0~none~gge18~0",
+          "A~M -8.4 -0.07 A 4 3.9 0 1 1 -0.44 -0.07~~#880000~1~0~none~gge19~0",
+          "A~M 0.07 -0.07 A 4 3.9 0 1 1 8.03 -0.07~~#880000~1~0~none~gge20~0",
+          "A~M 8.7 -0.07 A 4 3.9 0 1 1 16.67 -0.06~~#880000~1~0~none~gge21~0"
+        ],
+        "BBox": {
+          "x": -22,
+          "y": -4.4,
+          "width": 44,
+          "height": 6.4
+        },
+        "colors": []
+      },
+      "footprint_uuid": "bcc8ca20dcc84ccfa139b07aa569efaf"
+    },
+    "C8678": {
+      "url": "https://lceda.cn/api/products/C8678/components?version=6.5.51",
+      "response_sha256": "3013b607c547a27cd8d7eefff55efa664bdbb9f42e04b1128dc6b29ca3c11b34",
+      "title": "SS34_C8678",
+      "uuid": "0eedab92e7aafdde01ddc57928d2356c",
+      "updated_at": "2026-09-19 05:19:50",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.5.23",
+          "c_para": {
+            "pre": "D?",
+            "name": "SS34_C8678",
+            "package": "SMA_L4.3-W2.6-LS5.2-RD",
+            "Supplier": "LCSC",
+            "Manufacturer Part": "SS34",
+            "Manufacturer": "MDD(辰达半导体)",
+            "Supplier Part": "C8678",
+            "JLCPCB Part Class": "Basic Part"
+          },
+          "x": 0,
+          "y": 0,
+          "puuid": "b7243d11a5f04fb7894887aaa3569585",
+          "uuid": "0eedab92e7aafdde01ddc57928d2356c",
+          "utime": 1673006327,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~10~1000~1000~line~5~pixel~5~0~0",
+        "shape": [
+          "P~show~0~2~20~0~0~gge2~0^^20~0^^M 20 0 h -15~#880000^^0~2~3~0~A~end~~~#0000FF^^0~11~-1~0~2~start~~~#0000FF^^0~8~0^^0~M 5 -3 L 2 0 L 5 3",
+          "P~show~0~1~-20~0~180~gge9~0^^-20~0^^M -20 0 h 15~#880000^^0~-2~3~0~K~start~~~#0000FF^^0~-11~-1~0~1~end~~~#0000FF^^0~-8~0^^0~M -5 3 L -2 0 L -5 -3",
+          "PT~M 5 -6 L -5 0 L 5 7 Z~#880000~1~0~none~gge19~0~",
+          "PL~-5 0 -5 8 -3 8 -3 7~#880000~1~0~none~gge24~0",
+          "PL~-5 0 -5 -8 -7 -8 -7 -7~#880000~1~0~none~gge26~0"
+        ],
+        "BBox": {
+          "x": -21,
+          "y": -8,
+          "width": 42,
+          "height": 16
+        },
+        "colors": []
+      },
+      "footprint_uuid": "b7243d11a5f04fb7894887aaa3569585"
+    },
+    "C88842": {
+      "url": "https://lceda.cn/api/products/C88842/components?version=6.5.51",
+      "response_sha256": "c7c2f640c5cdc9e275fc6cead2966b33bb58294ce28cb35b5b5d6c934201281e",
+      "title": "16YXJ330M6.3X11",
+      "uuid": "9a7be3fc502844649319d3a970264a71",
+      "updated_at": "2026-09-19 05:14:43",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "6.2.38",
+          "c_para": {
+            "pre": "C?",
+            "name": "16YXJ330M6.3X11",
+            "package": "CAP-TH_BD6.3-P2.50-D1.0-FD",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer": "Rubycon(红宝石)",
+            "Manufacturer Part": "16YXJ330M6.3X11",
+            "Value": "330uF",
+            "Supplier Part": "C88842",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "x": 15,
+          "y": 0,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "puuid": "1a9b494b74c34d3b879eb7f824b3824d",
+          "uuid": "9a7be3fc502844649319d3a970264a71",
+          "utime": 1566379131,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~15~0",
+        "shape": [
+          "PL~13 -8 13 8~#880000~1~0~none~rep2~0",
+          "P~show~1~1~0~0~180~rep3~0^^0~0^^M 0 -0 h10~#000000^^0~15~3~0~1~start~~~#000000^^0~5~-1~0~1~end~~~#000000^^0~7~0^^0~M 10 3 L 13 0 L 10 -3",
+          "P~show~1~2~30~0~0~rep4~0^^30~0^^M 30 -0 h-10~#000000^^0~15~3~0~2~end~~~#000000^^0~25~-1~0~2~start~~~#000000^^0~23~0^^0~M 20 -3 L 17 0 L 20 3",
+          "PL~10 0 13 0~#880000~1~0~none~rep5~0",
+          "PL~17 0 20 0~#880000~1~0~none~rep6~0",
+          "A~M20.222 -7.667 A9,10 0 0 0 19.747,7.193~~#880000~1~0~none~rep7~0",
+          "PL~5 -3 9 -3~#880000~1~0~none~rep8~0",
+          "PL~7 -5 7 -1~#880000~1~0~none~rep9~0"
+        ],
+        "BBox": {
+          "x": -2,
+          "y": -8,
+          "width": 34,
+          "height": 16
+        },
+        "colors": []
+      },
+      "footprint_uuid": "1a9b494b74c34d3b879eb7f824b3824d"
+    },
+    "C95781": {
+      "url": "https://lceda.cn/api/products/C95781/components?version=6.5.51",
+      "response_sha256": "209bfd401ee8aa570f8d57bbb8d4dd86897d8f24d1f692adfb0a1ab471e37fb3",
+      "title": "RC0805FR-071KL",
+      "uuid": "d45b5f61a0dc4b559ed4133cd704b4a5",
+      "updated_at": "2026-09-19 05:20:38",
+      "data": {
+        "head": {
+          "docType": "2",
+          "editorVersion": "5.8.20",
+          "c_para": {
+            "pre": "R?",
+            "name": "RC0805FR-071KL",
+            "package": "R0805",
+            "nameAlias": "Value",
+            "Supplier": "LCSC",
+            "Manufacturer": "YAGEO(国巨)",
+            "Manufacturer Part": "RC0805FR-071KL",
+            "Supplier Part": "C95781",
+            "Value": "1kΩ",
+            "JLCPCB Part Class": "Extended Part"
+          },
+          "x": 20,
+          "y": 0,
+          "importFlag": 0,
+          "c_spiceCmd": null,
+          "puuid": "b60f399a7a7e41848b2be1eb49c79141",
+          "uuid": "d45b5f61a0dc4b559ed4133cd704b4a5",
+          "utime": 1542951119,
+          "hasIdFlag": true
+        },
+        "canvas": "CA~1000~1000~#FFFFFF~yes~#CCCCCC~5~1000~1000~line~5~pixel~5~20~0",
+        "shape": [
+          "P~show~1~2~40~0~0~rep2~0^^40~0^^M 40 -0 h-10~#000000^^0~25~3~0~2~end~~~#000000^^0~35~-1~0~2~start~~~#000000^^0~33~0^^0~M 30 -3 L 27 0 L 30 3",
+          "P~show~1~1~0~0~180~rep3~0^^0~0^^M 0 -0 h10~#000000^^0~15~3~0~1~start~~~#000000^^0~5~-1~0~1~end~~~#000000^^0~7~0^^0~M 10 3 L 13 0 L 10 -3",
+          "R~10~-4~~~20~8~#880000~1~0~none~rep4~0"
+        ],
+        "BBox": {
+          "x": -4,
+          "y": -4,
+          "width": 48,
+          "height": 8
+        },
+        "colors": []
+      },
+      "footprint_uuid": "b60f399a7a7e41848b2be1eb49c79141"
+    }
+  }
+}

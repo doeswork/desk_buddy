@@ -12,9 +12,10 @@ MQTT settings are read at boot from the `mqtt` Preferences namespace.
 | --- | --- | --- |
 | Broker host | `server` | `mqtt.deskbuddy.ai` |
 | Broker port | `port` | `8883` |
-| Username | `user` | empty; must be configured |
-| Password | `password` | empty; must be configured |
-| Client ID | `client_id` | empty; must be configured |
+| Username | `user` | empty; normally configured because it also forms the topic prefix |
+| Password | `password` | empty; valid only if the broker permits it |
+| Client ID | `client_id` | empty; acceptance depends on the broker |
+| TLS transport | `tls` | `true` |
 
 The username also identifies the robot's topics:
 
@@ -31,8 +32,8 @@ Important transport behavior:
 - Topic direction is part of the contract. Firmware receives only `commands`, so its own events, photos, and third-party Vision results cannot enter the command dispatcher.
 - MQTT follows the saved TLS preference: local plaintext is supported; when TLS is enabled the ESP32 currently calls `setInsecure()` and does not verify the broker certificate.
 - PubSubClient uses QoS 0 and non-retained publishes. The subscription also uses QoS 0.
-- The ordinary MQTT buffer is `6144` bytes. Vendored ArduinoJson 7.2.1 allocates documents dynamically; the legacy `DynamicJsonDocument(512)` argument is not a parsing limit. Studio preflights the encoded capture command against the real MQTT buffer, including topic/header overhead.
-- Action handlers are synchronous. A long servo, base calibration, stencil step, photo capture, or OTA operation blocks dispatch and may prevent MQTT maintenance until it returns.
+- The ordinary MQTT packet buffer is `6144` bytes, including MQTT header and topic overhead. Vendored ArduinoJson 7.2.1 allocates documents dynamically; the legacy sizes in `StaticJsonDocument<128>` and `DynamicJsonDocument(512)` are not parsing limits. Studio preflights the encoded capture command against the real MQTT buffer.
+- Action handlers are synchronous. A long servo, stencil step, photo capture, or OTA operation blocks dispatch and may prevent MQTT maintenance until it returns. Base profile calibration pumps the MQTT client while publishing progress and services reconnection at stopped points, but it still cannot dispatch another command until it returns.
 - The receive path uses a single-command slot: one incoming command wakes the listen loop and is dispatched immediately. The slot is cleared only when its message is copied for dispatch, so a follow-up command received by MQTT maintenance immediately after the previous terminal response is preserved. Send one stateful command at a time and wait for its exact matching terminal response.
 
 ## 2. Request Envelope
@@ -54,22 +55,22 @@ Commands are JSON objects published to `{mqtt_user}/commands`.
 | `action` | Required | Exact, case-sensitive action name dispatched by the firmware |
 | `action_id` | Required | Nonempty string or JSON integer used to correlate replies; other JSON types are not recognized as IDs |
 | `sender` | Required | Nonempty caller identity. Never use `firmware`; messages with `sender:"firmware"` are ignored when recognized |
-| `phrase` | Optional | Scalar or array copied to the initial response and to response paths that preserve it |
+| `phrase` | Optional | Any JSON value copied to the initial response and to response paths that preserve it; arrays are copied element by element |
 | `use_model` / `useModel` | Optional | Any JSON value copied as `use_model` to the initial response and photo metadata |
-| `workflow_id` | Optional JSON integer | Copied to responses generated during this dispatch |
-| `workflow_event_id` | Optional JSON integer | Copied only when `workflow_id` is a JSON integer |
+| `workflow_id` | Optional JSON integer | Read as a signed integer and copied to responses only when nonnegative |
+| `workflow_event_id` | Optional JSON integer | Read only when `workflow_id` is an integer, then copied independently when nonnegative |
 
 Commands missing `sender` or `action_id` are rejected before dispatch and produce serial diagnostics only.
 
 ### Dispatch filtering and malformed requests
 
-- The callback tries to parse a `128`-byte JSON document. When parsing succeeds, `sender:"firmware"` is ignored. Other payloads are copied into the single receive slot and parsed again by the dispatcher.
-- JSON without `action`, invalid JSON, a request too large for the dispatch document, or an unknown/case-mismatched action produces serial diagnostics only.
+- The callback first parses using the legacy `StaticJsonDocument<128>` spelling. Under the vendored ArduinoJson 7.2.1 this document allocates dynamically, so `128` is not a payload cap. When parsing succeeds, `sender:"firmware"` is ignored; other payloads are copied into the single receive slot and parsed again by the dispatcher.
+- JSON without `action`, invalid JSON, a JSON allocation failure, or an unknown/case-mismatched action produces serial diagnostics only. The fixed receive limit is the `6144`-byte MQTT packet buffer described above.
 - Extra fields are generally ignored.
 
 ## 3. Response Lifecycle and Envelopes
 
-For a recognized action with an `action_id`, the controller first publishes:
+For a recognized action with an `action_id`, the controller first attempts to publish:
 
 ```json
 {
@@ -79,7 +80,7 @@ For a recognized action with an `action_id`, the controller first publishes:
 }
 ```
 
-Most actions later publish one terminal response:
+Most actions later attempt one terminal response:
 
 ```json
 {
@@ -114,11 +115,11 @@ Existing optional response fields include `type`, `phrase`, `workflow_id`, and `
 
 Response nuances:
 
-- `phrase` is always copied to the initial `in_progress`. Final `baseRotate`, `servo`, `controlik`, and `stencilCalibrate` responses also preserve it. Gripper, perch, calibration-value, calibration-write, and OTA terminal paths do not consistently preserve it.
+- `phrase` is always copied to the initial `in_progress`. Final `baseRotate`, `calibrate_base_rotation`, `servo`, `controlik`, `stencilCalibrate`, and photo-action responses also preserve it. Gripper, perch, calibration-value, calibration-write, and OTA terminal paths do not consistently preserve it.
 - `use_model` is emitted in the initial `in_progress` and photo metadata, not ordinary terminal responses.
 - Workflow fields are injected into normal in-progress, completed/failed, detailed, and photo messages. They are not included in ready, heartbeat, or debug messages.
-- `type` is included initially for photo actions, an explicitly supplied calibration subtype, and `calibrationvalues`. It is omitted initially for the other actions.
-- A detailed-result serialization failure places the raw result string under the result key. A detailed publish failure attempts a smaller `failed` response when an action ID exists.
+- `type` is included initially for photo actions, the dedicated `calibrate_base_rotation` action, an explicitly supplied calibration subtype, and `calibrationvalues`. It is omitted initially for the other actions.
+- If a handler's detailed result is not valid JSON, firmware places the raw result string under the result key. A detailed publish failure attempts a smaller `failed` response when an action ID exists.
 - A logical operation can complete at the MQTT level while reporting a state that requires more work. In particular, a stencil grab miss returns `status:"completed"` with `phase:"needs_adjustment"`.
 
 ### Action and terminal-result summary
@@ -128,12 +129,13 @@ Response nuances:
 | `gripper` | `completed` or `failed` | none |
 | `servo` | `completed` or `failed` | none |
 | `baseRotate` | `completed` or `failed` | `base_rotation` |
+| `calibrate_base_rotation` | `completed` or `failed` | `base_rotation` |
 | `controlik` | `completed` or `failed` | none |
 | `perch` | Always publishes `completed` after calling the moves | none |
 | `calibrate` | Calibration-specific `completed` or `failed` | saved calibration key or `base_rotation` |
 | `calibrationvalues` | `completed`, or `failed` if Preferences cannot open | `calibrationvalues` |
 | `stencilCalibrate` | `completed` or `failed` | `stencil_calibration` |
-| `photo` | Photo frame, then `completed`; capture/publish errors return `failed` | binary photo frame |
+| `photo` | Photo frame, then `completed`; capture/publish errors attempt `failed` when the connection remains usable | binary photo frame |
 | `detect_object` | Same as `photo` | binary photo frame |
 | `detect_color` | Same as `photo` | binary photo frame |
 | `calibrate_depth` | Same as `photo` | binary photo frame |
@@ -179,7 +181,7 @@ The gripper accepts either a named command or a direct position.
 | `command:"DROP"` | Opens to `180` and returns `completed` |
 | `command:"SOFTHOLD"` | Opens gradually while a stop input remains pressed and returns `completed` |
 | `position` | Direct position; negative/missing fails, values above `180` are clamped to `180` |
-| `speed` | Optional integer delay in milliseconds per degree for direct-position movement; default `10` |
+| `speed` | Optional integer delay in milliseconds per degree for direct-position movement; default `10`. It is not range-validated, so clients should use a nonnegative value |
 
 Named gripper commands are case-sensitive and must use the uppercase spellings above. If `command` is absent or unknown but a nonnegative `position` exists, the position form is used. The result is stored as `GRIPPER_ANGLE`. Gripper operations also emit separate debug messages.
 
@@ -244,9 +246,13 @@ The IK movement can still fail if the resulting elbow/wrist sequence is blocked 
 | --- | --- | --- |
 | `STATUS` | none | Updates encoder tracking, corrects position to zero if true north is pressed, and returns status |
 | `HOME` | `direction`; optional `speed` | Rotates until the true-north input is detected and makes position trusted |
-| `CALIBRATE` | `direction`; optional `speed` | Measures counts per revolution for one direction |
-| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Measures left and right counts-per-revolution by averaging several full revolutions each way. **Legacy:** prefer the dedicated `calibrate_base_rotation` action |
+| `CALIBRATE` | `direction`; optional `speed` | Homes using the selected speed, then measures one revolution in that direction at the fixed `18°` calibration offset |
+| `CALIBRATE_PROFILE` | optional `neutralServoAngle` | Measures one full revolution in each direction. **Legacy:** prefer the dedicated `calibrate_base_rotation` action |
 | `CALIBRATE_BOTH` | optional `neutralServoAngle` | Alias for `CALIBRATE_PROFILE` |
+| `ENCODER` | `direction`, positive `value` or `steps`; optional `speed` | Moves a number of firmware base steps; despite the name, the value is not raw encoder counts |
+| `STEPS` | `direction`, positive `value` or `steps`; optional `speed` | Same firmware-step movement as `ENCODER` |
+| `DEGREES` | `direction`, positive `value`; optional `speed` | Relative degree movement; requires rotation calibration |
+| `ANGLE` | `value` in `[0,360)`; optional `speed` | Shortest-path absolute target; requires calibrated counts and trusted position |
 
 #### `calibrate_base_rotation` (preferred)
 
@@ -256,11 +262,11 @@ Profiling is its own action rather than a `baseRotate` control type, so calibrat
 {"sender":"calibration_wizard","action_id":"base_profile_001","action":"calibrate_base_rotation","neutralServoAngle":90}
 ```
 
-`neutralServoAngle` is optional. When supplied it is applied and saved as the new stored neutral immediately, before any measuring, so the requested angle takes effect even if the run later fails. Omit it to start from the default neutral of `90` rather than the stored value, which keeps each run independent of how the previous one ended. Calibration never *learns* a neutral of its own.
+`neutralServoAngle` is optional. For this preferred action, it is recognized only when sent as a JSON integer; other JSON types are treated as omitted, so clients should send an actual number. When supplied it is applied and saved as the new stored neutral immediately, before any measuring, so the requested angle takes effect even if the run later fails. Omit it to start from the default neutral of `90` rather than the stored value, which keeps each run independent of how the previous one ended. The accepted range is `70..110`; values outside it fail. After the lap measurements, calibration may replace that neutral only when the encoder confirms a stable stop.
 
-The run homes to true north, then times `3` consecutive full revolutions in each direction and averages them into `leftCountsPerRev` / `rightCountsPerRev`. A direction is rejected with `revolution measurements inconsistent` when its revolutions disagree by more than `10%`, since averaging inconsistent readings would yield a confident-looking but wrong number.
+The run applies the requested neutral (or the default `90`), homes to true north, then measures one complete home-to-home revolution to the right and one to the left. Those measurements become `rightCountsPerRev` and `leftCountsPerRev` directly; there is no multi-revolution averaging or left/right timing-balance requirement. The calibration drive offset is `18` degrees from neutral. After the two laps, firmware searches for the true neutral within `70..110` and adopts it only if the encoder shows a stable stop; failure to find that neutral does not invalidate the measured counts, but the servo is stopped and the entered neutral is retained.
 
-Those two counts are the entire output, and they are what make a `LEFT` and `RIGHT` move of the same magnitude travel the same distance. The two directions do **not** need to take equal time: each is divided by its own count. The reply carries the same `base_rotation` detail object as `baseRotate`.
+Those two lap measurements are the calibration inputs that make a `LEFT` and `RIGHT` move of the same magnitude travel the same distance. The two directions do **not** need to take equal time: each is divided by its own count. The reply carries the same `base_rotation` detail object as `baseRotate`.
 
 ##### Progress telemetry
 
@@ -269,49 +275,45 @@ A profile run blocks for minutes, so it publishes non-terminal `status:"progress
 ```json
 {"sender":"firmware","status":"progress","action_id":"base_profile_001","type":"calibrate_base_rotation",
  "uptime_ms":91234,"free_heap":186692,
- "progress":{"event":"true_north_hit_ignored","measure_phase":"LEFT","phase":"measuring_left_revolution",
-             "drive_angle":80,"resting":90,"encoder_unwrapped":1180,"encoder_raw":2044,"base_counts":1180,
-             "true_north_pressed":true,"true_north_hits":4,"pulse_accepted":false,"pulse_ms":900,
-             "pulse_counts":400,"pulse_min_counts":4096,"ignored_pulses":2,"pass":1,
+ "progress":{"event":"rotating","measure_phase":"LEFT","phase":"measuring_left_lap",
+             "drive_angle":72,"resting":90,"encoder_unwrapped":1180,"encoder_raw":2044,"base_counts":1180,
+             "true_north_pressed":false,"true_north_hits":2,"pulse_accepted":false,"pulse_ms":5100,
+             "pulse_counts":32690,"pulse_min_counts":0,"ignored_pulses":0,"pass":1,
              "left_cpr":0,"right_cpr":0,"left_ms":0,"right_ms":0}}
 ```
 
-One is published on every true-north hit — accepted **and** rejected — on each phase transition, on every failure exit, and every `3000 ms` while waiting so a stall is distinguishable from a slow revolution. `event` values include:
+Progress is published on phase transitions, on failure exits, and every `3000 ms` while a long-running wait is active so a stall is distinguishable from a slow revolution. Current `event` values include:
 
 - `calibration_start`, `revolution_measured`, `calibration_complete`, `calibration_failed`
+- `finding_neutral_start`, `finding_neutral_probe`, `finding_neutral_out_of_bounds`, `finding_neutral_overshot`, `finding_neutral_exhausted`
 - `seek_true_north_start`, `seek_true_north_waiting`, `true_north_hit_initial`, `seek_true_north_timeout`, `seek_true_north_encoder_stuck`
-- `revolution_start`, `leaving_true_north`, `left_true_north`, `rotating`, `true_north_hit_accepted`, `true_north_hit_ignored`
-- `draining_ignored_pulse`, `drain_pulse_timeout`, `drain_pulse_encoder_stuck`
-- `revolution_timeout`, `revolution_encoder_stuck`, `revolution_too_small`
+- `revolution_start`, `leaving_true_north`, `left_true_north`, `confirming_release`, `release_confirmed`, `rotating`, `true_north_hit_accepted`
+- `leave_true_north_timeout`, `leave_true_north_encoder_stuck`, `revolution_timeout`, `revolution_encoder_stuck`, `revolution_too_small`
 
-Reading a stall: a rising `encoder_unwrapped` with no hits means the base turns but never reaches the switch; a static `encoder_unwrapped` means the servo is not moving; a climbing `ignored_pulses` with `pulse_counts` well below `pulse_min_counts` means the switch is retriggering before the minimum travel is met.
-| `ENCODER` | `direction`, positive `value`; optional `speed` | Moves a number of firmware base steps; despite the name, `value` is not raw encoder counts |
-| `STEPS` | `direction`, positive `value` or `steps`; optional `speed` | Same firmware-step movement as `ENCODER` |
-| `DEGREES` | `direction`, positive `value`; optional `speed` | Relative degree movement; requires rotation calibration |
-| `ANGLE` | `value` in `[0,360)`; optional `speed` | Shortest-path absolute target; requires calibrated counts and trusted position |
+`pulse_*` and `ignored_pulses` are retained diagnostic fields in the progress/status envelope; the current lap algorithm defines a revolution by leaving the active switch, confirming a `40 ms` release, and accepting the next press. Reading a stall: a rising `encoder_unwrapped` with no hit means the base turns but never reaches the switch; a static `encoder_unwrapped` means the servo is not moving.
 
 Accepted `direction` values are `LEFT` and `RIGHT`.
 
 Accepted speed labels are `veryslow`, `slow`, `regular`, `fast`, and `superfast`. Missing speed defaults to `slow` for `ENCODER`/`STEPS`, and `veryslow` for the other controls. An unrecognized supplied speed also becomes `veryslow`.
 
-Speed-angle offsets are fixed defaults derived from the neutral angle. Calibration does not learn or persist per-speed angles: an earlier design searched for a neutral that equalised left/right revolution *times* and saved it, so a partially completed run could persist a badly off-centre neutral that weakened every later drive until calibration stalled outright.
+Speed-angle offsets are fixed values derived from the neutral angle (`8`, `12`, `18`, `20`, and `30` degrees for `veryslow` through `superfast`); calibration does not learn separate per-speed offsets. The resulting servo angles are persisted with a successful profile. If the final neutral search changes the neutral, the runtime profile is recomputed immediately, but the current implementation saves only the revised neutral at that final step; after a reboot, clients can inspect `speedProfile` in a status reply if the discovered neutral differed from the entered value.
 
 There are `216` firmware steps per base revolution. `ENCODER` and `STEPS` use calibrated directional counts when available; otherwise they use an estimated `24576` counts per revolution. These step modes can therefore operate before calibration, but estimated movement is not precision motion.
 
 `DEGREES` requires at least usable calibrated counts. `ANGLE` additionally requires `positionTrusted:true`. Normal `ANGLE` commands add the saved `rot_off_deg`, normalize to `[0,360)`, and then choose the shortest direction. Missing `rot_off_deg` means a `0°` correction. Internal stencil moves disable this correction.
 
-`neutralServoAngle` is parsed as an integer. The calibration implementation ultimately accepts only `70..110`; values outside that range fail.
+The legacy `baseRotate/CALIBRATE_PROFILE` and `calibrate/base_rotation_profile` paths accept `neutralServoAngle` as a JSON integer or integer string. They also enforce `70..110`; values outside that range fail.
 
 Every terminal response contains `base_rotation`. Its fields are:
 
 - State: `calibrated`, `profileCalibrated`, `positionTrusted`, `baseAngleDegrees`, `basePositionCounts`.
 - Counts/math: `leftCountsPerRev`, `rightCountsPerRev`, `driveGearTeeth`, `baseGearTeeth`, `baseStepsPerRev`, `encoderSign`, directional/average counts per step, estimated counts fields, and `usingEstimatedStepCounts`.
 - Stencil/runtime: `rotationOffsetDegrees`.
-- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, measured-revolution count, timing difference, phase, pulse diagnostics, full-revolution timings, nested `speedProfile` angles, and `verySlowValidated`.
+- Profile calibration: `neutralServoAngle`, calibration drive/left/right angles, pass count, timing difference, phase, pulse diagnostics, full-revolution timings, nested `speedProfile` angles, and `verySlowValidated`.
 - Hardware diagnostics: true-north pressed/level/hit count and `rawEncoder`.
 - Failure: optional `error` while the outer status is `failed`.
 
-`verySlowValidated` is retained for clients that read it and now simply mirrors whether usable counts exist; there is no separate veryslow measurement phase. It is persisted as `vs_valid` in the `rot` namespace and exposed by `calibrationvalues` as `base_rotation_veryslowValidated`.
+`calibrationPasses` is `2` after a successful profile (one right lap and one left lap). `calibrationLastDiffMs` is the signed left-minus-right lap time, and `calibrationBalanced` is a retained compatibility field that the current implementation does not use to accept or reject the run. `verySlowValidated` is retained for clients that read it and mirrors whether usable counts exist; there is no separate veryslow measurement phase. It is persisted as `vs_valid` in the `rot` namespace and exposed by `calibrationvalues` as `base_rotation_veryslowValidated`.
 
 ## 5. Calibration API
 
@@ -530,7 +532,7 @@ Metadata before `payload` can contain:
 | `use_model` | Copied from either accepted spelling when present |
 | workflow fields | Copied when active |
 
-A decoder must locate the byte marker `,"payload":`, parse only the prefix as JSON after restoring `}`, and treat the bytes before the final envelope `}` as JPEG. Validate JPEG SOI `FF D8` and EOI `FF D9`. Do not pass the complete MQTT payload to a normal JSON parser.
+A decoder must locate the byte marker `,"payload":`, parse only the prefix as JSON after restoring `}`, then read exactly the declared `size` bytes as the JPEG and verify the trailing envelope `}`. Validate JPEG SOI `FF D8` and EOI `FF D9`. Do not pass the complete MQTT payload to a normal JSON parser.
 
 `calibrate_depth` may be consumed by an external visual-AI service, but any later `sender:"visual_ai"` result is not generated or interpreted as a command result by this ESP32 API.
 
@@ -606,7 +608,7 @@ The ESP32 requests the command-topic subscription and sends an initial heartbeat
 
 ### 8.2 Heartbeat
 
-Published to `{mqtt_user}/heartbeat` while heartbeat is enabled, nominally every `4000 ms` while the listen loop is idle:
+One simple heartbeat is attempted immediately after every successful MQTT connection, even when periodic heartbeat is disabled. While heartbeat is enabled, another is published to `{mqtt_user}/heartbeat` nominally every `4000 ms` while the listen loop is idle:
 
 ```json
 {
@@ -624,7 +626,7 @@ Published to `{mqtt_user}/heartbeat` while heartbeat is enabled, nominally every
 }
 ```
 
-Timestamps are generated after `configTime(0,0,...)` and therefore use UTC-style system time, despite having no timezone suffix.
+Timestamps are generated after `configTime(0,0,...)` and therefore use UTC-style system time, despite having no timezone suffix. Missing saved joint-angle keys appear as `0` in heartbeat telemetry, even though the arm servos themselves initialize to `90°` defaults.
 
 The code can optionally publish three additional hover snapshots to the event topic when `Heartbeat::send(false)` is called. Normal MQTT paths call `send(true)`, so those snapshot messages are not normally emitted.
 
@@ -642,7 +644,7 @@ Debug messages have no `action_id`, status, phrase, or workflow context. They ar
 
 | Namespace | MQTT-related data |
 | --- | --- |
-| `mqtt` | Broker host/port, username, password, client ID |
+| `mqtt` | Broker host/port, username, password, client ID, TLS/plaintext selection |
 | `config` | Current joint angles, hover points, perch values, stencil map/offsets, firmware compatibility version |
 | `rot` | Base counts, calibration/profile flags, trusted position, neutral and speed profile |
 | `ota` | Running/desired versions, URL/SHA, state, last attempt, last error |
@@ -663,18 +665,18 @@ Holding the BOOT button for three seconds performs a connection reset outside MQ
 
 | Situation | MQTT-observable result |
 | --- | --- |
-| Incoming command with `sender:"firmware"` | Ignored before command allocation/dispatch |
+| Incoming command with `sender:"firmware"` | Ignored before receive-slot assignment and dispatch |
 | Command JSON without `action` | Ignored |
-| Command exceeds the 6,144-byte MQTT receive buffer, cannot allocate JSON memory, or is malformed | May be discarded or produce serial parse diagnostics with no MQTT response; Studio rejects oversized encoded capture requests before publication |
+| MQTT packet exceeds the 6,144-byte receive buffer (including header/topic overhead), cannot allocate JSON memory, or contains malformed JSON | May be discarded or produce serial parse diagnostics with no MQTT response; Studio rejects oversized encoded capture requests before publication |
 | Dispatcher cannot parse JSON | No response |
 | Missing or unknown/case-mismatched `action` | No response |
-| Known action with ID | Initial `in_progress`, then action-specific behavior |
+| Known action with nonempty sender and ID | Attempts initial `in_progress`, then performs action-specific behavior |
 | Missing `sender` or `action_id` | Rejected before dispatch; no MQTT response |
 | Handler validation or motion failure | Usually `failed`; detailed base/stencil responses include nested `error` |
 | `calibrate` parse failure | Initial `in_progress` may already have published, then no terminal response |
 | Perch move blocked | Still reports `completed` |
 | Stencil grab misses | Reports `completed` with `phase:"needs_adjustment"` |
-| Photo WiFi/camera/capture/publish failure | Correlated `failed` event with a structured `error` object; no photo is published when capture fails |
+| Photo WiFi/camera/capture/publish failure | Attempts a correlated `failed` event with a structured `error` object; an incomplete stream can close the socket before that event is sent. No photo is published when capture fails |
 | OTA fails | `failed`; reason primarily in debug and OTA telemetry |
 | OTA succeeds | Reboots, usually before terminal `completed` |
 | Detailed-result MQTT publish fails | Attempts a smaller fallback `failed` response |
