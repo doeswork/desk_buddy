@@ -2,6 +2,10 @@
 
 Self-host and manage every service that runs Desk Buddy.
 
+Writing a routine for the robot to run? See **[WORKFLOWS.md](WORKFLOWS.md)**
+for the step vocabulary — detection, checks, and loops — and
+`../firmware/README.md` for the MQTT messages underneath it.
+
 ## Run
 
 ```bash
@@ -58,11 +62,31 @@ Validation commands (system operations are mocked except for an isolated,
 unprivileged temporary MQTT broker when Mosquitto is installed):
 
 ```bash
-QT_QPA_PLATFORM=offscreen python -m studio.services.network.tests.setup_tests
-QT_QPA_PLATFORM=offscreen python -m studio.ui.workspaces.network.tests
-QT_QPA_PLATFORM=offscreen python -m studio.services.network.tests.system_tests
-QT_QPA_PLATFORM=offscreen python -m studio.services.network.tests.tests
-QT_QPA_PLATFORM=offscreen python -m studio.smoke_test
+# from the repo root
+studio/run_tests.sh              # every test module
+studio/run_tests.sh calibration  # only modules matching a substring
+```
+
+The script picks `.venv/bin/python` and sets `QT_QPA_PLATFORM=offscreen`
+itself. Both matter: every test module imports PySide6 somewhere, and on a
+distro with an externally-managed Python that lives in the venv and nowhere
+else — so a bare `python -m studio...` fails on import before it reaches an
+assertion, which reads as a broken test rather than the wrong interpreter.
+
+To run one module directly, use the same interpreter:
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m studio.ui.workspaces.calibration.tests
+```
+
+Some modules do not pass on a plain Studio venv. `studio.services.vision.tests`
+needs Pillow, which is deliberately not in `studio/requirements.txt`: the
+vision worker's dependencies are installed by `services/vision/bootstrap.py`
+into an isolated `uv` runtime, so Studio never carries Torch and friends. Add
+it to the venv to run that module:
+
+```bash
+.venv/bin/pip install Pillow==11.3.0
 ```
 
 The adapters and authorization decisions have automated coverage. Actual

@@ -652,6 +652,664 @@ def test_commands_and_replies_use_the_two_real_topics() -> None:
     assert [topic for topic, _body in client.published] == ["buddy/commands"]
 
 
+# ---- verify, check, and repeat_until -------------------------------------
+#
+# The boxes below are real, captured from robot-1 on 2026-09-19 at 800x600.
+# The pink cap sat at 37.5mm and the green at 72.5mm by the nine-point grid,
+# and the pink box really is lower in the frame — which is the whole basis of
+# the closer/farther comparison, so the fixture keeps the true numbers.
+PINK_NEAR = [376.1, 268.7, 445.3, 338.1]     # 37.5mm: nearer, lower in frame
+PINK_FAR = [352.6, 1.2, 410.4, 130.8]        # 92.5mm: farther, higher up
+GREEN = [390.0, 139.3, 437.0, 175.1]         # 72.5mm, unmoved throughout
+
+
+def seen(payload, box, label="thing"):
+    """A detector verdict for one detection, as published on {robot}/vision."""
+    return {
+        "sender": "visual_ai", "action_id": payload["action_id"],
+        "status": "completed", "type": "detect_object",
+        "stage": "detection_only",
+        "selected_detection": {"label": label, "score": 0.42, "box_px": list(box)},
+        "detection_batch": {"image_width": 800, "image_height": 600,
+                            "prompt": label, "detections": [
+                                {"label": label, "score": 0.42, "box_px": list(box)}]},
+    }
+
+
+def nothing(payload, label="thing"):
+    """The verdict when the detector found nothing: a failure, on this topic."""
+    return {
+        "sender": "visual_ai", "action_id": payload["action_id"],
+        "status": "failed", "type": "detect_object", "stage": "detection_only",
+        "error": {"code": "no_detection", "message": f"No {label!r} detection."},
+        "detection_batch": {"image_width": 800, "image_height": 600,
+                            "prompt": label, "detections": []},
+    }
+
+
+def looking(*boxes):
+    """Answer each verify_object with the next staged box, then complete it."""
+    staged = list(boxes)
+
+    def reply(client, payload):
+        if payload["action"] == "detect_object":
+            box = staged.pop(0) if staged else None
+            verdict = seen(payload, box) if box is not None else nothing(payload)
+            client.deliver("buddy/vision", verdict)
+        return completed(payload)
+
+    return reply
+
+
+def stage(client, *boxes):
+    """Wire `looking` into a FakeClient's autoreply."""
+    reply = looking(*boxes)
+    client.autoreply = lambda payload: reply(client, payload)
+    return client
+
+
+def test_the_three_detection_subjects_differ_only_in_use_model() -> None:
+    """One firmware action, three jobs, and the flag set by the subject.
+
+    `use_model` decides whether the Vision worker moves the arm after it
+    projects the box. Taking it from the subject rather than the step is what
+    stops a verify_object from ever moving, however the step was written.
+    """
+    look = message_for({"subject": "detect_object", "phrase": "cup"}, "a")
+    grab = message_for({"subject": "reach_and_grab", "phrase": "cup"}, "b")
+    verify = message_for({"subject": "verify_object", "phrase": "cup",
+                          "name": "the cup"}, "c")
+
+    assert look["action"] == grab["action"] == verify["action"] == "detect_object"
+    assert look["use_model"] is False
+    assert grab["use_model"] is True
+    assert verify["use_model"] is False
+    # `name` is Studio's label for the observation; the robot never sees it.
+    assert "name" not in verify
+
+
+def test_a_step_cannot_make_a_verify_move_the_arm() -> None:
+    """The subject wins over anything the step says about use_model."""
+    body = message_for(
+        {"subject": "verify_object", "phrase": "cup", "use_model": True}, "a"
+    )
+    assert body["use_model"] is False
+
+
+def test_a_verify_that_finds_nothing_does_not_fail_the_run() -> None:
+    """Finding nothing answers the question; it does not end the workflow.
+
+    Every other detection subject treats an empty result as a failure,
+    because the steps after it were about to act on something absent. A
+    verify is a question, and "nothing there" is one of its answers — the
+    one a `missing` check is waiting for.
+    """
+    client = stage(FakeClient(), None)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "cup", "name": "cup"},
+        {"subject": "perch"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "complete", status.message
+    assert client.actions == ["detect_object", "perch"]
+
+
+def test_a_check_reads_the_observation_a_verify_named() -> None:
+    client = stage(FakeClient(), PINK_NEAR)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "check", "check": "found", "of": "pink"},
+        {"subject": "perch"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "complete", status.message
+    # The check never reached the robot: two commands, not three.
+    assert client.actions == ["detect_object", "perch"]
+    assert "found" in status.events[1].note
+
+
+def test_a_failed_check_stops_the_run() -> None:
+    """A check is an assertion. The steps after it assume it held."""
+    client = stage(FakeClient(), None)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "check", "check": "found", "of": "pink"},
+        {"subject": "perch"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert status.events[1].status == "failed"
+    # `perch` never ran: the run stopped at the failed assertion.
+    assert client.actions == ["detect_object"]
+
+
+def test_closer_and_farther_compare_two_observations() -> None:
+    """The real captured geometry: pink near, green behind it."""
+    client = stage(FakeClient(), PINK_NEAR, GREEN)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "check", "check": "closer", "of": "pink", "against": "green"},
+    ])
+    run.start()
+    assert run.status.state == "complete", run.status.message
+
+    # And the same pair, the other way round, is false.
+    client = stage(FakeClient(), PINK_NEAR, GREEN)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "check", "check": "farther", "of": "pink", "against": "green"},
+    ])
+    run.start()
+    assert run.status.state == "failed"
+
+
+def test_a_comparison_against_something_unseen_is_not_a_pass() -> None:
+    """Unanswerable is not true. A loop must keep going, not declare success."""
+    client = stage(FakeClient(), PINK_NEAR, None)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "check", "check": "farther", "of": "pink", "against": "green"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed"
+    assert "cannot compare" in status.events[2].note
+
+
+def test_repeat_until_goes_back_and_passes_on_the_second_look() -> None:
+    """The loop the pink-eraser routine needs.
+
+    First look: the cap is still nearer than the green one, so the condition
+    does not hold and the run goes back to the named step. Second look —
+    after the retried work — it is farther, and the run carries on.
+    """
+    client = stage(FakeClient(), PINK_NEAR, GREEN, PINK_FAR, GREEN)
+    run = Run(client, "buddy", [
+        {"subject": "perch", "name": "start"},
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "repeat_until", "until": "farther", "of": "pink",
+         "against": "green", "then": "start", "max_attempts": 4},
+        {"subject": "gripper", "command": "DROP"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "complete", status.message
+    # Round one, round two, then the step after the loop.
+    assert client.actions == [
+        "perch", "detect_object", "detect_object",
+        "perch", "detect_object", "detect_object",
+        "gripper",
+    ]
+    assert status.events[3].attempts == 2
+
+
+def test_repeat_until_gives_up_rather_than_looping_forever() -> None:
+    """A condition the robot can never satisfy still has to end the run."""
+    client = stage(FakeClient(), *([PINK_NEAR, GREEN] * 10))
+    run = Run(client, "buddy", [
+        {"subject": "perch", "name": "start"},
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "repeat_until", "until": "farther", "of": "pink",
+         "against": "green", "then": "start", "max_attempts": 3},
+        {"subject": "gripper", "command": "DROP"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert status.events[3].attempts == 3
+    assert "gave up" in status.events[3].problem
+    # It stopped at the repeat: the step after the loop never ran.
+    assert "gripper" not in client.actions
+    assert client.actions.count("perch") == 3
+
+
+def test_a_repeat_may_not_ask_for_more_attempts_than_the_ceiling() -> None:
+    """`max_attempts` may lower the bound; it may not raise it."""
+    from ..runner.run import MAX_ATTEMPTS, Run as _Run
+
+    limit = _Run._attempt_limit
+    assert limit({"max_attempts": 3}) == 3
+    assert limit({"max_attempts": 9999}) == MAX_ATTEMPTS
+    assert limit({}) == MAX_ATTEMPTS
+    assert limit({"max_attempts": "lots"}) == MAX_ATTEMPTS
+    assert limit({"max_attempts": 0}) == 1
+
+
+def test_a_repeat_that_names_no_step_to_return_to_fails_clearly() -> None:
+    """Better a named failure than a loop that quietly runs nothing again."""
+    client = stage(FakeClient(), PINK_NEAR, GREEN)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "repeat_until", "until": "farther", "of": "pink",
+         "against": "green", "then": "nowhere"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed"
+    assert "does not name a step" in status.events[2].problem
+
+
+def test_a_retried_block_does_not_keep_the_first_attempts_results() -> None:
+    """A view must not show round one's answer beside round two's."""
+    client = stage(FakeClient(), PINK_NEAR, GREEN, PINK_FAR, GREEN)
+    seen_states = []
+    run = Run(client, "buddy", [
+        {"subject": "perch", "name": "start"},
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "repeat_until", "until": "farther", "of": "pink",
+         "against": "green", "then": "start"},
+    ])
+    run.on_change(lambda status: seen_states.append(
+        [event.status for event in status.events]))
+    run.start()
+
+    assert run.status.state == "complete", run.status.message
+    # Somewhere in the middle the loop put the block back to waiting.
+    assert any(states[0] == "waiting" for states in seen_states[1:])
+
+
+def test_a_verify_waits_for_the_detector_not_the_firmware() -> None:
+    """The ordering that broke a live run, and the reason verify waits.
+
+    Captured from robot-1 on 2026-09-19: the firmware answered `completed` at
+    :33.967 and the detector published its result at :34.357 — 390ms later.
+    The runner advanced on the firmware's word, sent the next detection 5ms
+    after it, and got `detector_busy`; the first verdict then arrived after
+    its own step had ended and was recorded against nothing.
+
+    So a verify_object holds until the verdict lands. Here the firmware
+    replies immediately and the detector only speaks when `release` is
+    called, which is that timing with the delay made explicit.
+    """
+    client = FakeClient()
+    pending = []
+    client.autoreply = lambda payload: (
+        pending.append(payload) or completed(payload)
+        if payload["action"] == "detect_object" else completed(payload)
+    )
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "perch"},
+    ])
+    run.start()
+
+    # The firmware has finished, but the detector has not spoken. The run
+    # must still be on step 1 — nothing may be sent into a busy detector.
+    assert run.status.events[0].status == "pending"
+    assert client.actions == ["detect_object"]
+
+    client.deliver("buddy/vision", seen(pending[0], PINK_NEAR, "pink eraser"))
+
+    status = run.status
+    assert status.state == "complete", status.message
+    assert status.events[0].status == "complete"
+    assert client.actions == ["detect_object", "perch"]
+
+
+def test_a_verify_still_ends_when_the_detector_speaks_first() -> None:
+    """The other order, which is what a fast detector actually does."""
+    client = stage(FakeClient(), PINK_NEAR)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "check", "check": "found", "of": "pink"},
+    ])
+    run.start()
+    assert run.status.state == "complete", run.status.message
+
+
+def test_a_verify_that_never_hears_the_detector_times_out() -> None:
+    """Holding for a verdict must not mean holding forever."""
+    clock = Clock()
+    client = FakeClient()
+    client.autoreply = lambda payload: completed(payload)
+    run = Run(client, "buddy", [
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+    ], now=clock, timeout=30.0)
+    run.start()
+
+    assert run.status.events[0].status == "pending"
+    clock.value += 31.0
+    run.tick()
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert status.events[0].status == "timed_out"
+
+
+def test_a_reach_and_grab_waits_for_the_worker_not_the_photo() -> None:
+    """The bug that closed the gripper in mid-air.
+
+    Captured from robot-1 on 2026-09-19. `reach_and_grab` makes the Vision
+    worker drive baseRotate, controlik and GRAB itself, one command at a
+    time -- a sequence that ran for 30 seconds. But the firmware answers the
+    *photo* almost at once, and the runner took that as the step finishing:
+    it advanced 15 seconds early and published the next step's `perch` into
+    the middle of the worker's motion. Two conversations drove one arm, the
+    perch lifted it off the table mid-reach, and the GRAB closed on air.
+
+    The firmware's `completed` cannot end this step. Only the worker's own
+    terminal result can, because only it means the whole sequence is over.
+    """
+    client = FakeClient()
+    grabs = []
+    client.autoreply = lambda payload: (
+        grabs.append(payload) or completed(payload)
+        if payload["action"] == "detect_object" else completed(payload)
+    )
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "pink eraser"},
+        {"subject": "perch"},
+    ])
+    run.start()
+
+    # The step perches first, then looks: two commands, one step.
+    assert client.actions == ["perch", "detect_object"]
+    # The photo is answered, but the worker is still moving the arm. Nothing
+    # may be published until it says it has finished.
+    assert run.status.events[0].status == "pending"
+
+    client.deliver("buddy/vision", {
+        "sender": "visual_ai", "action_id": grabs[0]["action_id"],
+        "status": "completed", "type": "detect_object",
+        "stage": "reach_and_grab_completed", "grab_status": "completed",
+    })
+
+    status = run.status
+    assert status.state == "complete", status.message
+    assert client.actions == ["perch", "detect_object", "perch"]
+
+
+def test_a_failed_reach_and_grab_stops_the_run() -> None:
+    """A grab that failed may have left the arm somewhere unexpected."""
+    client = FakeClient()
+    grabs = []
+    client.autoreply = lambda payload: (
+        grabs.append(payload) or completed(payload)
+        if payload["action"] == "detect_object" else completed(payload)
+    )
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "pink eraser"},
+        {"subject": "perch"},
+    ])
+    run.start()
+    client.deliver("buddy/vision", {
+        "sender": "visual_ai", "action_id": grabs[0]["action_id"],
+        "status": "failed", "type": "detect_object",
+        "stage": "reach_and_grab_failed",
+        "error": {"code": "robot_command_failed",
+                  "message": "Firmware reported that gripper failed."},
+    })
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert status.events[0].status == "failed"
+    assert "gripper failed" in status.events[0].problem
+    # The step after it never ran, and with no retries budget it did not
+    # try again either.
+    assert client.actions == ["perch", "detect_object"]
+
+
+def test_the_workers_progress_reports_do_not_end_a_held_step() -> None:
+    """The second half of the mid-air grab, and a subtler bug than the first.
+
+    The Vision worker narrates a reach_and_grab while it runs it:
+    target_planned, executing_base, executing_ik, executing_grab -- all
+    `in_progress`, all arriving on the vision topic while the arm is moving.
+    The runner filed each one as the step's verdict, so by the time the
+    firmware answered the photo the step looked answered too, the hold did
+    not engage, and the next command went out mid-motion anyway.
+
+    Only `completed` and `failed` are verdicts. Everything else is the
+    worker thinking out loud.
+    """
+    client = FakeClient()
+    grabs = []
+    client.autoreply = lambda payload: (
+        grabs.append(payload) or completed(payload)
+        if payload["action"] == "detect_object" else completed(payload)
+    )
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "pink eraser"},
+        {"subject": "controlik", "distance": 100.0, "z_height": 0.0},
+    ])
+    run.start()
+
+    for stage in ("target_planned", "executing_base", "executing_ik",
+                  "executing_grab"):
+        client.deliver("buddy/vision", {
+            "sender": "visual_ai", "action_id": grabs[0]["action_id"],
+            "status": "in_progress", "type": "detect_object", "stage": stage,
+        })
+        # Still holding, every time: the arm is mid-sequence and nothing
+        # more may be published into it.
+        assert run.status.events[0].status == "pending", stage
+        assert client.actions == ["perch", "detect_object"], stage
+
+    client.deliver("buddy/vision", {
+        "sender": "visual_ai", "action_id": grabs[0]["action_id"],
+        "status": "completed", "type": "detect_object",
+        "stage": "reach_and_grab_completed",
+    })
+
+    status = run.status
+    assert status.state == "complete", status.message
+    assert client.actions == ["perch", "detect_object", "controlik"]
+
+
+# ---- retrying a missed grab ---------------------------------------------
+
+def grabbing(*outcomes):
+    """Answer each reach_and_grab with the next staged outcome.
+
+    Each outcome is True for a completed grab or a message for a failed one.
+    The firmware's own replies are always `completed`: it took the photo
+    either way, and it is the Vision worker's verdict that says whether the
+    grab worked.
+    """
+    staged = list(outcomes)
+
+    def reply(client, payload):
+        if payload["action"] == "detect_object":
+            outcome = staged.pop(0) if staged else True
+            done = completed(payload)
+            client.deliver("buddy/vision", {
+                "sender": "visual_ai", "action_id": payload["action_id"],
+                "status": "completed" if outcome is True else "failed",
+                "type": "detect_object",
+                "stage": ("reach_and_grab_completed" if outcome is True
+                          else "reach_and_grab_failed"),
+                **({} if outcome is True
+                   else {"error": {"code": "robot_command_failed",
+                                   "message": str(outcome)}}),
+            })
+            return done
+        return completed(payload)
+
+    return reply
+
+
+def test_a_reach_and_grab_perches_before_it_looks() -> None:
+    """The camera pose is part of the step, not the workflow's job.
+
+    The nine-point grid maps *this* pose to the table, so a photo from any
+    other one projects to the wrong place -- and the Vision worker rejects
+    the attempt when the pose does not match the profile. Making the perch
+    part of the step is also what lets a retry mean "look again properly"
+    rather than "look again from wherever the missed grab left the arm".
+    """
+    client = FakeClient()
+    client.autoreply = lambda payload: grabbing(True)(client, payload)
+    run = Run(client, "buddy", [{"subject": "reach_and_grab", "phrase": "cup"}])
+    run.start()
+
+    assert run.status.state == "complete", run.status.message
+    assert client.actions == ["perch", "detect_object"]
+    # Two commands, but still one step on the page.
+    assert run.status.total == 1
+
+
+def test_a_missed_grab_is_retried_from_the_perch() -> None:
+    """The point of `retries`: try again rather than stopping the routine."""
+    client = FakeClient()
+    reply = grabbing("Firmware reported that gripper failed.", True)
+    client.autoreply = lambda payload: reply(client, payload)
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "pink eraser", "retries": 2},
+        {"subject": "gripper", "command": "DROP"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "complete", status.message
+    # Missed once, perched and looked again, then carried on.
+    assert client.actions == [
+        "perch", "detect_object", "perch", "detect_object", "gripper",
+    ]
+    assert status.events[0].retried == 1
+    assert status.events[0].status == "complete"
+
+
+def test_retries_run_out_and_the_run_then_fails() -> None:
+    """A budget, not a promise. A grab that never works still ends the run."""
+    client = FakeClient()
+    reply = grabbing(*(["gripper failed"] * 6))
+    client.autoreply = lambda payload: reply(client, payload)
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "pink eraser", "retries": 2},
+        {"subject": "gripper", "command": "DROP"},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert status.events[0].retried == 2
+    # One first go plus two retries, and the step after it never ran.
+    assert client.actions.count("detect_object") == 3
+    assert "gripper" not in client.actions
+
+
+def test_no_retries_means_one_attempt() -> None:
+    """Zero is a real answer: try once, and let a person decide."""
+    client = FakeClient()
+    reply = grabbing("gripper failed")
+    client.autoreply = lambda payload: reply(client, payload)
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "cup", "retries": 0},
+    ])
+    run.start()
+
+    assert run.status.state == "failed"
+    assert client.actions.count("detect_object") == 1
+
+
+def test_retries_are_clamped_to_the_allowed_range() -> None:
+    """0 to 10, whatever the file says."""
+    from ..runner.run import MAX_RETRIES, MIN_RETRIES, Run as _Run
+
+    limit = _Run._retry_limit
+    assert limit({"retries": 0}) == MIN_RETRIES == 0
+    assert limit({"retries": 3}) == 3
+    assert limit({"retries": 10}) == MAX_RETRIES == 10
+    assert limit({"retries": 99}) == MAX_RETRIES
+    assert limit({"retries": -5}) == MIN_RETRIES
+    assert limit({"retries": "lots"}) == MIN_RETRIES
+    # Absent means no retries, so an existing workflow behaves as before.
+    assert limit({}) == MIN_RETRIES
+
+
+def test_the_robot_never_sees_the_retries_field() -> None:
+    """`retries` is Studio's bookkeeping; the firmware has no idea."""
+    body = message_for(
+        {"subject": "reach_and_grab", "phrase": "cup", "retries": 4}, "a"
+    )
+    assert "retries" not in body
+    assert body["use_model"] is True
+
+
+def test_a_perch_that_fails_does_not_go_on_to_look() -> None:
+    """Looking from an unknown pose would project to the wrong place."""
+    client = FakeClient()
+    client.autoreply = lambda payload: (
+        {"sender": "firmware", "action_id": payload["action_id"],
+         "status": "failed", "error": "servo stalled"}
+        if payload["action"] == "perch" else completed(payload)
+    )
+    run = Run(client, "buddy", [
+        {"subject": "reach_and_grab", "phrase": "cup", "retries": 1},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "failed", status.message
+    assert "could not perch" in status.events[0].problem
+    assert "detect_object" not in client.actions
+
+
+def test_a_retry_keeps_the_loop_and_the_retry_budget_apart() -> None:
+    """`repeat_until` counts blocks; `retries` counts grabs within one step.
+
+    Both are bounded, and neither spends the other's budget: here the grab
+    misses once inside the first pass round the loop, retries, succeeds, and
+    the loop still gets its own full count of attempts.
+    """
+    client = FakeClient()
+    verdicts = ["gripper failed", True]
+    looks = [PINK_NEAR, GREEN, PINK_FAR, GREEN]
+
+    def reply(payload):
+        if payload["action"] != "detect_object":
+            return completed(payload)
+        if payload.get("use_model"):
+            outcome = verdicts.pop(0) if verdicts else True
+            client.deliver("buddy/vision", {
+                "sender": "visual_ai", "action_id": payload["action_id"],
+                "status": "completed" if outcome is True else "failed",
+                "type": "detect_object",
+                "stage": ("reach_and_grab_completed" if outcome is True
+                          else "reach_and_grab_failed"),
+                **({} if outcome is True
+                   else {"error": {"message": str(outcome)}}),
+            })
+        else:
+            box = looks.pop(0) if looks else PINK_FAR
+            client.deliver("buddy/vision", seen(payload, box))
+        return completed(payload)
+
+    client.autoreply = reply
+    run = Run(client, "buddy", [
+        {"subject": "perch", "name": "start"},
+        {"subject": "reach_and_grab", "phrase": "pink eraser", "retries": 2},
+        {"subject": "verify_object", "phrase": "pink eraser", "name": "pink"},
+        {"subject": "verify_object", "phrase": "green eraser", "name": "green"},
+        {"subject": "repeat_until", "until": "farther", "of": "pink",
+         "against": "green", "then": "start", "max_attempts": 3},
+    ])
+    run.start()
+
+    status = run.status
+    assert status.state == "complete", status.message
+    # The grab spent one retry; the loop went round twice.
+    assert status.events[1].retried == 1
+    assert status.events[4].attempts == 2
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_")]

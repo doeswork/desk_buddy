@@ -30,7 +30,7 @@ namespace {
   }
 }
 
-void ActionPerch::run(const String& message) {
+bool ActionPerch::run(const String& message) {
   ArmServos::begin();
 
   Serial.println("[Perch] start");
@@ -39,6 +39,7 @@ void ActionPerch::run(const String& message) {
   if (deserializeJson(doc, message) != DeserializationError::Ok) {
     Serial.print("[Perch] JSON parse error: ");
     Serial.println(message);
+    return false;
   }
 
   auto settings = loadSettings();
@@ -46,9 +47,10 @@ void ActionPerch::run(const String& message) {
                 settings.elbow, settings.wrist, settings.twist,
                 settings.minDist, settings.midDist, settings.maxDist);
 
-  ArmServos::moveTo(ArmServos::Wrist, settings.wrist);
-  ArmServos::moveTo(ArmServos::Elbow, settings.elbow);
-  ArmServos::moveTo(ArmServos::Twist, settings.twist);
+  if (!ArmServos::moveTo(ArmServos::Wrist, settings.wrist)) return false;
+  if (!ArmServos::moveTo(ArmServos::Elbow, settings.elbow)) return false;
+  if (!ArmServos::moveTo(ArmServos::Twist, settings.twist)) return false;
 
   Serial.println("[Perch] done");
+  return true;
 }

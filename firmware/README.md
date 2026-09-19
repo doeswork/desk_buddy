@@ -2,12 +2,21 @@
 
 The firmware listens for JSON commands on the command topic, publishes lifecycle replies on the event topic, and keeps photos and heartbeat telemetry on their own channels. Every command must include a nonempty `sender` and unique `action_id`.
 
+Topics are rooted at the robot's own name, so a robot called `robot-1` uses
+`robot-1/commands` and so on. `esp32_5` below is just an example root.
+
 - Command topic: `esp32_5/commands`
 - Event topic: `esp32_5/events`
 - Photo topic: `esp32_5/photos`
 - Vision result topic: `esp32_5/vision`
 - Heartbeat topic: `esp32_5/heartbeat`
 - Typical fields in replies: `sender:"firmware"`, `action_id`, `status:"in_progress"| "completed"| "failed"`, optional `type`, optional data object.
+
+Two senders publish on these topics and they mean different things. The robot
+signs its replies `sender:"firmware"` and only ever reports what *it* did. The
+Vision worker signs its results `sender:"visual_ai"` on the vision topic, and
+it is the only source of what was actually seen. The firmware never inspects
+an image.
 
 ---
 ## Base Rotate — `action: "baseRotate"`
@@ -84,11 +93,26 @@ Backward-compatible step alias:
 {"action":"baseRotate","action_id":"73c","controlType":"STEPS","direction":"LEFT","speed":"veryslow","steps":6,"sender":"ai_server"}
 ```
 
+Rotate to an absolute angle. `value` is a compass-style bearing that firmware
+normalizes against its own tracked position and reaches by the shorter way
+round, so this is the form to use when something has computed *where* the
+base should point rather than how far to turn it — the Vision worker's
+reach-and-grab uses exactly this.
+```json
+{"action":"baseRotate","action_id":"75","controlType":"ANGLE","value":340.0,"speed":"veryslow","sender":"ai_server"}
+```
+- `value` must satisfy `0 <= value < 360`. **Negative angles are rejected**
+  with `"invalid value"`, so a calibrated target of `-20°` is sent as `340`.
+- Requires a calibrated base with a trusted position; it fails with
+  `"base rotation is not calibrated"` or `"base position is not trusted"`
+  rather than guessing.
+- The saved stencil offset `rot_off_deg` is added to the target at runtime.
+
 Fields:
-- `controlType`: `"STATUS" | "HOME" | "CALIBRATE" | "CALIBRATE_PROFILE" | "CALIBRATE_BOTH" | "STEPS" | "ENCODER"`
+- `controlType`: `"STATUS" | "HOME" | "CALIBRATE" | "CALIBRATE_PROFILE" | "CALIBRATE_BOTH" | "STEPS" | "ENCODER" | "ANGLE"`
 - `direction`: `"LEFT" | "RIGHT"` for commands that move in a specified direction
 - `speed`: `"veryslow" | "slow" | "regular" | "fast" | "superfast"`; base rotation initially uses neutral offsets of 8, 12, 18, 20, and 30. Profile calibration may independently move the left/right `veryslow` angles toward neutral, and those learned angles are persisted. For `"ENCODER"`/`"STEPS"`, omitted speed defaults to `slow`; explicit speed values are honored.
-- `value`: firmware steps when `controlType` is `"ENCODER"`; 216 steps is one full base rotation.
+- `value`: firmware steps when `controlType` is `"ENCODER"`, where 216 steps is one full base rotation; an absolute bearing in `[0, 360)` when `controlType` is `"ANGLE"`.
 - `steps`: optional alias for `value` when `controlType` is `"STEPS"`
 - `neutralServoAngle`: optional neutral override for `"CALIBRATE_PROFILE"` or `"CALIBRATE_BOTH"`
 - `calibrated:false` no longer blocks `"ENCODER"`/`"STEPS"` movement; firmware uses estimated counts until real calibration succeeds.
@@ -156,6 +180,41 @@ Position
 ```
 - `position`: 0–180, `speed`: delay per degree (ms)
 
+### `GRAB` reports whether it caught anything
+
+`GRAB` is the one command whose `failed` is a normal outcome rather than a
+fault. `handleGrab` opens to 180, then closes one degree at a time toward 0,
+watching the two touch switches `STOP_PIN_1` and `STOP_PIN_2`:
+
+- **Either pin reads LOW** — something is between the jaws. Firmware stops
+  there, saves that angle, and replies `completed`.
+- **Neither pin trips by 0** — the jaws closed on air. Firmware reopens to
+  180 and replies `failed`.
+
+So `status:"failed"` on a `GRAB` means *"I closed and found nothing"*, and
+the gripper is left **open**, not clamped shut. It is a miss, not a broken
+servo and not a dropped message. A caller that treats it as an error should
+say "the grab missed"; a caller that wants another go should re-aim and send
+`GRAB` again, because the failure has already reset the jaws.
+
+The reply carries no error text — it is a bare `{"status":"failed"}` with no
+`error` or `message` key. The detail is on the event topic as `debug` lines,
+which are worth reading when a grab keeps missing:
+
+```json
+{"sender":"firmware","debug":"gripper","msg":"handleGrab: p=90 pin1=1 pin2=1"}
+{"sender":"firmware","debug":"gripper","msg":"handleGrab: no button detected, reopening"}
+```
+
+`pin1`/`pin2` are logged every 30 degrees. `1` is untripped. A full run of
+`pin1=1 pin2=1` from 180 down to 0 is the signature of a miss — and, if it
+happens with an object plainly between the jaws, of a sensor or wiring fault
+rather than an aiming one.
+
+`DROP` simply opens to 180 and always replies `completed`; it has no sensing
+and cannot fail. A `GRAB` that fails while `DROP` succeeds is therefore the
+expected pattern when the arm is over empty table, not evidence of a problem.
+
 ---
 ## Servo Angles — `action: "servo"`
 Set a single arm servo.
@@ -175,6 +234,15 @@ Move arm based on distance and z height. Nonzero z uses the calibrated trapezoid
 - `z_height`: float mm (optional, default 0; valid range 0–50; nonzero values require legacy-named hover_*_120 calibrations for the z=50 top edge)
 - Saved stencil calibration offset `ik_off_mm` is added to `distance` at runtime and clamped to `>= 0`.
 - Requests outside the trapezoid fail. For example, if z=0 min is 0mm and z=50 min is 30mm, then `distance:0,z_height:50` fails while `distance:15,z_height:25` is on the slanted boundary.
+
+**Any nonzero `z_height` needs the optional z=50 calibration.** Check
+`ik_z50_calibrated` in the `calibrationvalues` dump before using one: a robot
+with only `hover_over_min/mid/max` saved is calibrated for the table plane
+only, and every `z_height > 0` request it receives is rejected. That is a
+common state — the z=50 points are optional and are not part of the normal
+setup — so a routine that wants to lift an object over another one has to
+either calibrate `hover_min_120`/`hover_mid_120`/`hover_max_120` first or
+stay at `z_height:0` and slide along the table.
 
 ---
 ## Stencil Calibration — `action: "stencilCalibrate"`
@@ -341,9 +409,9 @@ Take a photo
 {"action":"photo","action_id":"60","sender":"ai_server"}
 ```
 
-Object detection (with optional phrase)
+Object detection
 ```json
-{"action":"detect_object","action_id":"61","phrase":["red cup","green bottle"],"sender":"ai_server"}
+{"action":"detect_object","action_id":"61","phrase":"red cup","use_model":false,"sender":"ai_server"}
 ```
 
 Color detection
@@ -351,6 +419,115 @@ Color detection
 {"action":"detect_color","action_id":"62","sender":"ai_server"}
 ```
 These send `in_progress`, publish the binary JPEG on the photo topic, then send a truthful `completed` or structured `failed` event.
+
+### `phrase` is one string, not a list
+
+The Vision worker requires a **scalar string**. A list — even a list of one —
+is rejected before any photo is taken, with a result of
+`{"code":"invalid_request","message":"A scalar detection phrase is required."}`
+on the vision topic. Older examples in this file showed
+`["red cup","green bottle"]`; that shape does not work against the current
+worker. To look for two things, send two detections.
+
+### `use_model` decides whether the robot moves
+
+- `use_model:false` (or absent) — look only. The worker publishes what it saw
+  and nothing moves.
+- `use_model:true` — **the arm moves.** The worker projects the detected box
+  through the nine-point calibration grid and then drives the robot itself,
+  issuing its own `baseRotate` → `controlik` → `gripper GRAB` as separate
+  commands with `rg-`-prefixed action IDs.
+
+That second mode is covered in *Vision-driven reach and grab* below, because
+its timing is the part that is easy to get wrong.
+
+### The firmware's reply is about the photo, never the detection
+
+The robot has no detector. Its `completed` for a `detect_object` means only
+*"I took a picture and published it"*. What was in the frame — and, for a
+`use_model` request, whether the whole reach-and-grab sequence finished —
+arrives separately on the vision topic from `sender:"visual_ai"`.
+
+Two observed consequences, both measured on a live robot:
+
+- The verdict lands **after** the firmware's reply, by ~390 ms in a captured
+  run. A caller that advances on the firmware's `completed` and immediately
+  sends another detection gets
+  `{"code":"detector_busy","message":"The detector already has an outstanding request..."}`,
+  and the first verdict then arrives orphaned.
+- Detection is genuinely probabilistic. The same unmoved scene can answer
+  `no_detection` on one frame and detect confidently on the next; scores near
+  the model's box threshold (0.4 for the default model) flip between frames.
+  Phrasing matters more than expected — on robot-1, `"pink eraser"` and
+  `"green eraser"` returned *no detection at all* while `"pink object"` and
+  `"green object"` detected 6 times out of 6 on the identical scene. If a
+  phrase keeps missing, try a more generic noun before assuming the object
+  cannot be seen.
+
+### Reading a photo off the photo topic
+
+The photo topic does not carry a bare JPEG. Each message is a JSON header
+with the raw image bytes appended after the `"payload":` key:
+
+```text
+{"schema":"desk_buddy.photo.v1","sender":"firmware","action_id":"…",
+ "content_type":"image/jpeg","width":800,"height":600,…,"payload":<JPEG bytes>
+```
+
+The header is not valid JSON on its own and the whole message is not valid
+UTF-8, so parsing it as either fails. Scan for the JPEG markers instead —
+`ff d8 ff` for the start, `ff d9` for the end — and slice between them.
+
+---
+## Vision-driven reach and grab
+
+Sending `detect_object` with `use_model:true` hands one photo to the Vision
+worker and lets it drive the robot. The worker is a separate process; the
+firmware is not aware that any of this is happening beyond receiving ordinary
+commands. In order, the worker:
+
+1. detects the phrase in the published frame and picks the best box;
+2. projects that box's table-contact point through the nine-point grid into a
+   base angle and an IK distance, rejecting anything outside the calibrated
+   workspace;
+3. reads `calibrationvalues` and refuses to move unless
+   `motion_calibration_ready` is true and the robot's current perch matches
+   the pose the grid was calibrated at;
+4. sends `baseRotate` (`controlType:"ANGLE"`), then `controlik`, then
+   `gripper GRAB` — each a normal command with its own `rg-…` action ID,
+   waiting for each terminal reply before the next.
+
+It narrates progress on the vision topic as `status:"in_progress"` with a
+`stage`: `target_planned`, `executing_base`, `executing_ik`, `executing_grab`.
+The sequence ends with `reach_and_grab_completed` or `reach_and_grab_failed`.
+
+**Only `completed`/`failed` on the vision topic mean the sequence is over.**
+This is the trap. The firmware answers the *photo* almost immediately, and on
+a captured robot-1 run it said `completed` about 15 seconds into a sequence
+that ran for 30. Anything that treats that reply — or one of the `stage`
+progress messages — as the end of the step and sends its own next command is
+now driving the arm at the same time as the worker. Observed result: a
+`perch` published mid-sequence lifted the arm off the table while the worker
+was still reaching, and the `GRAB` closed on air a couple of inches up.
+
+So a caller must wait for the worker's own terminal result, and must not
+publish anything to the robot in the meantime.
+
+Preconditions worth checking before blaming the aim, each of which produces a
+distinct `failed` code on the vision topic:
+
+- `missing_calibration_profile` — no active nine-point profile for this
+  robot. Studio stores an "active" pointer per robot; without it every
+  `use_model` request fails immediately, however good the detection is.
+- `calibration_pose_mismatch` — the saved perch no longer matches the pose
+  the profile was captured at. Perching first is what keeps the camera where
+  the grid expects it, which is why a retry should re-perch rather than look
+  again from wherever a failed grab left the arm.
+- `calibration_resolution_mismatch` — the camera resolution changed.
+- `detection_outside_calibrated_workspace` — the object was seen but its
+  table-contact point falls outside the calibrated `-30..+30°`, `0..120 mm`
+  area.
+- `motion_calibration_not_ready` — base or table-plane IK is not calibrated.
 
 ---
 ## Heartbeat
@@ -387,5 +564,26 @@ After a successful update, the ESP32 will reboot automatically. See `GITHUB_OTA_
 ## Response Patterns
 - Each valid command → `in_progress` then `completed`. If something goes wrong mid‑send (e.g., MQTT publish fails), you’ll get `status:"failed"` with the same `action_id`.
 - `type` in replies mirrors the action or calibration subtype (e.g., `perch_elbow_angle`, `calibrationvalues`, `detect_object`). Data objects appear under their own keys (`base_rotation`, `calibrationvalues`, etc.).
+- **`failed` is not always an error.** A `gripper GRAB` that closes on nothing
+  replies `failed` by design and leaves the jaws open — that is a miss to act
+  on, not a fault to report. Read it alongside the gripper `debug` lines
+  before concluding anything is broken.
+- Some replies carry no reason at all. A failed `GRAB` is a bare
+  `{"sender":"firmware","action_id":…,"status":"failed"}` with no `error` or
+  `message` key, so a caller that prints `payload["error"]` shows nothing
+  useful. Detailed failures nest their reason under the result object
+  (`base_rotation.error`, `stencil_calibration.error`) rather than at the top
+  level.
+- Correlate strictly on `action_id`, and compare it as text: firmware echoes
+  it back as either a JSON string or an integer depending on what was sent.
+- One stateful command at a time. The ESP32 dispatches synchronously from a
+  single-message slot, so a second command sent while one is still running
+  can be dropped entirely — which looks identical to a lost message.
+- A command can be acknowledged and then leave the robot unreachable. During
+  this session's testing `robot-1` re-connected to the broker roughly every
+  50 seconds under load ("session taken over" in the broker log), which
+  showed up as `Timed out waiting for … acknowledgement` rather than as
+  anything wrong with the command. Check the broker log for repeated
+  reconnects before hunting for a logic bug.
 
 Use these templates directly or adapt them to your tooling to drive the ESP32 over MQTT. Ensure every command sets a unique `action_id` so you can pair requests and replies.

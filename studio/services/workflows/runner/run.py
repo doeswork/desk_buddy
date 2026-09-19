@@ -51,6 +51,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from ...network.pub_sub.robot_topics import command_topic, event_topic, vision_topic
+from .checks import COMPARISONS, describe, evaluate
 
 # Studio identifies itself as the sender on every command it publishes.
 # Never "firmware" -- §2 says the firmware ignores messages claiming that.
@@ -61,12 +62,42 @@ SENDER = "studio"
 # runner's own bookkeeping.
 RESERVED = ("sender", "action_id", "action", "status")
 
+# Step fields Studio uses itself and the robot has never heard of. `name`
+# labels an observation so a later check can refer to it; the check fields
+# describe a condition. Stripped from the envelope rather than rejected,
+# because the file format is deliberately open-ended.
+LOCAL_FIELDS = (
+    "name", "check", "of", "against", "until", "max_attempts", "then",
+    "retries",
+)
+
 # The Rails-era subject that was not a firmware action name. `map_subject_to_action`
 # existed to translate exactly this one; the step palette now writes
 # `baseRotate` directly, but hand-written and older workflow files still say
 # `rotate`, and silently publishing an unknown action would get no reply at
 # all rather than an error worth reading.
-SUBJECT_ALIASES = {"rotate": "baseRotate"}
+SUBJECT_ALIASES = {
+    "rotate": "baseRotate",
+    # Three subjects, one firmware action. `detect_object` is the only thing
+    # the robot and the Vision worker understand, but "look at it", "pick it
+    # up" and "look so a check can read it" are three different jobs, and a
+    # workflow that says which one it means is readable in a way that one
+    # subject plus a boolean flag is not. The difference between them is
+    # `use_model`, which `message_for` fills in from the subject below -- so
+    # the flag is a property of the verb rather than something to remember.
+    "reach_and_grab": "detect_object",
+    "verify_object": "detect_object",
+}
+
+# Whether a subject's detection may move the robot. `use_model` true is what
+# makes the Vision worker run baseRotate/controlik/GRAB itself after it has
+# projected the box; false only looks. Set from the subject and not taken
+# from the step, so `verify_object` can never move the arm by a typo.
+DETECTION_MOVES = {
+    "detect_object": False,
+    "verify_object": False,
+    "reach_and_grab": True,
+}
 
 # Photo actions: photo, detect_object, detect_color, calibrate_depth.
 #
@@ -98,10 +129,45 @@ STEP_TIMEOUT = 60.0
 # in_progress rather than a second movement.
 RETRY_DELAYS = (1.0, 5.0)
 
+# Steps the runner answers itself. Everything else is a firmware action and
+# goes on the wire; these never do -- there is no `check` or `repeat_until`
+# command, and publishing one would wait out the timeout for a reply that
+# cannot come. They are resolved in `_run_local` the moment they are reached.
+CHECK = "check"
+REPEAT_UNTIL = "repeat_until"
+LOCAL_SUBJECTS = (CHECK, REPEAT_UNTIL)
+
+# A repeat that never passes its check must still end. This bounds the number
+# of times one `repeat_until` may send the run backwards; a workflow may ask
+# for fewer with `max_attempts`, never more. Chosen to be worth the wait on a
+# routine whose every attempt is a physical grab.
+MAX_ATTEMPTS = 10
+
+# How many times a `reach_and_grab` may try again after a missed grab, and
+# the ceiling its own `retries` is clamped to. Zero is a legal answer, and
+# the one to use when a person is watching and would rather intervene than
+# have the arm reach again.
+MIN_RETRIES = 0
+MAX_RETRIES = 10
+
+# `reach_and_grab` perches before it looks, always, rather than trusting the
+# workflow to have done it. The nine-point grid is a mapping from *this*
+# camera pose to the table, so a photo taken from anywhere else projects to
+# the wrong place -- and the Vision worker rejects the attempt outright when
+# the pose does not match the profile it calibrated. Making it part of the
+# step is what lets a retry mean "look again properly" instead of "look
+# again from wherever the failed grab left the arm".
+PERCH_FIRST = "perch"
+
 
 def action_for(subject: str) -> str:
     """The firmware `action` name a step's `subject` publishes as."""
     return SUBJECT_ALIASES.get(subject, subject)
+
+
+def is_local(subject: str) -> bool:
+    """Whether the runner answers this step itself instead of publishing it."""
+    return subject in LOCAL_SUBJECTS
 
 
 def topic_for(robot: str) -> str:
@@ -144,15 +210,24 @@ def message_for(step: dict[str, Any], action_id: str) -> dict[str, Any]:
     copied through untouched: `models.config.workflows` deliberately keeps
     step dictionaries open-ended so a custom action still round-trips, and
     the runner has no business being stricter than the file format.
+
+    Two exceptions, both belonging to Studio rather than the robot. `name` is
+    the label a later check calls an observation by, and `use_model` is set
+    from the subject for a detection subject -- so a `verify_object` cannot
+    move the arm however its step was written, and a `reach_and_grab` cannot
+    quietly fail to.
     """
+    subject = str(step.get("subject", ""))
     body = {
         key: value
         for key, value in step.items()
-        if key != "subject" and key not in RESERVED
+        if key != "subject" and key not in RESERVED and key not in LOCAL_FIELDS
     }
     body["sender"] = SENDER
     body["action_id"] = action_id
-    body["action"] = action_for(str(step.get("subject", "")))
+    body["action"] = action_for(subject)
+    if subject in DETECTION_MOVES:
+        body["use_model"] = DETECTION_MOVES[subject]
     return body
 
 
@@ -229,10 +304,33 @@ class StepEvent:
     sent_at: float = 0.0
     reply: dict[str, Any] = field(default_factory=dict)
     problem: str = ""
+    # How many times this step has run. Only a `repeat_until` sends the chain
+    # backwards, so only its own count grows past one -- but every step keeps
+    # the field, because a step inside a loop really does run more than once
+    # and a view showing "attempt 2" needs to know that from the event alone.
+    attempts: int = 0
+    # What a local step decided, in words: "found pink eraser at 0.42",
+    # "cannot compare: both are at the same depth". Empty for a step that
+    # went to the robot, whose answer is in `reply` instead.
+    note: str = ""
+    # Which command of a multi-command step is in flight. A `reach_and_grab`
+    # publishes a `perch` and then the detection, and both are one step on
+    # the page -- so the event has to remember which of the two it is
+    # currently waiting on. Empty for every ordinary step.
+    phase: str = ""
+    # Retries already spent on a missed grab, counted separately from
+    # `attempts` because a retry re-runs this step alone while `attempts`
+    # counts how often a `repeat_until` sent the whole block round.
+    retried: int = 0
 
     @property
     def action(self) -> str:
         return action_for(self.subject)
+
+    @property
+    def local(self) -> bool:
+        """Whether the runner answers this step rather than the robot."""
+        return is_local(self.subject)
 
     @property
     def finished(self) -> bool:
@@ -311,6 +409,16 @@ class Run:
         # arrived first is read when the step finishes; one that arrives
         # after is applied to the step it names.
         self._verdicts: dict[str, dict[str, Any]] = {}
+        # Named observations, by the `name` a `verify_object` step gave its
+        # look. A check reads these rather than the raw verdict map, because
+        # a name survives the loop going round again while an action_id does
+        # not: the second look at the pink cap replaces the first under the
+        # same name, which is exactly what a condition should read.
+        self._observations: dict[str, dict[str, Any]] = {}
+        # Set by `_fail_step` when a `reach_and_grab` still has retries left:
+        # the position to send again once the caller is outside the lock.
+        # Consumed by `_resend_after_failure`, never read twice.
+        self._retry_from: int | None = None
         self._listeners: list[Callable[[RunStatus], None]] = []
         # A robot on loopback can reply from inside publish(), so _send ->
         # _publish -> _on_reply -> _advance -> _send is a real cycle rather
@@ -478,10 +586,43 @@ class Run:
                         return
                     self._queued = None
                     event = self._events[position]
+                    # A `check` or `repeat_until` never reaches the robot.
+                    # Settle it here and carry straight on to whichever step
+                    # it names -- forward for a pass, backward for a retry --
+                    # without ever marking it pending, because nothing is in
+                    # flight and no reply is coming.
+                    settled = event.local
+                    if settled:
+                        following, local_status = self._run_local(position)
+                if settled:
+                    if local_status is not None:
+                        # Outside the lock, like every other _notify: a
+                        # listener may read status, and that takes the lock.
+                        self._notify(local_status)
+                    if following is None:
+                        # The check ended the run -- failed, or simply out of
+                        # attempts. Nothing follows it.
+                        return
+                    if following >= len(self._events):
+                        # A check that passed as the last step finishes the
+                        # run, and _advance is what knows how to end one.
+                        self._advance(following)
+                        return
+                    position = following
+                    continue
+
+                with self._lock:
+                    if self._state != "running":
+                        return
+                    event = self._events[position]
                     action_id = uuid.uuid4().hex
                     self._events[position] = replace(
                         event, status="pending", action_id=action_id,
-                        sent_at=self._now(),
+                        sent_at=self._now(), attempts=event.attempts + 1,
+                        # A reach_and_grab starts by perching; its detection
+                        # is published once that lands. Every other step has
+                        # no phase and publishes itself.
+                        phase=PERCH_FIRST if event.subject == "reach_and_grab" else "",
                     )
                     self._pending = action_id
                     self._retries = 0
@@ -513,7 +654,12 @@ class Run:
             event = self._events[position]
             if event.status != "pending" or not event.action_id:
                 return
-            body = message_for(event.step, event.action_id)
+            if event.phase == PERCH_FIRST:
+                # The first half of a reach_and_grab: put the camera back at
+                # the pose the grid was calibrated from before looking.
+                body = message_for({"subject": PERCH_FIRST}, event.action_id)
+            else:
+                body = message_for(event.step, event.action_id)
         # Outside the lock: a publish can block on the socket, and a reply
         # arriving on the network thread must not wait behind it.
         self._client.publish(topic_for(self._robot), body, qos=1)
@@ -551,11 +697,60 @@ class Run:
             event = self._current_event()
             if event is None:
                 return
-            if not is_terminal(event.action, payload):
+            # While perching, the reply being matched is the perch's, so it
+            # is that action's terminal shape that ends this phase -- not the
+            # detection's.
+            in_flight = PERCH_FIRST if event.phase == PERCH_FIRST else event.action
+            if not is_terminal(in_flight, payload):
                 # in_progress, or a progress update mid-action. Proof the robot
                 # heard us, so the retry clock stops -- but not the timeout,
                 # which is what catches an action that starts and never ends.
                 self._retries = len(self._retry_delays)
+                return
+
+            # The perch half of a reach_and_grab just landed. Either it
+            # failed -- in which case looking from an unknown pose would be
+            # meaningless -- or the camera is now where the grid was
+            # calibrated from and the detection half goes out.
+            if event.phase == PERCH_FIRST:
+                if succeeded(PERCH_FIRST, payload):
+                    detect_id = uuid.uuid4().hex
+                    self._events[event.position] = replace(
+                        event, phase="", action_id=detect_id, sent_at=self._now(),
+                    )
+                    self._pending = detect_id
+                    self._retries = 0
+                    perched = event.position
+                    status = None
+                else:
+                    problem = problem_from(payload)
+                    self._events[event.position] = replace(
+                        event, status="failed", reply=dict(payload),
+                        problem=f"could not perch before looking: {problem}",
+                    )
+                    self._pending = ""
+                    self._state = "failed"
+                    self._message = (
+                        f"Step {event.position + 1} failed: could not perch "
+                        f"before looking: {problem}"
+                    )
+                    perched = None
+                    status = self._snapshot()
+
+        if event.phase == PERCH_FIRST:
+            # Publishing outside the lock, like every other publish here.
+            if perched is not None:
+                self._publish(perched)
+                return
+            self._release()
+            self._notify(status)
+            return
+
+        with self._lock:
+            if self._state != "running" or str(reply_id) != self._pending:
+                return
+            event = self._current_event()
+            if event is None:
                 return
 
             # A detection that already failed outranks the firmware's word.
@@ -563,11 +758,44 @@ class Run:
             # detector is reporting what was in it, which is what the next
             # step depends on.
             verdict = self._verdicts.get(self._pending)
-            if verdict is not None and verdict.get("status") == "failed":
+            if verdict is not None and verdict.get("status") == "failed" and not (
+                event.subject == "verify_object"
+            ):
                 status = self._fail_step(event, verdict)
+            elif succeeded(event.action, payload) and (
+                verdict is None and self._awaits_verdict(event)
+            ):
+                # `verdict` here is only ever a terminal one: `_on_vision`
+                # files the worker's `in_progress` progress reports --
+                # target_planned, executing_base, executing_ik -- separately,
+                # precisely so they cannot be mistaken for the sequence
+                # having finished. Reading them as an answer is what let a
+                # reach_and_grab advance while the arm was still moving.
+                # The firmware has finished, but the detector has not spoken,
+                # and this step exists to produce that verdict. Measured on a
+                # live robot: the firmware's `completed` arrived 390ms before
+                # the detector's result, and advancing on it sent the next
+                # detection 5ms later -- straight into `detector_busy`, with
+                # the first verdict landing after its own step had ended and
+                # so recorded against nothing.
+                #
+                # So hold the step open. `_on_vision` completes it when the
+                # verdict lands, and the step timeout still bounds the wait.
+                self._retries = len(self._retry_delays)
+                self._events[event.position] = replace(event, reply=dict(payload))
+                return
             elif succeeded(event.action, payload):
+                # A `verify_object` is a question, so its answer is recorded
+                # rather than judged -- including "nothing found", which is a
+                # perfectly good answer to "is the cap still there?" and the
+                # one a `missing` check is waiting for. Every other detection
+                # subject keeps the old behaviour: finding nothing is a
+                # failure, because the steps after it were going to act on
+                # something that is not there.
+                self._remember(event, verdict)
                 self._events[event.position] = replace(
-                    event, status="complete", reply=dict(payload)
+                    event, status="complete", reply=dict(payload),
+                    note=self._note_for(event, verdict),
                 )
                 self._pending = ""
                 advance = event.position + 1
@@ -583,6 +811,8 @@ class Run:
                 status = self._snapshot()
 
         if advance is None:
+            if self._resend_after_failure(status):
+                return
             self._release()
             self._notify(status)
             return
@@ -610,13 +840,67 @@ class Run:
         reply_id = str(reply_id)
 
         status = None
+        advance: int | None = None
         with self._lock:
             if self._state != "running":
                 return
+            # Progress, not a verdict. The Vision worker narrates a
+            # reach_and_grab as it goes -- target_planned, executing_base,
+            # executing_ik, executing_grab -- and every one of those arrives
+            # here while the arm is still moving. Filing them as the step's
+            # answer is what made a held step look answered and let the run
+            # publish its next command mid-motion.
+            if payload.get("status") not in ("completed", "failed"):
+                return
             self._verdicts[reply_id] = dict(payload)
-            # Only a failure ends a step early. A successful detection is
-            # left for the firmware's own terminal reply to complete, so the
-            # step still ends where every other step ends.
+
+            # A step held open for exactly this verdict -- the firmware had
+            # already finished, and `_on_reply` declined to advance without
+            # the detector's word. This is that word, so the step ends here
+            # instead, whatever the verdict says.
+            held = self._current_event()
+            if (
+                reply_id == self._pending
+                and held is not None
+                and self._awaits_verdict(held)
+                and held.reply
+            ):
+                if payload.get("status") == "failed" and (
+                    held.subject != "verify_object"
+                ):
+                    # A reach_and_grab that failed really did fail, and it
+                    # may have left the arm mid-reach. Only a verify is
+                    # allowed to treat "nothing found" as an answer.
+                    status = self._fail_step(held, payload)
+                else:
+                    self._remember(held, dict(payload))
+                    self._events[held.position] = replace(
+                        held, status="complete",
+                        note=self._note_for(held, payload),
+                    )
+                    self._pending = ""
+                    advance = held.position + 1
+            elif payload.get("status") != "failed":
+                # Only a failure ends any other step early. A successful
+                # detection is left for the firmware's own terminal reply,
+                # so the step still ends where every other step ends.
+                return
+
+        if advance is not None:
+            self._advance(advance)
+            return
+        if status is not None:
+            # The held step failed -- or is going round again, if it had
+            # retries left, in which case the run is still live.
+            if self._resend_after_failure(status):
+                return
+            self._release()
+            self._notify(status)
+            return
+
+        with self._lock:
+            if self._state != "running":
+                return
             if payload.get("status") != "failed":
                 return
             if reply_id != self._pending:
@@ -628,15 +912,63 @@ class Run:
                 event = self._current_event()
                 if event is None:
                     return
+                # A verify is asking, not asserting: "nothing found" is an
+                # answer it is allowed to get, and the check that reads it
+                # decides what that means.
+                if event.subject == "verify_object":
+                    return
                 status = self._fail_step(event, payload)
 
         if status is not None:
+            if self._resend_after_failure(status):
+                return
             self._release()
             self._notify(status)
 
+    @staticmethod
+    def _retry_limit(step: dict[str, Any]) -> int:
+        """How many times this step may try again, within the hard ceiling."""
+        try:
+            asked = int(step.get("retries", MIN_RETRIES))
+        except (TypeError, ValueError):
+            return MIN_RETRIES
+        return max(MIN_RETRIES, min(asked, MAX_RETRIES))
+
+    def _may_retry(self, event: StepEvent) -> bool:
+        """Whether a failed `reach_and_grab` gets another go.
+
+        Only that subject, and only while its own `retries` budget lasts. A
+        retry re-runs the whole step, which means perching first -- so the
+        arm is brought back to a known pose and the next photo is taken from
+        the one the grid was calibrated from, rather than from wherever the
+        missed grab left it.
+        """
+        if event.subject != "reach_and_grab":
+            return False
+        return event.retried < self._retry_limit(event.step)
+
     def _fail_step(self, event: StepEvent, payload: dict[str, Any]) -> RunStatus:
-        """Mark the in-flight step failed and stop the run. Holds the lock."""
+        """Mark the in-flight step failed and stop the run. Holds the lock.
+
+        Unless the step has retries left, in which case it is put back to
+        waiting and :attr:`_retry_from` records where to resume -- the run
+        stays alive and the caller sends that position again.
+        """
         problem = problem_from(payload)
+        if self._may_retry(event):
+            spent = event.retried + 1
+            self._events[event.position] = replace(
+                event, status="waiting", reply={}, problem="", phase="",
+                retried=spent,
+                note=f"{problem} — retrying ({spent} of "
+                     f"{self._retry_limit(event.step)})",
+            )
+            self._pending = ""
+            self._retry_from = event.position
+            self._message = (
+                f"Step {event.position + 1} missed: {problem} — retry {spent}"
+            )
+            return self._snapshot()
         self._events[event.position] = replace(
             event, status="failed", reply=dict(payload), problem=problem
         )
@@ -652,6 +984,23 @@ class Run:
         self._message = f"Step {event.position + 1} failed: {problem}"
         return self._snapshot()
 
+    def _resend_after_failure(self, status: RunStatus | None) -> bool:
+        """Send a retrying step again, if `_fail_step` asked for one.
+
+        Called by every path that has just failed a step, once it is outside
+        the lock. Returns whether it handled things -- a retry announces the
+        new status and re-sends, and the caller must not then release the
+        run's subscriptions, because the run is still going.
+        """
+        with self._lock:
+            position, self._retry_from = self._retry_from, None
+        if position is None:
+            return False
+        if status is not None:
+            self._notify(status)
+        self._send(position)
+        return True
+
     def _fail_finished_step(
         self, action_id: str, payload: dict[str, Any]
     ) -> RunStatus | None:
@@ -664,7 +1013,192 @@ class Run:
         """
         for event in self._events:
             if event.action_id == action_id and event.status == "complete":
+                if event.subject == "verify_object":
+                    return None
                 return self._fail_step(event, payload)
+        return None
+
+    # ---- observations and checks ----------------------------------------
+    @staticmethod
+    def _awaits_verdict(event: StepEvent) -> bool:
+        """Whether this step must hear the Vision worker before it may finish.
+
+        The firmware's `completed` for a detection means one thing only: it
+        took a photograph and published it. For these two subjects that is
+        never the end of the step.
+
+        `verify_object` exists to produce the observation a later check
+        reads, and on a live robot the verdict arrived 390ms after the
+        firmware's reply -- late enough that advancing early recorded the
+        observation against a step that had already ended.
+
+        `reach_and_grab` is the dangerous one. The Vision worker answers the
+        photo immediately and *then* drives baseRotate, controlik and GRAB
+        itself, one command at a time. Measured on robot-1: the firmware said
+        `completed` 15 seconds into a sequence that ran for 30, and the
+        runner advanced on it and sent the next step's `perch` into the
+        middle of the worker's motion -- two conversations driving one arm.
+        The arm lifted to perch while the worker was still reaching, and the
+        GRAB closed on air a couple of inches above the table.
+
+        So both hold until the Vision worker publishes its own terminal
+        result, which is the only message that means the whole sequence is
+        over. The step timeout still bounds the wait.
+        """
+        return event.subject in ("verify_object", "reach_and_grab")
+
+    def _remember(self, event: StepEvent, verdict: dict[str, Any] | None) -> None:
+        """File a detection's verdict under the name its step gave it.
+
+        Caller holds the lock. Named rather than positional so a check reads
+        the same way wherever the loop has got to: `of: "pink"` means the
+        most recent look at the pink cap, which after a second time round is
+        the second look. A step with no `name` is not recorded -- it was not
+        written to be referred to.
+        """
+        if verdict is None:
+            return
+        name = event.step.get("name")
+        if isinstance(name, str) and name.strip():
+            self._observations[name.strip()] = dict(verdict)
+
+    def _note_for(self, event: StepEvent, verdict: dict[str, Any] | None) -> str:
+        """What a completed detection saw, for the step's line in the view."""
+        if verdict is None or event.subject not in DETECTION_MOVES:
+            return ""
+        return describe(verdict)
+
+    def _check_of(self, step: dict[str, Any]) -> tuple[bool, str]:
+        """Run one step's condition against what has been observed.
+
+        Caller holds the lock. Returns whether it passed and a sentence
+        saying why, which becomes the step's note and the run's message.
+        """
+        test = str(step.get("check") or step.get("until") or "").strip()
+        subject = self._observations.get(str(step.get("of") or "").strip())
+        against = self._observations.get(str(step.get("against") or "").strip())
+        if not test:
+            return False, "this check does not say what to test for"
+        if str(step.get("of") or "").strip() == "":
+            return False, "this check does not say which observation to test"
+        if test in COMPARISONS and str(step.get("against") or "").strip() == "":
+            return False, f"a {test} check needs an 'against' observation"
+        if subject is None:
+            return False, (
+                f"nothing has been observed as {str(step.get('of')).strip()!r} yet"
+            )
+        return evaluate(test, subject, against)
+
+    def _run_local(
+        self, position: int
+    ) -> tuple[int | None, RunStatus | None]:
+        """Settle a `check` or `repeat_until` without touching the robot.
+
+        Caller holds the lock. Returns the position to continue from and a
+        status to announce, or ``None`` for the position when the run has
+        ended here -- a failed check, or a repeat that is out of attempts.
+
+        This is the branch :meth:`_advance` describes but did not have: the
+        chain's next position decided by what a previous step saw, rather
+        than by counting forward. A `repeat_until` is the only thing that
+        may send it backwards, and only `max_attempts` times, so a workflow
+        cannot loop forever on a condition the robot can never satisfy.
+        """
+        event = self._events[position]
+        step = event.step
+        attempts = event.attempts + 1
+        passed, why = self._check_of(step)
+        self._events[position] = replace(
+            event, attempts=attempts, note=why,
+            status="complete" if passed else event.status,
+        )
+
+        if event.subject == CHECK:
+            if passed:
+                self._events[position] = replace(
+                    self._events[position], status="complete"
+                )
+                self._message = f"Step {position + 1} passed: {why}"
+                return position + 1, self._snapshot()
+            # A `check` is an assertion, so failing it ends the run. That is
+            # the difference between it and a `repeat_until`, which treats
+            # the same answer as "not yet".
+            self._events[position] = replace(
+                self._events[position], status="failed", problem=why
+            )
+            self._state = "failed"
+            self._message = f"Step {position + 1} failed: {why}"
+            return None, self._snapshot()
+
+        # repeat_until: pass and carry on, or go back and try again.
+        if passed:
+            self._message = f"Step {position + 1} satisfied: {why}"
+            return position + 1, self._snapshot()
+
+        limit = self._attempt_limit(step)
+        if attempts >= limit:
+            self._events[position] = replace(
+                self._events[position], status="failed",
+                problem=f"gave up after {attempts} attempts: {why}",
+            )
+            self._state = "failed"
+            self._message = (
+                f"Step {position + 1} gave up after {attempts} attempts: {why}"
+            )
+            return None, self._snapshot()
+
+        target = self._repeat_target(position, step)
+        if target is None:
+            self._events[position] = replace(
+                self._events[position], status="failed",
+                problem="this repeat_until does not name a step to go back to",
+            )
+            self._state = "failed"
+            self._message = (
+                f"Step {position + 1} failed: it does not name a step to repeat"
+            )
+            return None, self._snapshot()
+
+        # Everything from the retry point to here runs again, so it is put
+        # back to waiting: a view must not keep showing the first attempt's
+        # result beside the second attempt's.
+        for other in self._events[target:position]:
+            self._events[other.position] = replace(
+                other, status="waiting", reply={}, problem="", note="",
+            )
+        self._message = (
+            f"Step {position + 1}: {why} — attempt {attempts + 1} of {limit}"
+        )
+        return target, self._snapshot()
+
+    @staticmethod
+    def _attempt_limit(step: dict[str, Any]) -> int:
+        """How many times this repeat may run, within the hard ceiling."""
+        try:
+            asked = int(step.get("max_attempts", MAX_ATTEMPTS))
+        except (TypeError, ValueError):
+            return MAX_ATTEMPTS
+        return max(1, min(asked, MAX_ATTEMPTS))
+
+    def _repeat_target(self, position: int, step: dict[str, Any]) -> int | None:
+        """The step a `repeat_until` goes back to.
+
+        Named by `then`, matching either a step's `name` or its 1-based
+        number, and always before the repeat itself -- a loop that jumped
+        forward would skip the work it is waiting on.
+        """
+        wanted = step.get("then")
+        if isinstance(wanted, str) and wanted.strip():
+            label = wanted.strip()
+            for other in self._events[:position]:
+                if str(other.step.get("name") or "").strip() == label:
+                    return other.position
+            return None
+        if isinstance(wanted, bool):
+            return None
+        if isinstance(wanted, int):
+            index = wanted - 1
+            return index if 0 <= index < position else None
         return None
 
     def _advance(self, position: int) -> None:

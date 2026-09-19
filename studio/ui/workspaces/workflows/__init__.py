@@ -245,6 +245,17 @@ class WorkflowTitle(QToolButton):
         self.setPopupMode(QToolButton.InstantPopup)
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.setCursor(Qt.PointingHandCursor)
+        # A workflow name is a filename, and nothing caps its length. Left
+        # to itself the button demands the full width of whatever it is
+        # called, which on this row is a floor under the whole page: the
+        # step palette is right-aligned beside it, so a long enough name
+        # pushes the palette past the window edge and the buttons appear to
+        # vanish. Allowed to shrink, the row stays inside the window and it
+        # is the name that gives way — elided, with the full text a hover
+        # away, and the menu still where it was.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setToolTip(name)
+        self._full_name = name
 
         menu = QMenu(self)
         menu.setObjectName("WorkflowTitleMenu")
@@ -254,6 +265,35 @@ class WorkflowTitle(QToolButton):
         copy.triggered.connect(lambda _checked=False: on_copy_path())
         self.setMenu(menu)
         self.menu_actions = {"rename": rename, "copy": copy}
+
+    def resizeEvent(self, event) -> None:
+        """Re-elide to whatever width the row could spare this time."""
+        super().resizeEvent(event)
+        metrics = self.fontMetrics()
+        # The arrow and the button's own padding are not text: measuring
+        # against the full width would elide a name that actually fits.
+        available = max(0, self.width() - self._chrome())
+        shown = metrics.elidedText(self._full_name, Qt.ElideRight, available)
+        if shown != self.text():
+            self.setText(shown)
+
+    def _chrome(self) -> int:
+        """Roughly what the popup arrow and padding cost beside the text."""
+        return self.fontMetrics().horizontalAdvance("…") * 2 + 24
+
+    def minimumSizeHint(self):
+        """Never shrink to nothing: a stub of the name still identifies it."""
+        hint = super().minimumSizeHint()
+        hint.setWidth(self.fontMetrics().horizontalAdvance("mmmmmmmm…") + self._chrome())
+        return hint
+
+    def sizeHint(self):
+        """The full name's width, so the row prefers to show all of it."""
+        hint = super().sizeHint()
+        hint.setWidth(
+            self.fontMetrics().horizontalAdvance(self._full_name) + self._chrome()
+        )
+        return hint
 
 
 class RenameWorkflowDialog(QDialog):
@@ -325,6 +365,19 @@ class WorkflowMetaStrip(QWidget):
     of directory that never change between two workflows. It now lives in the
     title's menu, one click from where the name is, as something to copy
     rather than something to read.
+
+    The description followed it off this line, for a worse version of the
+    same fault. A description is a sentence or a paragraph, written to be
+    read; as an unwrapped QLabel in a horizontal row it became a hard
+    minimum width for the whole page. One real workflow's description put
+    that floor at 2147px, and inside a narrower window the layout overflowed
+    and pushed the right-aligned step palette off the edge — a paragraph
+    nobody was reading taking the buttons with it.
+
+    It is not lost: the JSON below shows it in full and is where it is
+    edited, the side panel carries it as each row's tooltip, and search
+    matches against it. What is gone is a copy of it that could only be read
+    by making the window wider than the screen.
     """
 
     def __init__(self, workflow: Workflow) -> None:
@@ -347,9 +400,6 @@ class WorkflowMetaStrip(QWidget):
                 f"validation {'on' if workflow.validation else 'off'}"
             )
         )
-        if workflow.description:
-            layout.addWidget(self._dot())
-            layout.addWidget(self._fact(workflow.description))
         layout.addStretch(1)
 
     @staticmethod

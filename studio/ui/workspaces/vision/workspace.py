@@ -54,8 +54,11 @@ class VisionWorkspace(Workspace):
     def build_actions(self) -> list:
         state = self.manager.state
         installed = self.manager.is_installed(self.manager.selected.model_id)
-        can_remove = installed and not state.operation
-        can_stop = state.process_state in {"starting", "running"}
+        can_remove = installed and not state.operation and not state.pending_detection
+        # Killing the orchestrator while a child command is in flight loses
+        # the only exact-ack sequence state. Ordinary service shutdown is
+        # therefore unavailable until a physical workflow is terminal.
+        can_stop = state.process_state in {"starting", "running"} and not state.pending_detection
         return [
             ActionSpec(
                 self.primary_action_label,

@@ -263,7 +263,10 @@ class WslSerialTests(unittest.TestCase):
         records = SimpleNamespace(latest_id=lambda: 0, count=lambda: 0, recent=lambda *a, **k: [])
         with patch("studio.services.wsl.windows.is_wsl", return_value=False), \
                 patch("studio.ui.components.wsl_serial.UsbCoordinator") as coordinator:
-            tray = DebugTray(records, records, SimpleNamespace(status="Ready"), lambda: None, broker_host=lambda: "")
+            tray = DebugTray(
+                records, records, SimpleNamespace(status="Ready"), lambda: None,
+                broker_host=lambda: "", current_page=lambda: None,
+            )
         self.assertIsNone(tray.wsl_serial)
         coordinator.assert_not_called()
         tray.shutdown()
