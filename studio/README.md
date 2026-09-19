@@ -2,6 +2,10 @@
 
 Self-host and manage every service that runs Desk Buddy.
 
+Writing a routine for the robot to run? See **[WORKFLOWS.md](WORKFLOWS.md)**
+for the step vocabulary — detection, checks, and loops — and
+`../firmware/README.md` for the MQTT messages underneath it.
+
 ## Run
 
 ```bash

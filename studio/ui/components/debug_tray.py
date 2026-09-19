@@ -135,6 +135,21 @@ class DebugTray(QWidget):
         self.show_heartbeats = QCheckBox("Show heartbeats")
         self.show_heartbeats.toggled.connect(lambda: self.refresh(force=True))
         toolbar.addWidget(self.show_heartbeats)
+        # Following the tail was already the behaviour, but only implicitly:
+        # `_replace` re-pins to the bottom when the view happens to be
+        # sitting there. On a busy broker that is easy to lose by accident —
+        # one nudge of the wheel to read a line that just went past, and the
+        # log silently stops following while new traffic piles up below. The
+        # checkbox makes it a setting instead of a side effect of where the
+        # scrollbar is, and ticking it jumps to the bottom immediately.
+        self.follow_tail = QCheckBox("Stick to bottom")
+        self.follow_tail.setChecked(True)
+        self.follow_tail.setToolTip(
+            "Keep the newest messages in view as they arrive. Untick to "
+            "scroll back without the log pulling you forward again."
+        )
+        self.follow_tail.toggled.connect(self._follow_tail_toggled)
+        toolbar.addWidget(self.follow_tail)
         self.message_wrap = QCheckBox("Wrap")
         self.message_wrap.toggled.connect(
             lambda enabled: self._set_wrap(self.output, enabled)
@@ -261,7 +276,11 @@ class DebugTray(QWidget):
         entries = self._messages.recent(
             VISIBLE_MESSAGE_LIMIT, include_heartbeats=show_heartbeats
         )
-        self._replace(self.output, "\n".join(message.line for message in entries))
+        self._replace(
+            self.output,
+            "\n".join(message.line for message in entries),
+            follow=self.follow_tail.isChecked(),
+        )
         self._message_key = key
 
     def _refresh_errors(self, force: bool) -> None:
@@ -288,11 +307,37 @@ class DebugTray(QWidget):
         self.page_status.setText(f"{lines:,} lines captured")
 
     @staticmethod
-    def _replace(output: QPlainTextEdit, text: str) -> None:
+    def _replace(
+        output: QPlainTextEdit, text: str, *, follow: bool | None = None
+    ) -> None:
+        """Swap the text, keeping the tail in view when it was in view.
+
+        `follow` overrides that judgement for a log with a stick-to-bottom
+        control: True pins to the bottom however far back the user has
+        scrolled, False leaves the position alone. The default — used by the
+        tabs with no such control — keeps the old behaviour of following
+        only when already parked at the end.
+        """
         scroll = output.verticalScrollBar()
-        following = scroll.maximum() - scroll.value() <= 2
+        if follow is None:
+            follow = scroll.maximum() - scroll.value() <= 2
+        # Where the view sits in the *old* text, so an untethered log can be
+        # put back there afterwards. setPlainText resets the scrollbar's
+        # range, and a value set against the new maximum is not the same
+        # place — on a log that only ever grows, it drifts toward the end.
+        previous = scroll.value()
         output.setPlainText(text)
-        if following:
+        scroll.setValue(scroll.maximum() if follow else min(previous, scroll.maximum()))
+
+    def _follow_tail_toggled(self, enabled: bool) -> None:
+        """Ticking the box jumps to the newest line right away.
+
+        Waiting for the next message would be a control that looks like it
+        did nothing on a quiet broker, which is exactly when the user is
+        most likely to be staring at it.
+        """
+        if enabled:
+            scroll = self.output.verticalScrollBar()
             scroll.setValue(scroll.maximum())
 
     @staticmethod

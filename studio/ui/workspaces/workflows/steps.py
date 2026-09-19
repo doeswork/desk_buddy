@@ -192,9 +192,18 @@ VISION = StepGroup(
         ),
         StepTemplate(
             "detect_object", "Detect object", "detect_object",
-            "Look for objects matching a phrase.",
-            {"phrase": ["red cup"]},
-            "phrase is a list of things to look for.",
+            "Look for an object, without moving.",
+            {"phrase": "red cup", "use_model": False},
+            "phrase is one scalar string, not a list — the Vision worker "
+            "rejects a list with invalid_request.",
+        ),
+        StepTemplate(
+            "verify_object", "Verify object", "verify_object",
+            "Look, so a check can read the result.",
+            {"phrase": "red cup", "name": "cup"},
+            "Never moves. name is what a later check or repeat_until calls "
+            "this observation — give the two things you are comparing "
+            "different names.",
         ),
         StepTemplate(
             "detect_color", "Detect color", "detect_color",
@@ -314,6 +323,48 @@ SYSTEM = StepGroup(
     ),
 )
 
+# Steps that repeat. A grab that missed and a condition that is not true yet
+# are the same shape of problem — do it again, a bounded number of times —
+# and they are grouped together because that is the question a person is
+# asking when they reach for any of them. `reach_and_grab` lives here rather
+# than under Vision for the same reason: its own `retries` makes it a loop,
+# not a look.
+LOOPS = StepGroup(
+    "Loops",
+    (
+        StepTemplate(
+            "reach_and_grab", "Reach and grab", "reach_and_grab",
+            "Find an object and pick it up, retrying a missed grab.",
+            {"phrase": "red cup", "retries": 2},
+            "Moves the robot. Always perches first, then the Vision worker "
+            "projects the detected box through the nine-point grid and runs "
+            "baseRotate, controlik and gripper GRAB itself — so no perch, "
+            "rotate or reach step is needed around this one. retries is "
+            "0–10: each retry perches and looks again from the calibrated "
+            "camera pose. Needs an active calibration profile whose perch "
+            "matches firmware, and motion_calibration_ready.",
+        ),
+        StepTemplate(
+            "repeat_until", "Repeat until", "repeat_until",
+            "Go back and run a block again until a condition holds.",
+            {"until": "farther", "of": "this", "against": "that",
+             "then": "start here", "max_attempts": 3},
+            "until is found, missing, closer or farther. of and against "
+            "name earlier verify_object steps. then is the name of the step "
+            "to go back to, which must come before this one. max_attempts "
+            "is 1–10. closer/farther compare how far down the frame each "
+            "object sits — a comparison, not a measurement.",
+        ),
+        StepTemplate(
+            "check", "Check", "check",
+            "Assert a condition, and stop the run if it does not hold.",
+            {"check": "found", "of": "this"},
+            "Same conditions as Repeat until, but a failure ends the run "
+            "instead of going back. Never reaches the robot.",
+        ),
+    ),
+)
+
 CUSTOM = StepGroup(
     "Custom",
     (
@@ -327,8 +378,16 @@ CUSTOM = StepGroup(
 )
 
 GROUPS: tuple[StepGroup, ...] = (
-    SERVO, ARM, GRIPPER, BASE, VISION, CALIBRATION, STENCIL, SYSTEM, CUSTOM,
+    SERVO, ARM, GRIPPER, BASE, VISION, LOOPS, CALIBRATION, STENCIL, SYSTEM,
+    CUSTOM,
 )
+
+# Retries a `reach_and_grab` may make after a missed grab, and the ceiling a
+# step's own `retries` is clamped to. Zero is a legal answer: it means try
+# once and report the failure, which is what a routine wants when a human is
+# watching and would rather intervene than have the arm try again.
+MIN_RETRIES = 0
+MAX_RETRIES = 10
 
 
 def all_templates() -> tuple[StepTemplate, ...]:
@@ -348,6 +407,8 @@ __all__ = [
     "GROUPS",
     "HOVER_TYPES",
     "JOINTS",
+    "MAX_RETRIES",
+    "MIN_RETRIES",
     "PERCH_ANGLE_TYPES",
     "PERCH_REACH_TYPES",
     "SPEEDS",

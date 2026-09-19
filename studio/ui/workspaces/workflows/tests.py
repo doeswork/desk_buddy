@@ -821,6 +821,74 @@ def test_the_watchers_outlive_the_run() -> None:
         _done(patches)
 
 
+def test_a_long_description_does_not_set_the_page_width() -> None:
+    """The strip is a horizontal row of unwrapped labels, so anything long
+    in it is a hard minimum width for the whole page — not a preference.
+
+    One real workflow's description put that floor at over 2000px. Inside a
+    narrower window the row overflowed and carried the right-aligned step
+    palette off the edge with it, which reads as the buttons disappearing.
+    The description is in the JSON below, in the side panel's tooltips, and
+    in search; it is not on this line.
+    """
+    from . import WorkflowMetaStrip
+
+    long_description = (
+        "Bring the pink eraser cap nearer the robot than the green one, and "
+        "keep going until it is. The mirror of pink_eraser_futher_than_green: "
+        "same pick, but the cap is placed SHORT of the green one instead of "
+        "beyond it. reach_and_grab perches itself, then lets Vision drive."
+    )
+    wide = WorkflowMetaStrip(Workflow("probe", long_description, True, ()))
+    bare = WorkflowMetaStrip(Workflow("probe", "", True, ()))
+
+    assert wide.minimumSizeHint().width() == bare.minimumSizeHint().width(), (
+        "a description still widens the page",
+        wide.minimumSizeHint().width(),
+        bare.minimumSizeHint().width(),
+    )
+
+
+def test_a_long_name_yields_rather_than_pushing_the_palette_away() -> None:
+    """A workflow name is a filename and nothing caps its length, so the
+    title has the same power to overflow the row that the description had.
+
+    The palette is right-aligned beside it: whatever the name demands comes
+    out of the palette's place on screen. The name elides instead, keeping
+    its full text on hover and its menu where it was.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QHBoxLayout
+
+    def row(name: str, width: int):
+        host = QWidget()
+        host.resize(width, 80)
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        title = WorkflowTitle(
+            name, on_rename=lambda: None, on_copy_path=lambda: None
+        )
+        layout.addWidget(title, 0, Qt.AlignVCenter)
+        layout.addStretch(1)
+        palette = StepPalette(lambda _name: None)
+        layout.addWidget(palette, 0, Qt.AlignVCenter)
+        host.show()
+        _app.processEvents()
+        return host, title, palette
+
+    # A name that fits is shown whole — eliding one that does not need it
+    # would be a regression of its own.
+    _host, title, _palette = row("make_pink_eraser_closest", 1400)
+    assert title.text() == "make_pink_eraser_closest", title.text()
+
+    # One that cannot fit gives way, and the palette keeps its place.
+    host, title, palette = row("w" * 200, 1400)
+    assert title.text().endswith("…"), title.text()
+    assert title.toolTip() == "w" * 200, "the full name must survive on hover"
+    right = palette.mapTo(host, palette.rect().topRight()).x()
+    assert right <= 1400, ("the palette was pushed off screen", right)
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_")]
