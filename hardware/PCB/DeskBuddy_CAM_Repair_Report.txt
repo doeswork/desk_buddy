@@ -1,0 +1,139 @@
+DESKBUDDY SMD v1.0 - CAM GEOMETRY REPAIR - 2026-09-19
+
+This archive contains revised manufacturing files, not an EasyEDA source project.
+
+Changes:
+- Board outline replaced by one closed six-segment contour following the
+  original main border. Overlapping/retraced left-edge spurs removed.
+- Only narrow 0.254 mm signal routes edited to improve copper spacing and
+  bottom-layer edge margin.
+- The redundant Drill_PTH_Through_Via.DRL was removed. Every one of its ten
+  holes is already present in Drill_PTH_Through.DRL.
+
+Use Drill_PTH_Through.DRL for ALL plated holes and slots.
+Use Drill_NPTH_Through.DRL for the non-plated mounting hole.
+Do not add the removed via-only drill file back into this package.
+
+Main outline dimensions: 40.132 x 80.010 mm, with the original corner step.
+The coordinate origin and all component/pad/hole positions are unchanged.
+Solder mask, paste, silkscreen and the main drill files are unchanged.
+
+Checks:
+- Pad/via-flash connectivity grouping unchanged (196 flashes, 45 groups).
+- Unique hole/slot set unchanged: 80 round plated holes, 4 plated slots,
+  and 1 non-plated hole.
+- Approx. minimum spacing between separate copper regions:
+  top 0.212 mm; bottom 0.206 mm.
+- Minimum copper-to-outline centerline: top 0.751 mm; bottom 0.418 mm.
+
+LIMITS:
+This is a Gerber geometry repair, NOT schematic-aware electrical DRC approval.
+No netlist, schematic, BOM or native PCB source was present in the input ZIP.
+Existing electrical intent, connector pinouts, component ratings, power-rail
+capacity and antenna clearance have NOT been certified. No new ground plane
+was added, and the original wide power routing was not resized or rewired.
+Existing shorts or missing connections, if any, are not ruled out by a
+before/after connectivity match.
+
+Review this archive in your fabricator's viewer and complete a schematic-aware
+review before authorizing manufacture. The original EasyEDA project has not
+been updated; exporting it again will not include these CAM-only repairs.
+
+DETAILED GEOMETRY RESULTS (millimeters)
+
+                                           Original        Revised
+Minimum top copper-island spacing           0.172937        0.211728
+Minimum bottom copper-island spacing        0.153850        0.206000
+Minimum top copper-to-profile distance      0.751000        0.751000
+Minimum bottom copper-to-profile distance   0.291840        0.418000
+Top copper physical islands                 69              69
+Bottom copper physical islands              59              59
+Unique drill/slot geometries                 85              85
+Duplicate drill instructions across files   10               0
+Copper outside main profile                 0 mm^2          0 mm^2
+
+Outline detail:
+The original contour included a left-edge protrusion to Y=173.736 mm and
+retraced segments above the main horizontal edge at Y=173.482 mm. The start
+and end of the exported path differed by 0.127 mm, but the issue was more
+specifically overlapping/dangling contour segments, not simply a clean gap.
+The revised profile follows the original six main corners, in absolute mm:
+  (20.955, 93.472)
+  (61.087, 93.472)
+  (61.087,155.575)
+  (56.007,155.575)
+  (56.007,173.482)
+  (20.955,173.482)
+  back to (20.955,93.472)
+The redundant 0.254 mm protruding stub is not retained. The original
+0.320 mm outline plotting aperture is retained; dimensions and edge distances
+are measured to the profile CENTERLINE, not the outside of that stroke.
+
+Copper edits:
+All edited traces retain their original 0.254 mm width. End connections,
+pad apertures, via flashes and hole centers are preserved.
+- Bottom: moved the long left-edge trace centerline from X=21.37384 mm
+  to X=21.50000 mm and adjusted its diagonal entries.
+- Bottom: shifted the Y=143.09115 mm signal run to Y=143.02000 mm and
+  adjusted its diagonal entries, clearing the nearby pad and via.
+- Bottom: shifted the inner right-header route from X=46.95215 mm to
+  X=46.88000 mm; adjusted the Y~120 mm bend and long diagonal for clearance.
+- Top: adjusted the two diagonals around the right-hand header near
+  Y=100-102 mm without moving any pad.
+- Top: shifted the inner right-header run from X=46.92167 mm to
+  X=46.88000 mm with matching diagonal entries.
+- Top: shifted the long X=50.25720 mm signal run to X=50.30000 mm,
+  then returned it to the original via center at (50.25720,143.70507) mm.
+No 1.0, 1.8 or 0.3 mm trace geometry was changed. No ground fill was added.
+
+Validation method:
+The actual RS-274X files were parsed locally; copper flashes and line sweeps
+were reconstructed as geometric shapes. Circular edges were approximated by
+256-sided polygons (geometry error below about 0.0001 mm at these radii).
+All polygons were combined per layer; distances between physically separate
+copper islands and to the intended outline were measured. Numeric results
+are best interpreted rounded to 0.001 mm, not as manufacturing tolerances.
+A graph joined touching copper primitives and plated holes across layers.
+The BEFORE and AFTER partitions of all 196 pad/via flashes are identical.
+All 85 distinct drilled hole/slot geometries match, and remain inside the
+board. The replacement outline is a single closed, simple six-edge ring.
+Unchanged files were compared byte-for-byte. Final ZIP CRCs were tested.
+Top/bottom previews were rendered from the repaired files and inspected.
+This was custom geometric validation, not EasyEDA/KiCad/JLCPCB electrical DRC
+or an independent manufacturer's CAM acceptance test.
+
+Why 0.20 mm was used as a clearance target:
+The original approximately 0.154 mm gaps are not automatically defects for
+1 oz production. JLCPCB's currently published capabilities specify 0.10 mm
+track/space for 1 oz, 0.16 mm for 2 oz on two-layer boards, and 0.20 mm
+copper clearance from routed board edges. The repair uses more margin where
+possible; the board's final copper weight/thickness and current capacity
+still need separate confirmation. These figures are NOT a blanket
+manufacturability approval for every aspect of the board.
+Reference checked 2026-09-19:
+https://jlcpcb.com/capabilities/pcb-capabilities
+
+Changed files:
+  Gerber_BoardOutlineLayer.GKO
+  Gerber_BottomLayer.GBL
+  Gerber_TopLayer.GTL
+Removed redundant file:
+  Drill_PTH_Through_Via.DRL
+Byte-for-byte unchanged files:
+  Drill_NPTH_Through.DRL
+  Drill_PTH_Through.DRL
+  Gerber_BottomSilkscreenLayer.GBO
+  Gerber_BottomSolderMaskLayer.GBS
+  Gerber_DocumentLayer.GDL
+  Gerber_TopPasteMaskLayer.GTP
+  Gerber_TopSilkscreenLayer.GTO
+  Gerber_TopSolderMaskLayer.GTS
+  How-to-order-PCB.txt
+
+SOURCE ARCHIVE
+Gerber_DESKBUDDY-ROBOT-ARM-v1-SMD_DeskBuddy_SMD_v1.0_2026-09-19.zip
+SHA-256: 94e171042859ff446390d34d668160e35bff31cd89087438d259a2aed24ce4e3
+
+REPAIRED ARCHIVE
+Gerber_DESKBUDDY_SMD_v1.0_CAM_REPAIRED_2026-09-19.zip
+SHA-256: f563dd87849c08d051a9a69bab8f8833e260aeef0276333209271124dddfa52c
