@@ -20,9 +20,9 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
-from ....models.config.calibrations import Calibrations
+from ....models.config.calibrations import Calibration, Calibrations
 from ....storage.store import Store
 from . import step as step_module
 from .step import StepPage
@@ -332,20 +332,150 @@ def _visual_page():
     return view, sent
 
 
-def test_the_perch_is_posed_with_sliders_and_measured_with_numbers() -> None:
+def test_the_perch_is_posed_with_sliders() -> None:
     """A camera pose is found by moving the arm and watching the frame, so
-    the angles are sliders. A mark on the table is measured with a ruler and
-    typed, so the reaches are not."""
-    from .controls import PinnedSlider, ScrollSafeSpinBox
-    from .visual import ANGLES, REACHES
+    every joint that aims it is a slider, not a typed number.
+
+    The table reaches used to be spinboxes on this page. They belong to IK,
+    which measures them against real marks, and moved there — this asserts
+    they did not come back."""
+    from .controls import PinnedSlider
+    from .visual import ANGLES
 
     view, _sent = _visual_page()
     form = view._form
 
     for key, _joint, label in ANGLES:
         assert isinstance(form._sliders[key], PinnedSlider), label
-    for key, label, _default in REACHES:
-        assert isinstance(form._reaches[key], ScrollSafeSpinBox), label
+    assert not hasattr(form, "_reaches"), "reach spinboxes belong to IK"
+
+
+def test_the_page_is_numbered_in_the_order_the_user_works() -> None:
+    """Aim, calibrate, save — not aim, save, calibrate.
+
+    The firmware wants the perch first, but a perch saved before you can see
+    what the camera sees is a guess. The page is numbered the way the user
+    meets the steps, and step 3 says out loud that a `perch_not_configured`
+    rejection means come back and save."""
+    view, _sent = _visual_page()
+    form = view._form
+
+    headings = [
+        child.text() for child in form.findChildren(QLabel)
+        if child.objectName() == "CardTitle"
+    ]
+    assert len(headings) == 3, headings
+    assert headings[0].startswith("1 ·") and "nine dots" in headings[0]
+    assert headings[1].startswith("2 ·") and "Calibrate" in headings[1]
+    assert headings[2].startswith("3 ·") and "perch" in headings[2].lower()
+
+    bodies = " ".join(
+        child.text() for child in form.findChildren(QLabel)
+        if child.objectName() == "CardBody"
+    )
+    assert "perch_not_configured" in bodies, (
+        "step 3 should name the error that sends the user back to it"
+    )
+
+
+def test_a_missing_perch_is_not_reported_as_a_bad_photograph() -> None:
+    """Vision reads the dots *before* it asks firmware for the perch, so this
+    failure arrives with nine good anchors already on the frame. Saying only
+    "rejected" sends the user back to re-aim a shot that was fine."""
+    view, _sent = _visual_page()
+    form = view._form
+
+    form.set_calibration({
+        "status": "failed",
+        "error": {
+            "code": "perch_not_configured",
+            "message": "Save elbow, wrist, and twist as the camera perch.",
+        },
+    })
+    assert "dots above were read correctly" in form.hint.text()
+
+    form.set_calibration({
+        "status": "failed",
+        "error": {"code": "missing_dots", "message": "Found 7 usable circles."},
+    })
+    assert "dots above were read correctly" not in form.hint.text()
+
+
+def test_saved_values_answer_whether_this_robot_is_calibrated() -> None:
+    """The inherited card prints the stored dict, which on this page is
+    mostly the firmware's own calibrationvalues reply flattened in by the
+    default results(). Forty lines of encoder counts under a heading that
+    reads like success answers the wrong question."""
+    from . import visual as visual_module
+
+    calibrations = store()
+    view, _sent = _visual_page()
+
+    with mock.patch.object(visual_module, "calibrations", lambda: calibrations):
+        # Held in a local, not read off a temporary: an unparented QWidget
+        # with no Python reference is collected immediately, and reading a
+        # label off it afterwards raises "C++ object already deleted".
+        card = view.build_saved_values()
+        assert "Not calibrated" in card.title_label.text()
+
+        # A perch saved, and the firmware telemetry that rides along with
+        # it. The keys are the firmware's *reportKey* spelling: a write of
+        # `perch_elbow_angle` is acknowledged as `PERCH_ELBOW_ANGLE`, and
+        # that is what results() stores.
+        calibrations.save(Calibration(
+            robot="black", step="visual", saved_at="2026-09-19T00:39:10+00:00",
+            values={
+                "PERCH_ELBOW_ANGLE": 91, "PERCH_WRIST_ANGLE": 59,
+                "PERCH_TWIST_ANGLE": 90,
+                "baseGearTeeth": 108, "rawEncoder": 3995,
+                "speedProfile": {"fast": {"left": 70}},
+            },
+        ))
+        card = view.build_saved_values()
+        assert card.title_label.text().startswith("Not calibrated")
+        body = card.body_label.text()
+        assert "elbow 91°" in body and "wrist 59°" in body
+        assert "no nine-point profile yet" in body
+        for noise in ("baseGearTeeth", "rawEncoder", "speedProfile"):
+            assert noise not in body, f"{noise} is firmware telemetry, not this step"
+
+        # And once a grid comes back.
+        calibrations.save(Calibration(
+            robot="black", step="visual", saved_at="2026-09-19T00:41:00+00:00",
+            values={
+                "PERCH_ELBOW_ANGLE": 91, "PERCH_WRIST_ANGLE": 59,
+                "PERCH_TWIST_ANGLE": 90, "profile_id": "abc123def456",
+                "point_count": 9, "grid_cells": 288,
+                "image_width": 800, "image_height": 600,
+            },
+        ))
+        card = view.build_saved_values()
+        assert card.title_label.text().startswith("Calibrated")
+        body = card.body_label.text()
+        assert "9 of 9 dots anchored" in body and "288 cells" in body
+        assert "abc123def456" in body and "800×600" in body
+
+
+def test_a_grid_without_a_perch_does_not_claim_to_be_calibrated() -> None:
+    """A grid measured from a viewpoint the robot cannot return to is not a
+    finished calibration, and a title reading "Calibrated" over a body
+    reading "not saved" is the contradiction this card exists to stop."""
+    from . import visual as visual_module
+
+    calibrations = store()
+    view, _sent = _visual_page()
+
+    with mock.patch.object(visual_module, "calibrations", lambda: calibrations):
+        calibrations.save(Calibration(
+            robot="black", step="visual", saved_at="2026-09-19T01:28:51+00:00",
+            values={
+                "profile_id": "c704b19507d63c74c3a1a8ee", "point_count": 9,
+                "grid_cells": 288, "image_width": 800, "image_height": 600,
+            },
+        ))
+        card = view.build_saved_values()
+        assert card.title_label.text().startswith("Partly calibrated")
+        assert "Perch: not saved" in card.body_label.text()
 
 
 def test_the_perch_moved_off_the_base_page() -> None:
@@ -384,6 +514,19 @@ def test_saving_the_perch_sends_all_three_angles() -> None:
 
     form.save_perch.click()
 
+    # One write per acknowledgement, not three at once: firmware has a
+    # single calibration write in flight, and `_send_next_perch` only sends
+    # the next one when the exact terminal reply for the previous arrives.
+    # Driving that here is what proves the queue drains rather than stalling
+    # after the first field.
+    for _ in range(3):
+        if not view._pending:
+            break
+        view._handle_reply({
+            "sender": "firmware", "action_id": view._pending,
+            "status": "completed",
+        })
+
     written = {
         body.get("calibration_type"): body.get("value")
         for _topic, body in sent
@@ -393,6 +536,7 @@ def test_saving_the_perch_sends_all_three_angles() -> None:
         "perch_wrist_angle": 100.0,
         "perch_twist_angle": float(TWIST_NEUTRAL),
     }, written
+    assert not view._perch_queue, "the perch queue did not drain"
 
 
 def test_twist_is_not_a_slider_on_this_page() -> None:

@@ -187,7 +187,9 @@ def test_queued_expiry_and_terminal_cache_expiry():
     with mock.patch.object(worker.detector, "detect", side_effect=AssertionError("expired inference ran")):
         run_one_job(worker)
     assert results(client)[-1]["error"]["code"] == "detection_timeout"
-    worker._terminal[("black/vision", "a")] -= 121
+    # _terminal holds (stamp, result), not a bare stamp: age the stamp.
+    stamp, cached = worker._terminal[("black/vision", "a")]
+    worker._terminal[("black/vision", "a")] = (stamp - 121, cached)
     request(worker)
     assert len(worker.requests) == 1
 

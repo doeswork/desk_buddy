@@ -5,18 +5,25 @@ needs it: a detection comes back as a point in an 800x600 frame, `controlik`
 takes millimetres of reach, and nothing connects the two until the arm has a
 known camera pose and some marks on the table to measure against.
 
-So the page does three things, in the order you actually do them:
+So the page does three things, numbered in the order you actually do them:
 
-1. Pose the arm. Elbow, wrist and twist sliders drive the real servos, with
-   the live frame beside them — the camera is on the arm, so the only way to
-   aim it is to move the arm and look. That pose is the *perch*: where the
-   robot returns to before every photo, and therefore the one viewpoint every
-   detection is taken from.
+1. Get all nine dots in view. Elbow and wrist sliders drive the real servos
+   with the live frame beside them — the camera is on the arm, so the only
+   way to aim it is to move the arm and look.
 
-2. Save it, as perch_elbow/wrist/twist_angle.
+2. Calibrate the grid, and look at what came back. Vision finds the three
+   angle lanes and three depth bands and draws them over the frame; if they
+   are wrong the fix is to re-aim and run it again, which is why this step
+   sits next to the sliders rather than after a commit.
 
-3. Photograph the nine-point sheet. Vision finds the three angle lanes and
-   three depth bands, then saves an immutable pixel-to-motion profile.
+3. Save the perch, as perch_elbow/wrist/twist_angle. That pose is where the
+   robot returns before every photo, and therefore the one viewpoint every
+   detection is measured from.
+
+Steps 2 and 3 are mutually dependent, and the numbering reflects which way
+round the user meets them rather than which the firmware wants: calibrating
+is refused until a perch exists (`perch_not_configured`), but a perch saved
+before you can see the dots is a guess. Aim, try, save, try again.
 
 The perch angles used to live on step 1, beside the base rotation profile.
 They were in the wrong place: a perch is a camera pose, not a property of the
@@ -36,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ....models.config.calibrations import calibrations
 from ....services.network.pub_sub.calibration_messages import (
     send_calibrate_depth,
     send_perch_value,
@@ -43,6 +51,7 @@ from ....services.network.pub_sub.calibration_messages import (
 from ....services.network.pub_sub.manual_messages import send_base_home, send_servo
 from ....services.network.pub_sub.robot_topics import heartbeat_topic, photo_topic
 from ....services.network.pub_sub.robot_topics import vision_topic
+from ...components import Card
 from ...theme.metrics import CARD_MARGIN_H, CARD_MARGIN_V, CARD_SPACING
 from ..workflows.live_view import PhotoView
 from .controls import PinnedSlider, widest
@@ -63,13 +72,24 @@ ANGLES = (
 # points report, so the two calibrations describe the same hand.
 TWIST_NEUTRAL = 90
 
+def _first(values: dict, *keys: str):
+    """The first key that holds a number, for a record that may use either
+    spelling of the perch fields."""
+    for key in keys:
+        value = values.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
 class VisualPage(StepPage):
     key = "visual"
     step_key = "visual"
     label = "3 · Visual"
     title = "Visual"
     subtitle = (
-        "Pose the camera, save the perch, then calibrate the nine-point grid."
+        "Aim the camera at the nine-dot sheet, calibrate the grid, and save "
+        "the perch you calibrated from."
     )
 
     def __init__(self, workspace=None) -> None:
@@ -215,6 +235,82 @@ class VisualPage(StepPage):
         if payload.get("sender") == "visual_ai" and payload.get("type") == "calibrate_depth":
             self._awaiting_visual = False
 
+    def build_saved_values(self) -> QWidget:
+        """What this one calibration is, in the terms the page works in.
+
+        The inherited card prints the stored values dict as-is. On this page
+        that dict is mostly the firmware's own `calibrationvalues` reply —
+        encoder counts, gear teeth, speed profiles — flattened in by the
+        default `results()` when each perch field is written. Forty lines of
+        base-rotation telemetry under a heading that reads like success, on
+        a page whose actual question is "am I calibrated or not", answers
+        the wrong question loudly.
+
+        So this shows the two things that decide it: whether a perch is
+        saved, and whether a nine-point profile came out of it.
+        """
+        robot = self.workspace.robot
+        saved = calibrations().find(robot, self.step_key) if robot else None
+        if saved is None:
+            return Card(
+                "Not calibrated",
+                "No perch saved and no nine-point profile for this robot. "
+                "Work through steps 1–3 above.",
+            )
+
+        values = saved.values
+        lines = []
+
+        # The firmware reports a written perch field under its *reportKey*
+        # — PERCH_ELBOW_ANGLE — not under the lowercase `calibration_type`
+        # the request was sent with. `results()` stores whatever `TYPE` the
+        # reply carried, so the record is uppercase. Both are accepted here
+        # because a record written by an older build may hold either, and a
+        # card that reads one spelling reports a saved perch as missing.
+        perch = {
+            name: _first(
+                values, f"PERCH_{name.upper()}_ANGLE", f"perch_{name}_angle"
+            )
+            for name in ("elbow", "wrist", "twist")
+        }
+        perch_saved = all(value is not None for value in perch.values())
+        if perch_saved:
+            lines.append(
+                f"Perch: elbow {perch['elbow']:g}°, wrist {perch['wrist']:g}°, "
+                f"twist {perch['twist']:g}°"
+            )
+        else:
+            lines.append("Perch: not saved — step 3 has not run for this robot.")
+
+        profile_id = values.get("profile_id")
+        if profile_id:
+            cells = values.get("grid_cells")
+            width, height = values.get("image_width"), values.get("image_height")
+            lines.append(
+                f"Grid: {values.get('point_count', 0)} of 9 dots anchored, "
+                f"{cells} cells"
+            )
+            if width and height:
+                lines.append(f"Captured from a {width}×{height} frame")
+            lines.append(f"Profile: {profile_id}")
+            # Both halves, or neither. A grid without a perch is a grid
+            # measured from a viewpoint the robot cannot return to, and a
+            # title reading "Calibrated" over a body reading "not saved" is
+            # the contradiction this card exists to stop.
+            title = (
+                f"Calibrated — {saved.saved_at}" if perch_saved
+                else f"Partly calibrated — {saved.saved_at}"
+            )
+        else:
+            lines.append(
+                "Grid: no nine-point profile yet. Until step 2 succeeds, "
+                "Vision → Detections cannot turn a detection into a distance "
+                "and Reach & Grab stays locked."
+            )
+            title = f"Not calibrated — {saved.saved_at}"
+
+        return Card(title, "\n".join(lines))
+
     def results(self, payload: dict) -> dict:
         if payload.get("sender") == "visual_ai" and payload.get("type") == "calibrate_depth":
             profile = payload.get("calibration_profile") or {}
@@ -253,9 +349,11 @@ class VisualForm(QWidget):
         left.setSpacing(CARD_SPACING * 2)
 
         left.addWidget(self._heading(
-            "1 · Aim the camera",
-            "The camera rides on the arm, so pointing it means moving the "
-            "arm. Watch the frame while you drag.",
+            "1 · Get all nine dots in view",
+            "Place the nine-dot sheet in front of the robot: three lanes at "
+            "-30°, 0°, and +30°, with dots at 0, 60, and 120 mm. The camera "
+            "rides on the arm, so aiming it means moving the arm — drag "
+            "until all nine dots sit unobstructed in the frame.",
         ))
 
         self._sliders: dict[str, PinnedSlider] = {}
@@ -281,28 +379,16 @@ class VisualForm(QWidget):
         )
         self.home.clicked.connect(on_home)
         save_row.addWidget(self.home)
-
-        self.save_perch = QPushButton("Save This Perch")
-        self.save_perch.setObjectName("ToolbarPrimary")
-        self.save_perch.setCursor(Qt.PointingHandCursor)
-        self.save_perch.setEnabled(enabled)
-        self.save_perch.setToolTip(
-            "Store these three angles as the perch. Every photo the robot "
-            "takes is taken from here, so every detection is measured "
-            "against this one view."
-        )
-        self.save_perch.clicked.connect(self._save_perch_clicked)
-        self._on_save_perch = on_save_perch
-        save_row.addWidget(self.save_perch)
         save_row.addStretch(1)
         left.addLayout(save_row)
 
         left.addSpacing(CARD_SPACING * 2)
         left.addWidget(self._heading(
-            "2 · Calibrate the camera grid",
-            "Place the nine-dot sheet in front of the robot: three lanes at "
-            "-30°, 0°, and +30°, with dots at 0, 60, and 120 mm. Keep "
-            "all nine dots unobstructed in the camera frame.",
+            "2 · Calibrate the grid until the dots look right",
+            "Calibrating photographs the sheet and asks Vision to find the "
+            "three lanes and three depth bands. The frame beside this shows "
+            "what it found: nine rings, three clean rows, three clean "
+            "columns. If they are wrong, re-aim in step 1 and run it again.",
         ))
 
         capture_row = QHBoxLayout()
@@ -316,6 +402,33 @@ class VisualForm(QWidget):
         capture_row.addStretch(1)
         left.addLayout(capture_row)
 
+        left.addSpacing(CARD_SPACING * 2)
+        left.addWidget(self._heading(
+            "3 · Save this perch",
+            "Saving stores these angles as the perch: the one pose every "
+            "photo is taken from, and therefore the viewpoint every "
+            "detection is measured against. The firmware will not calibrate "
+            "a grid until a perch is saved, so if step 2 reported "
+            "perch_not_configured, save here and run it again.",
+        ))
+
+        perch_row = QHBoxLayout()
+        perch_row.setSpacing(CARD_SPACING)
+        self.save_perch = QPushButton("Save This Perch")
+        self.save_perch.setObjectName("ToolbarPrimary")
+        self.save_perch.setCursor(Qt.PointingHandCursor)
+        self.save_perch.setEnabled(enabled)
+        self.save_perch.setToolTip(
+            "Store these three angles as the perch. Every photo the robot "
+            "takes is taken from here, so every detection is measured "
+            "against this one view."
+        )
+        self.save_perch.clicked.connect(self._save_perch_clicked)
+        self._on_save_perch = on_save_perch
+        perch_row.addWidget(self.save_perch)
+        perch_row.addStretch(1)
+        left.addLayout(perch_row)
+
         left.addStretch(1)
         outer.addLayout(left, 3)
 
@@ -325,8 +438,9 @@ class VisualForm(QWidget):
         self.photo.setMinimumHeight(260)
         right.addWidget(self.photo, 1)
         self.hint = QLabel(
-            "Save the perch, place the calibration sheet, then run the grid "
-            "calibration. The detected dots and all grid cells appear here."
+            "Aim until all nine dots are in frame, then calibrate. What "
+            "Vision found — the nine dots and every grid cell — is drawn "
+            "here, so this is where you check the result before saving."
         )
         self.hint.setObjectName("CardBody")
         self.hint.setWordWrap(True)
@@ -443,9 +557,15 @@ class VisualForm(QWidget):
                 f"{profile_id[:12]}.")
             return
         error = result.get("error") or {}
-        self.hint.setText(
-            str(error.get("message") or "The nine-point grid was rejected.")
-        )
+        message = str(error.get("message") or "The nine-point grid was rejected.")
+        # A missing perch is not a bad photograph. Vision extracts the dots
+        # *before* it asks firmware for the perch, so this failure arrives
+        # with nine good anchors already drawn on the frame beside it —
+        # saying only "rejected" there sends the user back to re-aim a shot
+        # that was fine.
+        if str(error.get("code") or "") == "perch_not_configured":
+            message += " The dots above were read correctly; only the perch is missing."
+        self.hint.setText(message)
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled

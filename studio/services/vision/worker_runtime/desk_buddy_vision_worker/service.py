@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any, Mapping
 
 from .calibration import ALGORITHM, CalibrationError, calibrate, project
 from .detector import HuggingFaceDetector
