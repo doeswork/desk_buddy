@@ -13,7 +13,18 @@ For the complete current MQTT contract, see [`MQTT_SPEC.md`](MQTT_SPEC.md).
 
 ## Firmware Pinout
 
-These are all GPIOs assigned by the firmware. Camera `PWDN` and `RESET` are `-1`, so those camera signals are not connected to an ESP32 GPIO in this configuration. No UART or USB pins are configured by application code; `Serial` mapping comes from the selected Arduino board/core settings. GPIO 19/20 are explicitly assigned to the TWIST and gripper servos in the table below. On an ESP32-S3 those pins are also the normal native USB D-/D+ pair, so native USB must not be enabled on them unless the hardware or servo mapping is changed.
+These are all GPIOs assigned by the firmware. For the complete camera bus,
+U3/U4 socket map, carrier connector mapping, power path, Arduino IDE settings,
+onboard peripheral conflicts, and known hardware uncertainties, see
+[`ESP32-S3-CAM_Pinnout.md`](ESP32-S3-CAM_Pinnout.md).
+
+Camera `PWDN` and `RESET` are `-1`, so those camera signals are not connected
+to an ESP32 GPIO in this configuration. The supported Studio build disables USB
+CDC on boot; `Serial.begin(115200)` uses UART0 GPIO43/44 through the board's
+USB-UART programming port. GPIO19/20 are explicitly assigned to the TWIST and
+gripper servos. On an ESP32-S3 those pins are also native USB D-/D+, so the
+native USB/OTG port must not be used unless the hardware or servo mapping is
+changed.
 
 | GPIO | Firmware use | Direction / electrical behavior |
 | ---: | --- | --- |
@@ -39,11 +50,23 @@ These are all GPIOs assigned by the firmware. Camera `PWDN` and `RESET` are `-1`
 | 21 | Base continuous-rotation servo signal | Servo PWM output |
 | 39 | Arm WRIST servo signal | Servo PWM output |
 | 41 | Firmware status LED | Digital output |
+| 43 | UART0 TX / serial logging and provisioning | UART output through the board's USB-UART bridge |
+| 44 | UART0 RX / serial provisioning | UART input through the board's USB-UART bridge |
 | 45 | Gripper stop input 1 | Input with pull-up; active low |
 | 46 | Gripper stop input 2 | Input with pull-up; active low |
 | 47 | Arm ELBOW servo signal | Servo PWM output |
 
 The camera data names above follow the `camera_pins.h` mapping used by the ESP32-S3-EYE configuration. GPIO 4/5 are camera SCCB control lines, not a separately configured external I²C bus.
+
+Board-reserved pins that are not application GPIO assignments are also
+important: GPIO26-37 are reserved for the module's flash/OPI-PSRAM memory
+interface; only GPIO35-37 appear on this development board's headers, and they
+must not be reused.
+The onboard SD interface is GPIO38/39/40, but firmware does not initialize it
+and GPIO39 is already the wrist-servo output, so leave the SD slot empty.
+GPIO2 (board LED), GPIO42 (carrier LED2), and GPIO48 (onboard WS2812) are not
+driven by current firmware. The detailed pinout documents every exposed and
+reserved pin.
 
 ---
 
